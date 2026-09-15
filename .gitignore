@@ -1,0 +1,16 @@
+bin/
+obj/
+*.user
+*.db
+*.db-shm
+*.db-wal
+node_modules/
+.angular/
+dist/
+.vscode/
+.idea/
+*.log
+.env
+.env.*
+appsettings.Development.json
+secrets.json

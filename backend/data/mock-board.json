@@ -1,0 +1,623 @@
+[
+  {
+    "name": "NIFTY",
+    "highTwoDaysAgo": 25340,
+    "lowTwoDaysAgo": 24910,
+    "yesterdayHigh": 25220,
+    "yesterdayLow": 24980,
+    "todayOpen": 25100,
+    "lastSeed": 25180
+  },
+  {
+    "name": "BANKNIFTY",
+    "highTwoDaysAgo": 52240,
+    "lowTwoDaysAgo": 51210,
+    "yesterdayHigh": 51980,
+    "yesterdayLow": 51340,
+    "todayOpen": 51620,
+    "lastSeed": 51290
+  },
+  {
+    "name": "RELIANCE",
+    "highTwoDaysAgo": 3018,
+    "lowTwoDaysAgo": 2922,
+    "yesterdayHigh": 2994,
+    "yesterdayLow": 2940,
+    "todayOpen": 2968,
+    "lastSeed": 2988
+  },
+  {
+    "name": "TCS",
+    "highTwoDaysAgo": 4210,
+    "lowTwoDaysAgo": 4088,
+    "yesterdayHigh": 4184,
+    "yesterdayLow": 4112,
+    "todayOpen": 4148,
+    "lastSeed": 4130
+  },
+  {
+    "name": "INFY",
+    "highTwoDaysAgo": 1912,
+    "lowTwoDaysAgo": 1848,
+    "yesterdayHigh": 1898,
+    "yesterdayLow": 1862,
+    "todayOpen": 1876,
+    "lastSeed": 1904
+  },
+  {
+    "name": "HDFCBANK",
+    "highTwoDaysAgo": 1688,
+    "lowTwoDaysAgo": 1624,
+    "yesterdayHigh": 1672,
+    "yesterdayLow": 1638,
+    "todayOpen": 1654,
+    "lastSeed": 1642
+  },
+  {
+    "name": "ICICIBANK",
+    "highTwoDaysAgo": 1298,
+    "lowTwoDaysAgo": 1246,
+    "yesterdayHigh": 1286,
+    "yesterdayLow": 1258,
+    "todayOpen": 1272,
+    "lastSeed": 1288
+  },
+  {
+    "name": "SBIN",
+    "highTwoDaysAgo": 842,
+    "lowTwoDaysAgo": 808,
+    "yesterdayHigh": 834,
+    "yesterdayLow": 816,
+    "todayOpen": 824,
+    "lastSeed": 818
+  },
+  {
+    "name": "ITC",
+    "highTwoDaysAgo": 492.4,
+    "lowTwoDaysAgo": 486.8,
+    "yesterdayHigh": 491.2,
+    "yesterdayLow": 488.1,
+    "todayOpen": 489.6,
+    "lastSeed": 490.1
+  },
+  {
+    "name": "BHARTIARTL",
+    "highTwoDaysAgo": 1684,
+    "lowTwoDaysAgo": 1618,
+    "yesterdayHigh": 1668,
+    "yesterdayLow": 1632,
+    "todayOpen": 1648,
+    "lastSeed": 1658
+  },
+  {
+    "name": "SENSEX",
+    "highTwoDaysAgo": 77240,
+    "lowTwoDaysAgo": 76110,
+    "yesterdayHigh": 76980,
+    "yesterdayLow": 76340,
+    "todayOpen": 76620,
+    "lastSeed": 76290
+  },
+  {
+    "name": "FINNIFTY",
+    "highTwoDaysAgo": 24840,
+    "lowTwoDaysAgo": 24110,
+    "yesterdayHigh": 24620,
+    "yesterdayLow": 24280,
+    "todayOpen": 24450,
+    "lastSeed": 24310
+  },
+  {
+    "name": "ADANIENT",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "ADANIPORTS",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "APOLLOHOSP",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "ASIANPAINT",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "AUBANK",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "AXISBANK",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "BAJAJ-AUTO",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "BAJAJFINSV",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "BAJFINANCE",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "BANKBARODA",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "BEL",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "BPCL",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "CANBK",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "CHOLAFIN",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "CIPLA",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "COALINDIA",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "DRREDDY",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "EICHERMOT",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "FEDERALBNK",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "GRASIM",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "HCLTECH",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "HDFCAMC",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "HDFCLIFE",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "HEROMOTOCO",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "HINDALCO",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "HINDUNILVR",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "ICICIGI",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "ICICIPRULI",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "IDFCFIRSTB",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "INDUSINDBK",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "JIOFIN",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "JSWSTEEL",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "KOTAKBANK",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "LICHSGFIN",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "LT",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "M\u0026M",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "MARUTI",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "MUTHOOTFIN",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "NESTLEIND",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "NTPC",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "ONGC",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "PFC",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "PNB",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "POWERGRID",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "RECLTD",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "SBICARD",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "SBILIFE",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "SHRIRAMFIN",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "SUNPHARMA",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "TATACONSUM",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "TATAMOTORS",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "TATASTEEL",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "TECHM",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "TITAN",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "TRENT",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "ULTRACEMCO",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  },
+  {
+    "name": "WIPRO",
+    "highTwoDaysAgo": 110,
+    "lowTwoDaysAgo": 90,
+    "yesterdayHigh": 108,
+    "yesterdayLow": 92,
+    "todayOpen": 100,
+    "lastSeed": 100
+  }
+]

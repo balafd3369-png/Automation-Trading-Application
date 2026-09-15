@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "TradeWithBeast": {
+      "commandName": "Project",
+      "applicationUrl": "http://0.0.0.0:45211",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>TradeWithBeast</RootNamespace>
+    <UseAppHost>false</UseAppHost>
+    <UserSecretsId>trade-with-beast-mstock</UserSecretsId>
+  </PropertyGroup>
+</Project>
