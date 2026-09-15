@@ -78,4 +78,77 @@ describe('BoardService', () => {
     expect(chart.candles.length).toBe(1);
     expect(chart.candles[0].close).toBe(23300);
   });
+
+  it('loads three-month trade history', async () => {
+    const historyPromise = firstValueFrom(service.tradeHistory('3m'));
+    const req = httpMock.expectOne(
+      (request) =>
+        request.url === '/api/paper-agent/history' &&
+        request.params.get('range') === '3m',
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      userId: 'local-user',
+      range: '3m',
+      from: '2026-06-15T00:00:00Z',
+      to: '2026-09-15T00:00:00Z',
+      summary: {
+        closedTrades: 1,
+        winningTrades: 1,
+        losingTrades: 0,
+        openTrades: 0,
+        realizedPnl: 500,
+      },
+      trades: [],
+    });
+
+    const history = await historyPromise;
+    expect(history.summary.realizedPnl).toBe(500);
+  });
+
+  it('loads paper-agent snapshot with ranked decisions', async () => {
+    const snapshotPromise = firstValueFrom(service.paperAgent());
+    const req = httpMock.expectOne('/api/paper-agent');
+    req.flush({
+      paperMode: true,
+      running: false,
+      state: 'STOPPED',
+      brokerAvailableFunds: null,
+      brokerUtilizedFunds: null,
+      config: null,
+      realizedPnl: 0,
+      unrealizedPnl: 0,
+      totalPnl: 0,
+      pendingTrade: null,
+      positions: [],
+      messages: [],
+      updatedAt: '2026-09-15T10:00:00Z',
+      marketRegime: { regime: 'TRENDING', dataTimestamp: '2026-09-15T10:00:00Z', isFresh: true, evidence: [] },
+      recentDecisions: [{ id: 'd1', strategy: 'STOCK_ZONE_LONG', underlying: 'INFY', direction: 'BULLISH', evidenceScore: 75, accepted: true, evidence: ['trend=UP'], rejections: [], maxRisk: 500, maxReward: 1000, rewardRisk: 2, evaluatedAt: '2026-09-15T10:00:00Z', scoreMeaning: 'rule evidence' }],
+      recentEvents: [],
+      performance: { closedTrades: 0, winningTrades: 0, losingTrades: 0, winRatePercent: 0, realizedPnl: 0, unrealizedPnl: 0, grossRiskOpen: 0 },
+      marketContext: [],
+    });
+
+    const snapshot = await snapshotPromise;
+    expect(snapshot.recentDecisions?.[0].evidenceScore).toBe(75);
+  });
+
+  it('loads multi-leg paper trade history', async () => {
+    const historyPromise = firstValueFrom(service.paperTrades('1m'));
+    const req = httpMock.expectOne(
+      (request) =>
+        request.url === '/api/paper-agent/trades' &&
+        request.params.get('range') === '1m',
+    );
+    req.flush({
+      userId: 'local-user',
+      range: '1m',
+      summary: { closedTrades: 0, winningTrades: 0, losingTrades: 0, openTrades: 1, realizedPnl: 0 },
+      trades: [{ id: 't1', status: 'OPEN', strategy: 'VERTICAL_DEBIT_SPREAD', underlying: 'NIFTY', direction: 'BULLISH', maxRisk: 2600, maxReward: 3900, pnl: null, exitReason: null, createdAt: '2026-09-15T10:00:00Z', openedAt: '2026-09-15T10:00:01Z', closedAt: null, legs: [] }],
+    });
+
+    const history = await historyPromise;
+    expect(history.trades[0].strategy).toBe('VERTICAL_DEBIT_SPREAD');
+  });
 });

@@ -179,7 +179,19 @@ public sealed class MStockAuthClient
             }
             if (last > 0 || token > 0)
             {
-                return new OptionQuoteSnap(alias, token, last, open, close, alias.Split(':')[0]);
+                var liquidity = ParseLiquidity(item);
+                return new OptionQuoteSnap(
+                    alias,
+                    token,
+                    last,
+                    open,
+                    close,
+                    alias.Split(':')[0],
+                    liquidity.Bid,
+                    liquidity.Ask,
+                    liquidity.Volume,
+                    liquidity.OpenInterest,
+                    liquidity.Timestamp);
             }
         }
 
@@ -237,17 +249,51 @@ public sealed class MStockAuthClient
                 }
                 if (last > 0)
                 {
+                    var liquidity = ParseLiquidity(item);
                     quotes.Add(new OptionMarketQuote(
                         row.Contract.Strike,
                         row.Contract.Side.ToUpperInvariant(),
                         row.Symbol,
                         last,
                         open,
-                        close));
+                        close,
+                        liquidity.Bid,
+                        liquidity.Ask,
+                        liquidity.Volume,
+                        liquidity.OpenInterest,
+                        liquidity.Timestamp));
                 }
             }
         }
         return quotes;
+    }
+
+    public async Task<FundSummary?> GetFundSummaryAsync(CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, "openapi/typea/user/fundsummary");
+        ApplyCommonHeaders(req);
+        ApplyAuth(req);
+        var root = await SendJson(req, ct);
+        if (!root.TryGetProperty("data", out var data))
+        {
+            return null;
+        }
+        var row = data.ValueKind == JsonValueKind.Array
+            ? data.EnumerateArray().FirstOrDefault()
+            : data;
+        if (row.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        static decimal Field(JsonElement item, string name) =>
+            item.TryGetProperty(name, out var value) ? ToDec(value) : 0m;
+        return new FundSummary(
+            Field(row, "AVAILABLE_BALANCE"),
+            Field(row, "CLEAR_BALANCE"),
+            Field(row, "AMOUNT_UTILIZED"),
+            Field(row, "COLLATERALS"),
+            Field(row, "REALISED_PROFITS"));
     }
 
     public async Task<IReadOnlyList<DayCandle>> GetDayCandlesAsync(string exchange, int instrumentToken, CancellationToken ct) =>
@@ -452,7 +498,18 @@ public sealed class MStockAuthClient
                     continue;
                 }
 
-                map[kv.Key] = new QuoteSnap(token, last, open, close, alias.Split(':')[0]);
+                var liquidity = ParseLiquidity(item);
+                map[kv.Key] = new QuoteSnap(
+                    token,
+                    last,
+                    open,
+                    close,
+                    alias.Split(':')[0],
+                    liquidity.Bid,
+                    liquidity.Ask,
+                    liquidity.Volume,
+                    liquidity.OpenInterest,
+                    liquidity.Timestamp);
                 break;
             }
         }
@@ -514,11 +571,92 @@ public sealed class MStockAuthClient
             _ => 0m,
         };
 
+    private static (decimal? Bid, decimal? Ask, long? Volume, long? OpenInterest, DateTimeOffset? Timestamp)
+        ParseLiquidity(JsonElement item)
+    {
+        decimal? bid = ReadPositive(item, "bid_price", "best_bid_price", "buy_price");
+        decimal? ask = ReadPositive(item, "ask_price", "best_ask_price", "sell_price");
+        if (item.TryGetProperty("depth", out var depth) && depth.ValueKind == JsonValueKind.Object)
+        {
+            bid ??= FirstDepthPrice(depth, "buy", "bids");
+            ask ??= FirstDepthPrice(depth, "sell", "asks");
+        }
+
+        var volume = ReadNonNegativeLong(item, "volume", "volume_traded", "total_traded_volume");
+        var oi = ReadNonNegativeLong(item, "oi", "open_interest");
+        DateTimeOffset? timestamp = null;
+        foreach (var name in new[] { "timestamp", "last_trade_time", "exchange_timestamp" })
+        {
+            if (item.TryGetProperty(name, out var value)
+                && DateTimeOffset.TryParse(value.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
+            {
+                timestamp = parsed;
+                break;
+            }
+        }
+        return (bid, ask, volume, oi, timestamp);
+    }
+
+    private static decimal? ReadPositive(JsonElement item, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (item.TryGetProperty(name, out var value) && ToDec(value) is var number && number > 0)
+            {
+                return number;
+            }
+        }
+        return null;
+    }
+
+    private static long? ReadNonNegativeLong(JsonElement item, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (item.TryGetProperty(name, out var value))
+            {
+                var number = ToDec(value);
+                if (number >= 0)
+                {
+                    return (long)number;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static decimal? FirstDepthPrice(JsonElement depth, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!depth.TryGetProperty(name, out var rows) || rows.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+            var first = rows.EnumerateArray().FirstOrDefault();
+            if (first.ValueKind == JsonValueKind.Object)
+            {
+                return ReadPositive(first, "price");
+            }
+        }
+        return null;
+    }
+
     private static string FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "";
 }
 
-public sealed record QuoteSnap(int InstrumentToken, decimal Last, decimal Open, decimal Close, string Exchange);
+public sealed record QuoteSnap(
+    int InstrumentToken,
+    decimal Last,
+    decimal Open,
+    decimal Close,
+    string Exchange,
+    decimal? Bid = null,
+    decimal? Ask = null,
+    long? Volume = null,
+    long? OpenInterest = null,
+    DateTimeOffset? Timestamp = null);
 
 public sealed record OptionQuoteSnap(
     string TradingSymbol,
@@ -526,7 +664,12 @@ public sealed record OptionQuoteSnap(
     decimal Last,
     decimal Open,
     decimal Close,
-    string Exchange);
+    string Exchange,
+    decimal? Bid = null,
+    decimal? Ask = null,
+    long? Volume = null,
+    long? OpenInterest = null,
+    DateTimeOffset? Timestamp = null);
 
 public sealed record OptionQuoteRequest(
     string Underlying,
@@ -540,6 +683,18 @@ public sealed record OptionMarketQuote(
     string TradingSymbol,
     decimal Last,
     decimal Open,
-    decimal PreviousClose);
+    decimal PreviousClose,
+    decimal? Bid = null,
+    decimal? Ask = null,
+    long? Volume = null,
+    long? OpenInterest = null,
+    DateTimeOffset? Timestamp = null);
+
+public sealed record FundSummary(
+    decimal AvailableBalance,
+    decimal ClearBalance,
+    decimal AmountUtilized,
+    decimal Collaterals,
+    decimal RealisedProfits);
 
 public sealed record DayCandle(DateTimeOffset Time, decimal Open, decimal High, decimal Low, decimal Close);

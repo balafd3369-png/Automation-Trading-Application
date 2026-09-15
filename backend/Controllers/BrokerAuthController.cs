@@ -46,4 +46,11 @@ public sealed class BrokerAuthController : ControllerBase
     [HttpGet("session")]
     public IActionResult Session()
         => Ok(new { connected = _auth.HasSession, broker = "m.Stock Type A" });
+
+    [HttpPost("session/clear")]
+    public IActionResult ClearSession()
+    {
+        _auth.ClearSession();
+        return Ok(new { status = "success", connected = false, message = "m.Stock session cleared. Request a new OTP." });
+    }
 }

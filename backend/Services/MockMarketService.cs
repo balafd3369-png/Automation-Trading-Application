@@ -424,7 +424,12 @@ public sealed class MockMarketService : IHostedService, IDisposable
                     quote.Last,
                     quote.Open,
                     quote.PreviousClose,
-                    Math.Round(changePercent, 2));
+                    Math.Round(changePercent, 2),
+                    quote.Bid,
+                    quote.Ask,
+                    quote.Volume,
+                    quote.OpenInterest,
+                    quote.Timestamp);
             })
             .OrderBy(quote => quote.Strike)
             .ThenBy(quote => quote.Side)
@@ -744,6 +749,11 @@ public sealed class MockMarketService : IHostedService, IDisposable
                     symbol.InstrumentToken = q.InstrumentToken;
                     symbol.Exchange = string.IsNullOrWhiteSpace(q.Exchange) ? "NSE" : q.Exchange;
                 }
+                symbol.Bid = q.Bid;
+                symbol.Ask = q.Ask;
+                symbol.Volume = q.Volume;
+                symbol.OpenInterest = q.OpenInterest;
+                symbol.DataTimestamp = q.Timestamp ?? DateTimeOffset.UtcNow;
             }
 
             _feed = "m.Stock live";
@@ -888,7 +898,14 @@ public sealed class MockMarketService : IHostedService, IDisposable
             NiftyZoneFormula.RoundLine(s2),
             NiftyZoneFormula.Mark(s.Name, s.Last, b1, s1, s.TodayOpen),
             NiftyZoneFormula.IsTightRange(s.Name, b1, s1, s.TodayOpen),
-            NiftyZoneFormula.RoundLine(prev));
+            NiftyZoneFormula.RoundLine(prev),
+            s.Exchange,
+            s.InstrumentToken > 0 ? s.InstrumentToken : null,
+            s.Bid,
+            s.Ask,
+            s.Volume,
+            s.OpenInterest,
+            s.DataTimestamp);
     }
 
     private sealed class LiveSymbol
@@ -903,6 +920,11 @@ public sealed class MockMarketService : IHostedService, IDisposable
         public decimal Last { get; set; }
         public int InstrumentToken { get; set; }
         public string Exchange { get; set; } = "NSE";
+        public decimal? Bid { get; set; }
+        public decimal? Ask { get; set; }
+        public long? Volume { get; set; }
+        public long? OpenInterest { get; set; }
+        public DateTimeOffset? DataTimestamp { get; set; }
         public bool HistoryLoaded { get; set; }
         public List<DayCandle> Candles { get; set; } = [];
         public decimal B2 => NiftyZoneFormula.B2(HighTwoDaysAgo, YesterdayHigh);

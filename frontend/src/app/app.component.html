@@ -92,7 +92,7 @@
           <button
             type="button"
             class="tab"
-            [class.active]="selectedName === name"
+            [class.active]="centerView === 'market' && selectedName === name"
             [class.up]="tone(indexRow(name)) === 'up'"
             [class.down]="tone(indexRow(name)) === 'down'"
             (click)="marketKind === 'options' ? setOptionUnderlying(name) : selectIndex(name)"
@@ -101,21 +101,34 @@
             {{ name }}
           </button>
         }
+        <button
+          type="button"
+          class="tab trade-tab"
+          [class.active]="centerView === 'trades'"
+          (click)="showTradeDetails()"
+        >
+          <span class="tab-dot"></span>
+          Trade Details
+          @if (paperAgent?.pendingTrade) {
+            <span class="tab-alert">1</span>
+          } @else if (paperAgent?.positions?.length) {
+            <span class="tab-count">{{ paperAgent?.positions?.length }}</span>
+          }
+        </button>
         @if (selected && !isIndex(selected.name) && marketKind === 'stocks') {
-          <div class="tab active" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">
+          <div class="tab" [class.active]="centerView === 'market'" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">
             <span class="tab-dot"></span>
             {{ selected.name }}
           </div>
         }
         @if (openedOption) {
-          <div class="tab active">
+          <div class="tab" [class.active]="centerView === 'market'">
             <span class="tab-dot"></span>
             {{ openedOption.label }}
           </div>
         }
-        <div class="tab ghost">composer (off)</div>
       </div>
-      @if (marketKind === 'options') {
+      @if (marketKind === 'options' && centerView === 'market') {
         <div class="kind-bar">
           <span>Options</span>
           @for (exp of expiries(); track exp.id) {
@@ -128,6 +141,7 @@
       }
       </div>
 
+      @if (centerView === 'market') {
       @if (state === 'loading') {
         <div class="pane loading-pane">
           <div class="pulse">Loading board…</div>
@@ -256,26 +270,291 @@
           </div>
         </div>
       }
+      }
 
       <div class="broker-bar">
         <span class="broker-label">m.Stock</span>
-        <button type="button" class="broker-primary" [disabled]="brokerBusy || brokerConnected" (click)="requestBrokerOtp()">Request OTP</button>
+        <button type="button" class="broker-primary" [disabled]="brokerBusy" (click)="requestBrokerOtp()">
+          {{ brokerConnected ? 'New OTP' : 'Request OTP' }}
+        </button>
         <input
           [(ngModel)]="otp"
           name="otp"
           maxlength="8"
           placeholder="Enter OTP"
-          [disabled]="!otpRequested || brokerBusy || brokerConnected"
+          [disabled]="!otpRequested || brokerBusy"
           (keyup.enter)="submitBrokerOtp()"
         />
-        <button type="button" [disabled]="!otpRequested || brokerBusy || brokerConnected || !otp.trim()" (click)="submitBrokerOtp()">Submit OTP</button>
+        <button type="button" [disabled]="!otpRequested || brokerBusy || !otp.trim()" (click)="submitBrokerOtp()">Submit OTP</button>
         <span class="broker-msg" [class.ok]="brokerConnected">{{ brokerMessage }}</span>
       </div>
-      <form class="composer" aria-label="Chat composer">
-        <div class="composer-label">Agent</div>
-        <textarea disabled rows="2" placeholder="Composer disabled — live market board only. No auto-orders. Strategy later."></textarea>
-        <button type="button" disabled>Send</button>
-      </form>
+      @if (centerView === 'trades') {
+      <section class="agent-panel" aria-label="Trading agent">
+        <div class="agent-head">
+          <strong>Strategy Agent</strong>
+          <div class="execution-toggle" aria-label="Execution mode">
+            <button type="button" [class.active]="executionMode === 'paper'" (click)="setExecutionMode('paper')">Paper</button>
+            <button type="button" [class.active]="executionMode === 'live'" (click)="setExecutionMode('live')">Live</button>
+          </div>
+          <span class="agent-state" [class.running]="executionMode === 'live' ? liveAgent?.armed : paperAgent?.running">
+            {{ executionMode === 'live' ? (liveAgent?.state || 'CONNECTING') : (paperAgent?.state || 'CONNECTING') }}
+          </span>
+        </div>
+        <div class="agent-metrics">
+          <span>Available funds <b>{{ paperAgent?.brokerAvailableFunds != null ? (paperAgent?.brokerAvailableFunds | number: '1.0-0') : '—' }}</b></span>
+          <span>Allocated <b>{{ paperAgent?.config?.allocatedCapital != null ? (paperAgent?.config?.allocatedCapital | number: '1.0-0') : '—' }}</b></span>
+          <span>Profit target <b>{{ paperAgent?.config?.profitTarget != null ? (paperAgent?.config?.profitTarget | number: '1.0-0') : '—' }}</b></span>
+          <span>Loss limit <b class="down">{{ paperAgent?.config?.maxDailyLoss != null ? (paperAgent?.config?.maxDailyLoss | number: '1.0-0') : '—' }}</b></span>
+          <span>Total P&amp;L <b [class.up]="(paperAgent?.totalPnl || 0) >= 0" [class.down]="(paperAgent?.totalPnl || 0) < 0">{{ paperAgent?.totalPnl | number: '1.2-2' }}</b></span>
+        </div>
+        <div class="decision-overview">
+          <div class="regime-card" [class.stale]="paperAgent?.marketRegime && !paperAgent?.marketRegime?.isFresh">
+            <small>Market regime</small>
+            <strong>{{ paperAgent?.marketRegime?.regime || 'WAITING FOR DATA' }}</strong>
+            <span>{{ paperAgent?.marketRegime?.isFresh ? 'Fresh market evidence' : 'Stale or incomplete evidence' }}</span>
+          </div>
+          <div class="performance-strip">
+            <span>Win rate <b>{{ paperAgent?.performance?.winRatePercent || 0 | number: '1.1-1' }}%</b></span>
+            <span>Closed <b>{{ paperAgent?.performance?.closedTrades || 0 }}</b></span>
+            <span>Open risk <b>₹{{ paperAgent?.performance?.grossRiskOpen || 0 | number: '1.0-0' }}</b></span>
+            <span>Unrealized <b [class.up]="(paperAgent?.performance?.unrealizedPnl || 0) >= 0" [class.down]="(paperAgent?.performance?.unrealizedPnl || 0) < 0">₹{{ paperAgent?.performance?.unrealizedPnl || 0 | number: '1.2-2' }}</b></span>
+          </div>
+        </div>
+        @if (executionMode === 'live') {
+          <section class="live-console" aria-label="Live broker execution">
+            <div class="live-status" [class.open]="liveAgent?.marketSession?.isOpen" [class.closed]="!liveAgent?.marketSession?.isOpen">
+              <strong>{{ liveAgent?.state || 'CONNECTING' }}</strong>
+              <span>{{ liveStatusMessage() }}</span>
+            </div>
+            @if (!liveAgent?.featureEnabled) {
+              <div class="live-warning">Live trading is disabled in backend configuration. Set LiveTrading:Enabled to true and restart the backend.</div>
+            } @else if (!brokerConnected || !liveAgent?.brokerConnected) {
+              <div class="live-warning">Connect m.Stock OTP above before arming or confirming live trades.</div>
+            } @else if (!liveAgent?.marketSession?.isOpen) {
+              <div class="live-warning market-closed">
+                {{ liveAgent?.marketSession?.message }}
+                @if (liveAgent?.marketSession?.nextEventAt) {
+                  · Next session {{ liveAgent?.marketSession?.nextEventAt | date: 'EEE, HH:mm':'+0530' }} IST
+                }
+              </div>
+            } @else if (!liveAgent?.armed) {
+              <div class="live-arm">
+                <strong>Arm real-money execution</strong>
+                <small>Type exactly: I UNDERSTAND LIVE ORDERS USE REAL MONEY</small>
+                <input [(ngModel)]="liveAcknowledgement" name="liveAcknowledgement" autocomplete="off" />
+                <button type="button" [disabled]="liveBusy" (click)="armLive()">Arm LIVE</button>
+              </div>
+            } @else {
+              <div class="live-health">
+                <strong>LIVE ARMED until {{ liveAgent?.armedUntil | date: 'HH:mm:ss':'+0530' }} IST</strong>
+                <span>Broker reconciliation: {{ liveAgent?.reconciliationStatus }}</span>
+                <button type="button" [disabled]="liveBusy" (click)="disarmLive()">Disarm</button>
+              </div>
+            }
+            @for (prompt of liveAgent?.eodPrompts || []; track prompt.tradeId) {
+              <div class="eod-prompt">
+                <strong>3:00 PM decision · {{ prompt.underlying }}</strong>
+                <span>{{ prompt.message }}</span>
+                <button type="button" [disabled]="liveBusy" (click)="handleLiveEod(prompt.tradeId, 'HOLD')">Hold / convert to NRML</button>
+                <button type="button" [disabled]="liveBusy" (click)="handleLiveEod(prompt.tradeId, 'EXIT')">Exit now</button>
+              </div>
+            }
+            @for (trade of liveAgent?.trades || []; track trade.id) {
+              <article class="live-trade">
+                <div><strong>{{ trade.strategy }} · {{ trade.underlying }}</strong><b>{{ trade.product }} · {{ trade.status }}</b></div>
+                @if (trade.failureReason) { <small class="down">{{ trade.failureReason }}</small> }
+                @for (order of trade.orders; track order.id) {
+                  <span>
+                    {{ order.purpose }} · {{ order.transactionType }} {{ order.symbol }}
+                    · {{ order.filledQuantity }}/{{ order.quantity }} · {{ order.status }}
+                    @if (order.averagePrice > 0) { &#64; ₹{{ order.averagePrice | number: '1.2-2' }} }
+                    @if (order.brokerMessage) { · {{ order.brokerMessage }} }
+                  </span>
+                }
+                @if (trade.status === 'OPEN' || trade.status === 'OPEN_NRML' || trade.status === 'EXIT_FAILED') {
+                  <button type="button" class="danger" [disabled]="liveBusy" (click)="exitLive(trade.id)">Emergency exit</button>
+                }
+              </article>
+            }
+          </section>
+        }
+        @if (paperAgent?.pendingTrade; as trade) {
+          <div class="trade-approval">
+            <div class="approval-body">
+              <strong>Approval required · {{ trade.strategy || trade.instrumentType }}</strong>
+              <span>{{ trade.underlying || trade.symbol }} · {{ trade.direction }} · {{ trade.quantity }} units</span>
+              <div class="risk-line">
+                <span>Max risk <b class="down">₹{{ trade.maxRisk || 0 | number: '1.2-2' }}</b></span>
+                <span>Max reward <b class="up">₹{{ trade.maxReward || 0 | number: '1.2-2' }}</b></span>
+                <span>R:R <b>{{ trade.rewardRisk || 0 | number: '1.2-2' }}</b></span>
+                <span>Evidence score <b>{{ trade.evidenceScore || 0 | number: '1.0-0' }}/100</b></span>
+              </div>
+              <small>Rule evidence score—not probability. {{ trade.reason }}</small>
+              <div class="proposal-legs">
+                @for (leg of trade.legs || []; track leg.id) {
+                  <span [class.buy-leg]="leg.side === 'BUY'" [class.sell-leg]="leg.side === 'SELL'">
+                    <b>{{ leg.side }}</b> {{ leg.symbol }} × {{ leg.quantity }} &#64; ₹{{ leg.indicativePrice | number: '1.2-2' }}
+                  </span>
+                }
+              </div>
+            </div>
+            <div class="approval-actions">
+              @if (executionMode === 'live') {
+                <select [(ngModel)]="liveProduct" name="liveProduct" [disabled]="liveBusy">
+                  <option value="MIS">MIS · intraday</option>
+                  <option value="NRML">NRML · overnight</option>
+                </select>
+              }
+              <button
+                type="button"
+                class="approve"
+                [class.live-confirm]="executionMode === 'live'"
+                [disabled]="executionMode === 'paper' ? agentBusy : !canConfirmLive()"
+                (click)="confirmPendingTrade(trade.id)"
+              >
+                @if (executionMode === 'paper') {
+                  Confirm paper trade
+                } @else {
+                  Confirm live {{ liveProduct }} trade
+                }
+              </button>
+              <button type="button" class="reject" [disabled]="agentBusy || liveBusy" (click)="sendAgentCommand('reject')">Reject</button>
+            </div>
+          </div>
+        }
+        @if (paperAgent?.positions?.length) {
+          <div class="paper-positions">
+            @for (position of paperAgent!.positions; track position.id) {
+              <article class="position-card">
+                <div class="position-head">
+                  <b>{{ position.strategy || position.instrumentType }} · {{ position.underlying || position.symbol }}</b>
+                  <strong [class.up]="position.direction === 'LONG'" [class.down]="position.direction === 'SHORT'">
+                    {{ position.direction }} × {{ position.quantity }}
+                  </strong>
+                </div>
+                <div class="position-trigger">
+                  Triggered {{ position.openedAt | date: 'dd MMM, HH:mm:ss':'+0530' }} IST · {{ position.triggerReason }}
+                </div>
+                <div class="position-levels">
+                  <span>Entry <b>₹{{ position.entryPrice | number: '1.2-2' }}</b></span>
+                  <span>Current <b>₹{{ position.currentPrice | number: '1.2-2' }}</b></span>
+                  <span>Stop-loss <b class="down">₹{{ position.stopLoss | number: '1.2-2' }}</b></span>
+                  <span>Target <b class="up">₹{{ position.target | number: '1.2-2' }}</b></span>
+                  <span>P&amp;L <b [class.up]="position.pnl >= 0" [class.down]="position.pnl < 0">₹{{ position.pnl | number: '1.2-2' }}</b></span>
+                </div>
+                <div class="position-legs">
+                  @for (leg of position.legs || []; track leg.id) {
+                    <span>
+                      <b [class.up]="leg.side === 'BUY'" [class.down]="leg.side === 'SELL'">{{ leg.side }}</b>
+                      {{ leg.symbol }} × {{ leg.quantity }}
+                      · ₹{{ leg.entryPrice | number: '1.2-2' }} → ₹{{ leg.currentPrice | number: '1.2-2' }}
+                      · <b [class.up]="leg.pnl >= 0" [class.down]="leg.pnl < 0">₹{{ leg.pnl | number: '1.2-2' }}</b>
+                    </span>
+                  }
+                </div>
+              </article>
+            }
+          </div>
+        }
+        @if (paperAgent?.recentDecisions?.length) {
+          <section class="decision-board">
+            <strong>Recent decisions</strong>
+            @for (decision of paperAgent?.recentDecisions?.slice(0, 6) || []; track decision.id) {
+              <article [class.rejected]="!decision.accepted">
+                <div>
+                  <b>{{ decision.strategy }} · {{ decision.underlying }}</b>
+                  <small>{{ decision.evaluatedAt | date: 'HH:mm:ss':'+0530' }} IST · score {{ decision.evidenceScore | number: '1.0-0' }}/100 (rule evidence)</small>
+                </div>
+                <span>{{ decision.accepted ? 'ELIGIBLE' : 'REJECTED' }}</span>
+                <small>{{ (decision.rejections.length ? decision.rejections : decision.evidence).join(' · ') }}</small>
+              </article>
+            }
+          </section>
+        }
+        <section class="history-panel" aria-label="Trade history">
+          <div class="history-head">
+            <strong>Trade History</strong>
+            <div class="history-filters">
+              <button type="button" [class.active]="historyRange === 'today'" (click)="setHistoryRange('today')">Today</button>
+              <button type="button" [class.active]="historyRange === '1m'" (click)="setHistoryRange('1m')">1 Month</button>
+              <button type="button" [class.active]="historyRange === '3m'" (click)="setHistoryRange('3m')">3 Months</button>
+              <button type="button" [class.active]="historyRange === 'all'" (click)="setHistoryRange('all')">12 Months</button>
+            </div>
+          </div>
+          @if (tradeHistory; as history) {
+            <div class="history-summary">
+              <span>Realized P&amp;L <b [class.up]="history.summary.realizedPnl >= 0" [class.down]="history.summary.realizedPnl < 0">₹{{ history.summary.realizedPnl | number: '1.2-2' }}</b></span>
+              <span>Closed <b>{{ history.summary.closedTrades }}</b></span>
+              <span>Wins <b class="up">{{ history.summary.winningTrades }}</b></span>
+              <span>Losses <b class="down">{{ history.summary.losingTrades }}</b></span>
+              <span>Open <b>{{ history.summary.openTrades }}</b></span>
+            </div>
+            <div class="history-ledger">
+              @for (trade of history.trades; track trade.id) {
+                <article class="history-row">
+                  <div>
+                    <strong>{{ trade.strategy }} · {{ trade.underlying }} · {{ trade.direction }}</strong>
+                    <small>{{ trade.createdAt | date: 'dd MMM yyyy, HH:mm':'+0530' }} IST · {{ trade.legs.length }} leg(s)</small>
+                  </div>
+                  <span class="history-status"
+                    [class.closed]="trade.status === 'CLOSED'"
+                    [class.rejected]="trade.status === 'REJECTED' || trade.status === 'CANCELLED' || trade.status === 'EXPIRED' || trade.status === 'INTERRUPTED'">
+                    {{ trade.status }}
+                  </span>
+                  <span>Max risk <b class="down">₹{{ trade.maxRisk | number: '1.2-2' }}</b></span>
+                  <span>Max reward <b class="up">₹{{ trade.maxReward | number: '1.2-2' }}</b></span>
+                  <span>P&amp;L <b [class.up]="(trade.pnl || 0) > 0" [class.down]="(trade.pnl || 0) < 0">@if (trade.pnl != null) { ₹{{ trade.pnl | number: '1.2-2' }} } @else { — }</b></span>
+                  <span>Result <b>{{ trade.exitReason || '—' }}</b></span>
+                  <div class="history-legs">
+                    @for (leg of trade.legs; track leg.id) {
+                      <small>{{ leg.side }} {{ leg.symbol }} × {{ leg.quantity }} · entry {{ leg.entryPrice | number: '1.2-2' }} · exit {{ leg.exitPrice | number: '1.2-2' }}</small>
+                    }
+                  </div>
+                </article>
+              } @empty {
+                <div class="history-empty">No trades recorded for this period.</div>
+              }
+            </div>
+          }
+          @if (historyError) {
+            <div class="agent-error">{{ historyError }}</div>
+          }
+        </section>
+        @if (paperAgent?.recentEvents?.length) {
+          <div class="event-strip">
+            @for (event of paperAgent?.recentEvents?.slice(0, 5) || []; track event.id) {
+              <span><b>{{ event.type }}</b> · {{ event.reason }} · {{ event.at | date: 'dd MMM HH:mm':'+0530' }}</span>
+            }
+          </div>
+        }
+        <div class="agent-chat" aria-live="polite">
+          @for (message of paperAgent?.messages || []; track message.at) {
+            <div class="agent-message" [class.user]="message.role === 'user'">
+              <b>{{ message.role === 'user' ? 'You' : 'Agent' }}</b>
+              <span>{{ message.text }}</span>
+            </div>
+          }
+        </div>
+        @if (agentError) {
+          <div class="agent-error">{{ agentError }}</div>
+        }
+        @if (liveError) {
+          <div class="agent-error">{{ liveError }}</div>
+        }
+        <form class="composer" aria-label="Chat composer" (ngSubmit)="sendAgentCommand()">
+          <div class="composer-label">Agent</div>
+          <textarea
+            [(ngModel)]="agentCommand"
+            name="agentCommand"
+            rows="2"
+            placeholder="Example: use ₹50,000, target ₹5,000, max loss ₹1,500"
+            [disabled]="agentBusy"
+            (keydown.control.enter)="sendAgentCommand()"
+          ></textarea>
+          <button type="submit" [disabled]="agentBusy">{{ agentBusy ? 'Sending…' : 'Send' }}</button>
+        </form>
+      </section>
+      }
     </main>
 
     <aside class="rail right-rail">

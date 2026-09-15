@@ -23,7 +23,14 @@ public sealed record SymbolSnapshot(
     decimal S2,
     string Mark,
     bool TightRange,
-    decimal PreviousClose);
+    decimal PreviousClose,
+    string Exchange = "NSE",
+    int? InstrumentToken = null,
+    decimal? Bid = null,
+    decimal? Ask = null,
+    long? Volume = null,
+    long? OpenInterest = null,
+    DateTimeOffset? DataTimestamp = null);
 
 public sealed record ChartBar(long Time, decimal Open, decimal High, decimal Low, decimal Close);
 
@@ -57,4 +64,9 @@ public sealed record OptionChainItem(
     decimal Last,
     decimal Open,
     decimal PreviousClose,
-    decimal ChangePercent);
+    decimal ChangePercent,
+    decimal? Bid = null,
+    decimal? Ask = null,
+    long? Volume = null,
+    long? OpenInterest = null,
+    DateTimeOffset? DataTimestamp = null);

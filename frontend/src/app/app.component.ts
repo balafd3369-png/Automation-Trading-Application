@@ -3,8 +3,18 @@ import { HttpClient } from '@angular/common/http';
 import { AfterViewChecked, Component, DestroyRef, ElementRef, OnInit, ViewChild, inject } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
-import { EMPTY, Observable, Subject, catchError, filter, interval, map, merge, startWith, switchMap, tap } from 'rxjs';
-import { BoardResponse, ChartResponse, OptionMarketQuote, PressureMark, SymbolSnapshot } from './core/board.models';
+import { EMPTY, Observable, Subject, catchError, filter, finalize, interval, map, merge, of, startWith, switchMap, tap } from 'rxjs';
+import {
+  BoardResponse,
+  ChartResponse,
+  LiveExecutionSnapshot,
+  OptionMarketQuote,
+  PaperAgentSnapshot,
+  PaperTradeHistoryResponse,
+  PressureMark,
+  SymbolSnapshot,
+  TradeHistoryRange,
+} from './core/board.models';
 import { BoardService } from './core/board.service';
 import {
   ChartDrawing,
@@ -24,6 +34,9 @@ type ZoneKey = 'B2' | 'B1' | 'S' | 'S1' | 'S2';
 type DrawTool = 'none' | 'hline' | 'trend';
 type MarketKind = 'stocks' | 'options';
 type OptionSide = 'CE' | 'PE';
+type CenterView = 'market' | 'trades';
+type ExecutionMode = 'paper' | 'live';
+const EXECUTION_MODE_KEY = 'twb-execution-mode';
 
 export interface OptionContract {
   underlying: string;
@@ -77,6 +90,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
   private readonly destroyRef = inject(DestroyRef);
   private readonly reload = new Subject<void>();
   private readonly optionChainReload = new Subject<void>();
+  private readonly historyReload = new Subject<void>();
   @ViewChild('chartHost') chartHost?: ElementRef<HTMLDivElement>;
   private loadedChartName = '';
   private pendingChartName = '';
@@ -119,6 +133,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
   brokerMessage = 'Step 1: click Request OTP. Step 2: enter the code from your phone and submit.';
   readonly indexTabs = ['NIFTY', 'SENSEX', 'BANKNIFTY', 'FINNIFTY'];
   marketKind: MarketKind = 'stocks';
+  centerView: CenterView = 'market';
   pickerOpen = false;
   pickerKind: MarketKind = 'stocks';
   pickerQuery = '';
@@ -128,8 +143,26 @@ export class AppComponent implements OnInit, AfterViewChecked {
   openedOption: OptionContract | null = null;
   optionChartError = '';
   optionQuotes = new Map<string, OptionMarketQuote>();
+  paperAgent: PaperAgentSnapshot | null = null;
+  agentCommand = '';
+  agentBusy = false;
+  agentError = '';
+  tradeHistory: PaperTradeHistoryResponse | null = null;
+  historyRange: TradeHistoryRange = '1m';
+  historyError = '';
+  executionMode: ExecutionMode = 'paper';
+  liveAgent: LiveExecutionSnapshot | null = null;
+  liveAcknowledgement = '';
+  liveProduct: 'MIS' | 'NRML' = 'MIS';
+  liveBusy = false;
+  liveError = '';
 
   ngOnInit(): void {
+    const savedMode = localStorage.getItem(EXECUTION_MODE_KEY);
+    if (savedMode === 'paper' || savedMode === 'live') {
+      this.executionMode = savedMode;
+    }
+
     this.reload
       .pipe(
         startWith(undefined),
@@ -183,6 +216,46 @@ export class AppComponent implements OnInit, AfterViewChecked {
         );
       });
 
+    interval(2000)
+      .pipe(
+        startWith(0),
+        switchMap(() => this.board.paperAgent().pipe(catchError(() => EMPTY))),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((snapshot) => {
+        this.paperAgent = snapshot;
+        this.agentError = '';
+      });
+
+    interval(2000)
+      .pipe(
+        startWith(0),
+        switchMap(() => this.board.liveAgent().pipe(catchError(() => EMPTY))),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((snapshot) => {
+        this.liveAgent = snapshot;
+      });
+
+    merge(interval(5000), this.historyReload)
+      .pipe(
+        startWith(0),
+        filter(() => this.centerView === 'trades'),
+        switchMap(() =>
+          this.board.paperTrades(this.historyRange).pipe(
+            catchError(() => {
+              this.historyError = 'Trade history is unavailable.';
+              return EMPTY;
+            }),
+          ),
+        ),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((history) => {
+        this.tradeHistory = history;
+        this.historyError = '';
+      });
+
     this.refreshSession();
 
     const onKey = (event: KeyboardEvent) => {
@@ -207,6 +280,154 @@ export class AppComponent implements OnInit, AfterViewChecked {
       window.removeEventListener('keydown', onKey);
       this.chartResize?.disconnect();
     });
+  }
+
+  sendAgentCommand(messageOverride?: string): void {
+    const message = (messageOverride ?? this.agentCommand).trim();
+    if (!message || this.agentBusy) {
+      return;
+    }
+    this.agentBusy = true;
+    this.agentError = '';
+    this.board
+      .sendPaperAgentCommand(message)
+      .pipe(
+        catchError(() => {
+          this.agentError = 'Paper agent API is unavailable.';
+          return EMPTY;
+        }),
+        finalize(() => {
+          this.agentBusy = false;
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((snapshot) => {
+        this.paperAgent = snapshot;
+        this.agentCommand = '';
+        this.historyReload.next();
+      });
+  }
+
+  setExecutionMode(mode: ExecutionMode): void {
+    this.executionMode = mode;
+    this.liveError = '';
+    localStorage.setItem(EXECUTION_MODE_KEY, mode);
+  }
+
+  canConfirmLive(): boolean {
+    return !!this.liveAgent?.featureEnabled
+      && !!this.liveAgent?.brokerConnected
+      && !!this.liveAgent?.marketSession?.isOpen
+      && !!this.liveAgent?.armed
+      && !this.liveBusy;
+  }
+
+  liveStatusMessage(): string {
+    if (!this.liveAgent?.featureEnabled) {
+      return 'Live trading is turned off in backend configuration.';
+    }
+    if (!this.brokerConnected || !this.liveAgent.brokerConnected) {
+      return 'Connect m.Stock OTP before live trading.';
+    }
+    if (!this.liveAgent.marketSession?.isOpen) {
+      const next = this.liveAgent.marketSession?.nextEventAt;
+      const nextLabel = next ? ` Next session ${new Date(next).toLocaleString('en-IN', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })} IST.` : '';
+      return `${this.liveAgent.marketSession?.message ?? 'Market is closed.'}${nextLabel}`;
+    }
+    if (!this.liveAgent.armed) {
+      return 'Market is open. Arm live execution before confirming real orders.';
+    }
+    return this.liveAgent.reconciliationStatus;
+  }
+
+  confirmPendingTrade(proposalId: string): void {
+    if (this.executionMode === 'paper') {
+      this.sendAgentCommand('confirm');
+      return;
+    }
+    if (!this.liveAgent?.featureEnabled) {
+      this.liveError = 'Live trading is disabled in backend configuration.';
+      return;
+    }
+    if (!this.brokerConnected || !this.liveAgent.brokerConnected) {
+      this.liveError = 'Connect m.Stock OTP before confirming a live trade.';
+      return;
+    }
+    if (!this.liveAgent.marketSession?.isOpen) {
+      this.liveError = this.liveStatusMessage();
+      return;
+    }
+    if (!this.canConfirmLive()) {
+      this.liveError = 'Arm live execution before confirming a real-money trade.';
+      return;
+    }
+    this.confirmLive(proposalId);
+  }
+
+  armLive(): void {
+    if (this.liveBusy) return;
+    this.liveBusy = true;
+    this.liveError = '';
+    this.board.armLive(this.liveAcknowledgement)
+      .pipe(
+        catchError(() => {
+          this.liveError = 'Live agent API is unavailable.';
+          return EMPTY;
+        }),
+        finalize(() => this.liveBusy = false),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((snapshot) => {
+        this.liveAgent = snapshot;
+        if (snapshot.armed) this.liveAcknowledgement = '';
+      });
+  }
+
+  disarmLive(): void {
+    this.runLiveAction(this.board.disarmLive());
+  }
+
+  confirmLive(proposalId: string): void {
+    this.runLiveAction(this.board.confirmLive(proposalId, this.liveProduct));
+  }
+
+  exitLive(tradeId: string): void {
+    this.runLiveAction(this.board.exitLive(tradeId));
+  }
+
+  handleLiveEod(tradeId: string, action: 'HOLD' | 'EXIT'): void {
+    this.runLiveAction(this.board.liveEod(tradeId, action));
+  }
+
+  private runLiveAction(request: Observable<LiveExecutionSnapshot>): void {
+    if (this.liveBusy) return;
+    this.liveBusy = true;
+    this.liveError = '';
+    request
+      .pipe(
+        catchError(() => {
+          this.liveError = 'Live broker action failed. Check broker status before retrying.';
+          return EMPTY;
+        }),
+        finalize(() => this.liveBusy = false),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((snapshot) => this.liveAgent = snapshot);
+  }
+
+  showTradeDetails(): void {
+    this.centerView = 'trades';
+    this.historyReload.next();
+    this.tvChart?.remove();
+    this.tvChart = undefined;
+    this.candleSeries = undefined;
+    this.chartResize?.disconnect();
+    this.loadedChartName = '';
+  }
+
+  setHistoryRange(range: TradeHistoryRange): void {
+    this.historyRange = range;
+    this.historyReload.next();
   }
 
   setMarketKind(kind: MarketKind): void {
@@ -461,13 +682,19 @@ export class AppComponent implements OnInit, AfterViewChecked {
     this.brokerBusy = true;
     this.otpRequested = false;
     this.otp = '';
-    this.brokerMessage = 'Requesting OTP from m.Stock…';
-    this.http.post<{ status?: string; message?: string; data?: { is_error?: string } }>('/api/broker/otp/send', {}).subscribe({
+    this.brokerMessage = this.brokerConnected
+      ? 'Clearing old session and requesting a new OTP…'
+      : 'Requesting OTP from m.Stock…';
+    const start = this.brokerConnected
+      ? this.http.post<{ connected?: boolean; message?: string }>('/api/broker/session/clear', {})
+      : of({ connected: false });
+    start.pipe(switchMap(() => this.http.post<{ status?: string; message?: string }>('/api/broker/otp/send', {}))).subscribe({
       next: (res) => {
         this.brokerBusy = false;
+        this.brokerConnected = false;
         if (res.status === 'success') {
           this.otpRequested = true;
-          this.brokerMessage = 'OTP sent. Step 2: enter the code below and click Submit OTP.';
+          this.brokerMessage = 'OTP sent. Enter the code below and click Submit OTP.';
           return;
         }
         this.brokerMessage = res.message || 'Could not request OTP.';
@@ -605,6 +832,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
   }
 
   select(symbol: SymbolSnapshot): void {
+    this.centerView = 'market';
     this.selectedName = symbol.name;
     this.selected = symbol;
     this.pendingChartName = symbol.name;

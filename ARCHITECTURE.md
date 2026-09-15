@@ -4,7 +4,13 @@
 
 **Trade with Beast** is a trading **pressure board** with a Cursor/VS Code–style UI. It shows where NSE names sit relative to fixed zone lines (B2, B1, S, S1, S2) and labels each symbol **BUYING**, **SELLING**, or **RANGE BOUND**.
 
-This phase is **read-only**: live/mock quotes, zone math, charts, and symbol selection (stocks vs index options). **No auto-orders, no CE/PE execution, no Dual-MA/RSI.**
+The board remains read-only with respect to the broker. A separate **paper-only decision agent** can
+simulate confirmed stock and option positions; it has no live broker order method.
+
+Index option hedging has an additional conservative policy: at least ₹1,00,000 must be allocated,
+only one protected index spread may be open, and stock-option selling is disabled. Naked index-option
+selling is available in paper mode with explicit approval, liquidity checks, stop-based sizing and a
+warning that price gaps can exceed the modeled stop loss.
 
 ---
 
@@ -184,6 +190,36 @@ Charts use **TradingView Lightweight Charts** (`lightweight-charts@4.2.3` in `in
 | **IndexUniverse** | Nifty 50 + index names + m.Stock quote aliases |
 | **SeedStore** | Reads `data/mock-board.json` |
 | **MStockSessionStore** | Persists access token to AppData |
+| **MarketContextService** | Normalizes quote provenance/freshness/liquidity and computes EMA, momentum, realized volatility, zone and regime evidence |
+| **PaperDecisionEngine** | Deterministically ranks stock-zone, long-option, debit-spread and hedged-credit-spread candidates |
+| **PortfolioRiskManager** | Applies capital, daily/aggregate risk, lot, liquidity, freshness, correlation and session constraints |
+| **PaperTradingAgent** | Requires confirmation, revalidates all legs, simulates atomic fills and manages exits |
+| **TradeHistoryStore** | Versioned SQLite persistence for decisions, evidence, multi-leg trades, legs and events while preserving `trade_history` |
+
+### Paper decision lifecycle
+
+1. Fresh context is built outside the agent state lock.
+2. Strategies generate auditable candidates; evidence scores are rule scores, not probabilities.
+3. Risk checks apply 2026 lots (NIFTY 65, BANKNIFTY 30, FINNIFTY 60, SENSEX 20).
+4. One proposal is persisted and waits for explicit `CONFIRM`.
+5. Confirmation refreshes and revalidates every leg. Any failed leg cancels the whole fill.
+6. A SQLite transaction records the simulated all-leg fill. Marks and exits are persisted per leg.
+7. Hard-stop, target, trailing, time, adverse-regime and 15:20 IST exits are enforced.
+
+Open paper trades are reconstructed from persisted legs after restart. Proposals expire on restart;
+rolls and strike changes are never applied to an existing approval.
+
+### Paper-agent API
+
+- `GET /api/paper-agent` — full additive snapshot
+- `POST /api/paper-agent/command` — conversational start/status/confirm/reject/stop
+- `GET /api/paper-agent/history?range=today|1m|3m|all` — compatible flat history
+- `GET /api/paper-agent/trades?range=today|1m|3m|all` — strategy and per-leg paper history
+- `GET /api/paper-agent/decisions`
+- `GET /api/paper-agent/market-context`
+- `GET /api/paper-agent/positions`
+- `GET /api/paper-agent/events?limit=50`
+- `GET /api/paper-agent/performance`
 
 ---
 
@@ -215,13 +251,13 @@ Charts use **TradingView Lightweight Charts** (`lightweight-charts@4.2.3` in `in
 | UI | Angular 19, standalone components, SCSS |
 | Chart | TradingView Lightweight Charts 4.x (CDN) |
 | Broker | m.Stock REST Type A |
-| Storage | JSON seed + local session file only (no database) |
+| Storage | JSON seed/session plus local Microsoft.Data.Sqlite paper history (12-month retention) |
 
 ---
 
-## Planned / out of scope (this phase)
+## Out of scope
 
-- Strategy engine, auto-orders, CE/PE execution  
+- Live broker order placement (the agent is intentionally paper-only)
 - Dual-MA, RSI, or replacing zone formulas  
 - TradingView.com widget embed for NSE  
 - Full live NFO option chain on chart (partial groundwork: `OptionSymbols`, `BlackScholes`, quote-by-key API)
