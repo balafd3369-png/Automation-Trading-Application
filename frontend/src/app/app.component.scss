@@ -126,6 +126,12 @@
   color: var(--muted);
 }
 
+.rail-head .rail-label,
+.rail-sub {
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .rail-sub {
   margin-top: 12px;
   border-top: 1px solid var(--border);
@@ -170,7 +176,41 @@
 .file.up, .px.up, .tab.up, .symbol.up, .last.up { color: #3fb950; }
 .file.down, .px.down, .tab.down, .symbol.down, .last.down { color: #f85149; }
 .px { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+.option-market {
+  display: grid;
+  justify-items: end;
+  min-width: 120px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.option-market strong { color: #d1d4dc; font-size: 15px; font-weight: 700; }
+.option-market small { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.option-market.up strong, .option-market.up small { color: #3fb950; }
+.option-market.down strong, .option-market.down small { color: #f85149; }
 .rail-empty { color: var(--dim); font-size: 12px; padding: 12px; }
+
+.pressure-list .file {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+}
+
+.pressure-list .tree-item {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.selling-list .file {
+  animation: selling-name-color 6s steps(1, end) infinite;
+}
+
+.buying-list .file {
+  animation: buying-name-color 6s steps(1, end) infinite;
+}
+
+.range-list .file {
+  animation: range-name-color 6s steps(1, end) infinite;
+}
 
 .skel {
   height: 16px;
@@ -311,6 +351,7 @@
 }
 
 .vs { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.contract-symbol { color: #787b86; font-size: 10px; margin-top: 3px; }
 
 .badge {
   font-size: 11px;
@@ -357,6 +398,14 @@
   flex-direction: column;
 }
 
+.option-chart-error {
+  padding: 7px 10px;
+  color: #ffb74d;
+  background: #2d2112;
+  border-bottom: 1px solid #5d421d;
+  font-size: 11px;
+}
+
 .chart-head {
   display: flex;
   justify-content: space-between;
@@ -394,6 +443,18 @@
   border-color: #3a6ea5;
 }
 
+.tv-toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tv-toolbar .go-live {
+  margin-left: auto;
+  color: #fff;
+  background: #2962ff;
+  border-color: #2962ff;
+}
+
 .tv-sep {
   width: 1px;
   height: 16px;
@@ -401,12 +462,108 @@
   margin: 0 6px;
 }
 
-.tv-chart {
+.drawing-status {
+  padding: 5px 10px;
+  color: #f9a825;
+  background: #211d12;
+  border-bottom: 1px solid #3b3218;
+  font-size: 11px;
+}
+
+.drawing-list {
+  display: flex;
+  gap: 4px;
+  padding: 5px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawing-list button {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid #3a3a3a;
+  border-radius: 3px;
+  color: #b8b8b8;
+  background: #202020;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.drawing-list button.active {
+  border-color: #f9a825;
+  color: #f9a825;
+}
+
+.chart-stage {
+  position: relative;
   flex: 1 1 auto;
+  min-height: 360px;
+  overflow: hidden;
+}
+
+.tv-chart {
+  position: absolute;
+  inset: 0;
   min-height: 360px;
   width: 100%;
   background: #131313;
 }
+
+.chart-legend {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: calc(100% - 150px);
+  padding: 4px 7px;
+  border-radius: 3px;
+  color: #b2b5be;
+  background: rgb(19 19 19 / 78%);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.chart-legend strong {
+  color: #d1d4dc;
+  font-weight: 600;
+}
+
+.chart-legend b {
+  color: #d1d4dc;
+  font-weight: 500;
+}
+
+.chart-legend b.up { color: #26a69a; }
+.chart-legend b.down { color: #ef5350; }
+
+.zone-legend {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  right: 64px;
+  display: grid;
+  gap: 3px;
+  padding: 5px 7px;
+  border-radius: 3px;
+  background: rgb(19 19 19 / 82%);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.zone-legend span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.zone-legend .b2, .zone-legend .b1 { color: #3fb950; }
+.zone-legend .s { color: #79b8ff; }
+.zone-legend .s1, .zone-legend .s2 { color: #f85149; }
 
 .code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -477,6 +634,17 @@
   background: #2a2d2e;
   color: #fff;
   cursor: pointer;
+}
+
+.broker-bar button.broker-primary {
+  background: #238636;
+  border-color: #2ea043;
+  font-weight: 600;
+}
+
+.broker-bar button.broker-primary:disabled {
+  background: #2a2d2e;
+  border-color: var(--border);
 }
 
 .broker-bar button:disabled {
@@ -616,6 +784,21 @@
   color: var(--dim);
   font-size: 11px;
   border-top: 1px solid #333;
+}
+
+@keyframes selling-name-color {
+  0%, 49.99% { color: #ff5252; }
+  50%, 100% { color: #ff8a65; }
+}
+
+@keyframes buying-name-color {
+  0%, 49.99% { color: #3fb950; }
+  50%, 100% { color: #29d6b0; }
+}
+
+@keyframes range-name-color {
+  0%, 49.99% { color: #d29922; }
+  50%, 100% { color: #ffd54f; }
 }
 
 @keyframes pulse {

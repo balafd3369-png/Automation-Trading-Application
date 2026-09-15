@@ -6,6 +6,7 @@ Cursor-style **pressure board** for Indian markets — zone lines (B2, B1, S, S1
 |------|-------------|
 | **[HOW-TO-RUN.md](./HOW-TO-RUN.md)** | Install, start backend & frontend, OTP, troubleshooting |
 | **[ARCHITECTURE.md](./ARCHITECTURE.md)** | Project overview, data flow, formulas, stack |
+| **[TESTING.md](./TESTING.md)** | Run backend and frontend test suites |
 
 **Quick start:** backend on **45211**, frontend on **45212** → http://127.0.0.1:45212
 

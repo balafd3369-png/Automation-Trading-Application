@@ -5,7 +5,7 @@
       <span class="dot yellow"></span>
       <span class="dot green"></span>
     </div>
-    <div class="title">Trade with Beast — {{ brokerConnected ? 'pressure-board.live' : 'pressure-board.mock' }}</div>
+    <div class="title">Trade with Beast — {{ brokerConnected ? 'pressure-board.live' : 'pressure-board.offline' }}</div>
     <div class="title-actions">
       <button type="button" class="open-btn" (click)="openPicker()">Open</button>
       <span class="title-meta">{{ clock | date: 'HH:mm:ss' }}</span>
@@ -41,7 +41,17 @@
               <button type="button" class="tree-item" [class.selected]="optionSelected(row)" (click)="openOption(row)">
                 <span class="chev">▾</span>
                 <span class="file">{{ row.strike }} CE</span>
-                <span class="px">{{ row.expiryLabel }}</span>
+                <span class="option-market" [class.up]="optionTone(row) === 'up'" [class.down]="optionTone(row) === 'down'">
+                  <strong>{{ row.last != null ? (row.last | number: '1.2-2') : '—' }}</strong>
+                  <small>
+                    @if (row.changePercent != null) {
+                      {{ (row.changePoints ?? 0) > 0 ? '+' : '' }}{{ row.changePoints | number: '1.2-2' }} pts
+                      · {{ row.changePercent > 0 ? '+' : '' }}{{ row.changePercent | number: '1.2-2' }}%
+                    } @else {
+                      {{ row.expiryLabel }}
+                    }
+                  </small>
+                </span>
               </button>
             </li>
           }
@@ -60,7 +70,7 @@
         } @else if (selling().length === 0) {
           <p class="rail-empty">No selling names</p>
         } @else {
-          <ul class="tree">
+          <ul class="tree pressure-list selling-list">
             @for (row of selling(); track row.name) {
               <li>
                 <button type="button" class="tree-item" [class.selected]="selectedName === row.name" (click)="select(row)">
@@ -120,7 +130,7 @@
 
       @if (state === 'loading') {
         <div class="pane loading-pane">
-          <div class="pulse">Loading mock board…</div>
+          <div class="pulse">Loading board…</div>
         </div>
       } @else if (state === 'error') {
         <div class="pane empty-pane">
@@ -144,8 +154,11 @@
           <div class="headline">
             <div>
               <div class="symbol" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">{{ openedOption?.label || selected.name }}</div>
-              <div class="last" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">{{ selected.last | number: '1.2-2' }}</div>
-              <div class="vs">{{ lastVs(selected) }} · open {{ selected.todayOpen | number: '1.2-2' }}</div>
+              <div class="last" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">{{ displayLast() | number: '1.2-2' }}</div>
+              <div class="vs">{{ lastVs(selected) }} · open {{ displayOpen() | number: '1.2-2' }}</div>
+              @if (openedOption && lastChart?.tradingSymbol) {
+                <div class="contract-symbol">{{ lastChart?.tradingSymbol }}</div>
+              }
             </div>
             <div [ngClass]="badgeClass(selected.mark)">{{ selected.mark }}</div>
           </div>
@@ -162,16 +175,69 @@
           </div>
 
           <div class="chart-block">
+            @if (optionChartError) {
+              <div class="option-chart-error">{{ optionChartError }}</div>
+            }
             <div class="tv-toolbar">
               @for (tf of timeframes; track tf.id) {
                 <button type="button" [class.active]="chartInterval === tf.id" (click)="setChartInterval(tf.id)">{{ tf.label }}</button>
               }
               <span class="tv-sep"></span>
-              <button type="button" [class.active]="drawTool === 'hline'" (click)="drawTool = drawTool === 'hline' ? 'none' : 'hline'">H-line</button>
-              <button type="button" [class.active]="drawTool === 'trend'" (click)="drawTool = drawTool === 'trend' ? 'none' : 'trend'">Trend</button>
+              <button type="button" [class.active]="indicatorActive('sma20')" (click)="toggleIndicator('sma20')">SMA 20</button>
+              <button type="button" [class.active]="indicatorActive('sma50')" (click)="toggleIndicator('sma50')">SMA 50</button>
+              <button type="button" [class.active]="indicatorActive('ema9')" (click)="toggleIndicator('ema9')">EMA 9</button>
+              <button type="button" [class.active]="indicatorActive('ema21')" (click)="toggleIndicator('ema21')">EMA 21</button>
+              <span class="tv-sep"></span>
+              <button type="button" [class.active]="drawTool === 'hline'" (click)="setDrawTool('hline')">H-line</button>
+              <button type="button" [class.active]="drawTool === 'trend'" (click)="setDrawTool('trend')">Trend</button>
+              @if (drawTool !== 'none') {
+                <button type="button" (click)="cancelDrawing()">Cancel</button>
+              }
+              <button type="button" [disabled]="!selectedDrawingId" (click)="deleteSelectedDrawing()">Delete</button>
               <button type="button" (click)="clearDrawings()">Clear</button>
+              <button type="button" class="go-live" (click)="goLive()">Go live</button>
             </div>
-            <div #chartHost class="tv-chart"></div>
+            @if (drawingStatus) {
+              <div class="drawing-status">{{ drawingStatus }}</div>
+            }
+            @if (drawings.length) {
+              <div class="drawing-list" aria-label="Saved drawings">
+                @for (drawing of drawings; track drawing.id; let number = $index) {
+                  <button
+                    type="button"
+                    [class.active]="selectedDrawingId === drawing.id"
+                    (click)="selectDrawing(drawing.id)"
+                  >
+                    {{ drawing.kind === 'hline' ? 'H-line' : 'Trend' }} {{ number + 1 }}
+                    @if (drawing.price != null) {
+                      · {{ drawing.price | number: '1.2-2' }}
+                    }
+                  </button>
+                }
+              </div>
+            }
+            <div class="chart-stage">
+              <div class="chart-legend">
+                @if (crosshairCandle; as candle) {
+                  <strong>{{ candle.time }} IST</strong>
+                  <span>O <b>{{ candle.open | number: '1.2-2' }}</b></span>
+                  <span>H <b class="up">{{ candle.high | number: '1.2-2' }}</b></span>
+                  <span>L <b class="down">{{ candle.low | number: '1.2-2' }}</b></span>
+                  <span>C <b>{{ candle.close | number: '1.2-2' }}</b></span>
+                } @else {
+                  <strong>{{ openedOption?.label || selected.name }} · {{ chartInterval }}</strong>
+                  <span>Move the crosshair over a candle for date, time and OHLC</span>
+                }
+              </div>
+              <div class="zone-legend" aria-label="Pressure levels">
+                <span class="b2">B2 <b>{{ selected.b2 | number: '1.2-2' }}</b></span>
+                <span class="b1">B1 <b>{{ selected.b1 | number: '1.2-2' }}</b></span>
+                <span class="s">S <b>{{ selected.s | number: '1.2-2' }}</b></span>
+                <span class="s1">S1 <b>{{ selected.s1 | number: '1.2-2' }}</b></span>
+                <span class="s2">S2 <b>{{ selected.s2 | number: '1.2-2' }}</b></span>
+              </div>
+              <div #chartHost class="tv-chart"></div>
+            </div>
           </div>
 
           <div class="code" role="table">
@@ -193,21 +259,21 @@
 
       <div class="broker-bar">
         <span class="broker-label">m.Stock</span>
-        <button type="button" [disabled]="brokerBusy || brokerConnected" (click)="sendBrokerOtp()">Send OTP</button>
+        <button type="button" class="broker-primary" [disabled]="brokerBusy || brokerConnected" (click)="requestBrokerOtp()">Request OTP</button>
         <input
           [(ngModel)]="otp"
           name="otp"
           maxlength="8"
-          placeholder="OTP"
-          [disabled]="brokerBusy || brokerConnected"
-          (keyup.enter)="verifyBrokerOtp()"
+          placeholder="Enter OTP"
+          [disabled]="!otpRequested || brokerBusy || brokerConnected"
+          (keyup.enter)="submitBrokerOtp()"
         />
-        <button type="button" [disabled]="brokerBusy || brokerConnected" (click)="verifyBrokerOtp()">Verify</button>
+        <button type="button" [disabled]="!otpRequested || brokerBusy || brokerConnected || !otp.trim()" (click)="submitBrokerOtp()">Submit OTP</button>
         <span class="broker-msg" [class.ok]="brokerConnected">{{ brokerMessage }}</span>
       </div>
       <form class="composer" aria-label="Chat composer">
         <div class="composer-label">Agent</div>
-        <textarea disabled rows="2" placeholder="Composer disabled — mock UI only. No live broker, no auto-orders. Strategy later."></textarea>
+        <textarea disabled rows="2" placeholder="Composer disabled — live market board only. No auto-orders. Strategy later."></textarea>
         <button type="button" disabled>Send</button>
       </form>
     </main>
@@ -224,7 +290,17 @@
               <button type="button" class="tree-item" [class.selected]="optionSelected(row)" (click)="openOption(row)">
                 <span class="chev">▾</span>
                 <span class="file">{{ row.strike }} PE</span>
-                <span class="px">{{ row.expiryLabel }}</span>
+                <span class="option-market" [class.up]="optionTone(row) === 'up'" [class.down]="optionTone(row) === 'down'">
+                  <strong>{{ row.last != null ? (row.last | number: '1.2-2') : '—' }}</strong>
+                  <small>
+                    @if (row.changePercent != null) {
+                      {{ (row.changePoints ?? 0) > 0 ? '+' : '' }}{{ row.changePoints | number: '1.2-2' }} pts
+                      · {{ row.changePercent > 0 ? '+' : '' }}{{ row.changePercent | number: '1.2-2' }}%
+                    } @else {
+                      {{ row.expiryLabel }}
+                    }
+                  </small>
+                </span>
               </button>
             </li>
           }
@@ -242,7 +318,7 @@
         } @else if (buying().length === 0) {
           <p class="rail-empty">No buying names</p>
         } @else {
-          <ul class="tree">
+          <ul class="tree pressure-list buying-list">
             @for (row of buying(); track row.name) {
               <li>
                 <button type="button" class="tree-item" [class.selected]="selectedName === row.name" (click)="select(row)">
@@ -258,7 +334,7 @@
         @if (state === 'ready' && ranged().length === 0) {
           <p class="rail-empty">None in range</p>
         }
-        <ul class="tree">
+        <ul class="tree pressure-list range-list">
           @for (row of ranged(); track row.name) {
             <li>
               <button type="button" class="tree-item range-item" [class.selected]="selectedName === row.name" (click)="select(row)">
@@ -275,8 +351,8 @@
 
   <footer class="statusbar">
     <span class="sb-chunk accent">{{ marketKind === 'options' ? 'OPTIONS' : 'STOCKS' }}</span>
-    <span class="sb-chunk">{{ boardData?.feed || 'mock 1s' }}</span>
-    <span class="sb-chunk">JSON seed</span>
+    <span class="sb-chunk">{{ boardData?.feed || 'awaiting m.Stock OTP' }}</span>
+    <span class="sb-chunk">{{ brokerConnected ? 'LIVE' : 'OFFLINE' }}</span>
     <span class="sb-chunk buy">{{ boardData?.counts?.buying ?? 0 }} BUYING</span>
     <span class="sb-chunk sell">{{ boardData?.counts?.selling ?? 0 }} SELLING</span>
     <span class="sb-chunk range">{{ boardData?.counts?.rangeBound ?? 0 }} RANGE</span>

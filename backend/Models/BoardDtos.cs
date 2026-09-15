@@ -36,3 +36,25 @@ public sealed record ChartResponse(
     decimal S,
     decimal S1,
     decimal S2);
+
+public sealed record OptionChartResponse(
+    string Name,
+    string TradingSymbol,
+    IReadOnlyList<ChartBar> Candles,
+    decimal Last,
+    decimal TodayOpen,
+    decimal PreviousClose,
+    decimal B2,
+    decimal B1,
+    decimal S,
+    decimal S1,
+    decimal S2);
+
+public sealed record OptionChainItem(
+    decimal Strike,
+    string Side,
+    string TradingSymbol,
+    decimal Last,
+    decimal Open,
+    decimal PreviousClose,
+    decimal ChangePercent);

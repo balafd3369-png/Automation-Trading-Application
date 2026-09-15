@@ -26,3 +26,5 @@ app.UseCors();
 app.MapControllers();
 app.MapGet("/", () => Results.Redirect("/api/board"));
 app.Run();
+
+public partial class Program { }

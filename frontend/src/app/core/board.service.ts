@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable, interval, startWith, switchMap } from 'rxjs';
-import { BoardResponse, ChartResponse } from './board.models';
+import { BoardResponse, ChartResponse, OptionMarketQuote } from './board.models';
 
 @Injectable({ providedIn: 'root' })
 export class BoardService {
@@ -17,6 +17,27 @@ export class BoardService {
   chart(name: string, interval = '5minute'): Observable<ChartResponse> {
     return this.http.get<ChartResponse>(`/api/board/chart/${encodeURIComponent(name)}`, {
       params: { interval },
+    });
+  }
+
+  optionChart(
+    contract: { underlying: string; expiry: string; strike: number; side: string },
+    interval = '5minute',
+  ): Observable<ChartResponse> {
+    return this.http.get<ChartResponse>('/api/board/option-chart', {
+      params: {
+        underlying: contract.underlying,
+        expiry: contract.expiry,
+        strike: contract.strike,
+        side: contract.side,
+        interval,
+      },
+    });
+  }
+
+  optionChain(underlying: string, expiry: string): Observable<OptionMarketQuote[]> {
+    return this.http.get<OptionMarketQuote[]>('/api/board/option-chain', {
+      params: { underlying, expiry },
     });
   }
 }

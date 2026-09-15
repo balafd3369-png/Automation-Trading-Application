@@ -1,3 +1,4 @@
+using System.Globalization;
 using TradeWithBeast.Broker;
 using TradeWithBeast.Formulas;
 using TradeWithBeast.Models;
@@ -12,10 +13,11 @@ public sealed class MockMarketService : IHostedService, IDisposable
     private readonly SeedStore _store;
     private readonly MStockAuthClient _broker;
     private readonly ILogger<MockMarketService> _log;
+    private readonly Dictionary<string, List<IntradayTickBuilder.Tick>> _intradayTicks = new(StringComparer.OrdinalIgnoreCase);
     private Timer? _timer;
     private CancellationTokenSource? _historyCts;
     private DateTimeOffset _updatedAt = DateTimeOffset.UtcNow;
-    private string _feed = "mock-1s";
+    private string _feed = "awaiting m.Stock OTP";
     private int _busy;
 
     public MockMarketService(IWebHostEnvironment env, MStockAuthClient broker, ILogger<MockMarketService> log)
@@ -28,8 +30,24 @@ public sealed class MockMarketService : IHostedService, IDisposable
     public void Dispose()
     {
         _timer?.Dispose();
-        _historyCts?.Cancel();
-        _historyCts?.Dispose();
+        _timer = null;
+        var cts = _historyCts;
+        _historyCts = null;
+        if (cts is null)
+        {
+            return;
+        }
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        cts.Dispose();
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -108,6 +126,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
         IReadOnlyList<DayCandle> live = [];
         var token = symbol.InstrumentToken;
         var exchange = symbol.Exchange;
+        var resolvedExchange = exchange;
         if (_broker.HasSession && token != 0)
         {
             var exchanges = new List<string>();
@@ -134,6 +153,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
                     live = await _broker.GetCandlesAsync(ex, token, mapped, ct);
                     if (live.Count > 0)
                     {
+                        resolvedExchange = ex;
                         break;
                     }
                 }
@@ -146,41 +166,269 @@ public sealed class MockMarketService : IHostedService, IDisposable
             _log.LogInformation("Chart {Name} {Interval} token={Token} bars={Bars}", name, mapped, token, live.Count);
         }
 
+        SymbolSnapshot snap;
         lock (_gate)
         {
-            var snap = ToSnapshot(symbol);
-            List<ChartBar> bars;
-            if (live.Count > 0)
+            snap = ToSnapshot(symbol);
+        }
+
+        List<ChartBar> bars;
+        if (live.Count > 0)
+        {
+            bars = ChartSessionMerger.ToBars(live);
+            if (_broker.HasSession && mapped != "day" && !ChartSessionMerger.LastBarIsToday(bars))
             {
-                bars = live
-                    .GroupBy(c => c.Time.ToUnixTimeSeconds())
-                    .Select(g => g.Last())
-                    .OrderBy(c => c.Time)
-                    .Select(c => new ChartBar(c.Time.ToUnixTimeSeconds(), c.Open, c.High, c.Low, c.Close))
-                    .ToList();
+                var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                var nowIst = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ist);
+                var fromIst = new DateTimeOffset(nowIst.Date.AddHours(9).AddMinutes(15), ist.GetUtcOffset(nowIst.Date.AddHours(9).AddMinutes(15)));
+                var toIst = new DateTimeOffset(nowIst.Date.AddHours(15).AddMinutes(30), ist.GetUtcOffset(nowIst.Date.AddHours(15).AddMinutes(30)));
+                IReadOnlyList<DayCandle> minuteToday = [];
+                try
+                {
+                    minuteToday = await _broker.GetIntradayCandlesAsync(
+                        resolvedExchange,
+                        token,
+                        "minute",
+                        ct);
+                    if (minuteToday.Count == 0)
+                    {
+                        minuteToday = await _broker.GetCandlesAsync(
+                            resolvedExchange,
+                            token,
+                            "minute",
+                            fromIst,
+                            toIst,
+                            ct);
+                    }
+                }
+                catch (Exception exn)
+                {
+                    _log.LogWarning(exn, "Today minute candles failed for {Name}", name);
+                }
+
+                bars = ChartSessionMerger.MergeHistoricalWithToday(
+                    bars,
+                    await ResolveTodayBarsAsync(name, snap, mapped, resolvedExchange, token, minuteToday, ct));
             }
-            else if (mapped == "day" && symbol.Candles.Count > 0)
+        }
+        else if (mapped == "day" && symbol.Candles.Count > 0)
+        {
+            bars = symbol.Candles
+                .GroupBy(c => c.Time.ToUnixTimeSeconds())
+                .Select(g => g.Last())
+                .OrderBy(c => c.Time)
+                .Select(c => new ChartBar(c.Time.ToUnixTimeSeconds(), c.Open, c.High, c.Low, c.Close))
+                .ToList();
+        }
+        else if (_broker.HasSession)
+        {
+            bars = await ResolveTodayBarsAsync(name, snap, mapped, exchange, token, [], ct);
+        }
+        else
+        {
+            bars = BuildSyntheticIntraday(snap, mapped);
+        }
+
+        bars = SanitizeBars(bars, snap.Last);
+        if (bars.Count == 0 && !_broker.HasSession)
+        {
+            bars = BuildSyntheticIntraday(snap, mapped);
+        }
+
+        lock (_gate)
+        {
+            snap = ToSnapshot(symbol);
+            return new ChartResponse(snap.Name, bars, snap.Last, snap.B2, snap.B1, snap.S, snap.S1, snap.S2);
+        }
+    }
+
+    public async Task<OptionChartResponse?> OptionChartAsync(
+        string underlying,
+        DateTime expiry,
+        decimal strike,
+        string side,
+        string interval,
+        CancellationToken ct)
+    {
+        LiveSymbol? symbol;
+        lock (_gate)
+        {
+            symbol = _symbols.FirstOrDefault(s => s.Name.Equals(underlying, StringComparison.OrdinalIgnoreCase));
+        }
+        if (symbol is null || !_broker.HasSession || strike <= 0 || expiry == default)
+        {
+            return null;
+        }
+
+        var quote = await _broker.GetOptionQuoteAsync(underlying, expiry, strike, side, ct);
+        if (quote is null || quote.InstrumentToken <= 0 || quote.Last <= 0)
+        {
+            return null;
+        }
+
+        var mapped = interval switch
+        {
+            "1m" or "minute" => "minute",
+            "15m" or "15minute" => "15minute",
+            "1h" or "60minute" => "60minute",
+            "1D" or "day" => "day",
+            _ => "5minute",
+        };
+        IReadOnlyList<DayCandle> candles = [];
+        try
+        {
+            candles = await _broker.GetCandlesAsync(
+                quote.Exchange,
+                quote.InstrumentToken,
+                mapped,
+                ct);
+        }
+        catch (Exception exn)
+        {
+            _log.LogWarning(exn, "Option chart failed for {TradingSymbol} {Interval}", quote.TradingSymbol, mapped);
+        }
+
+        var bars = ChartSessionMerger.ToBars(candles);
+        if (mapped != "day" && !ChartSessionMerger.LastBarIsToday(bars))
+        {
+            var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            var nowIst = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ist);
+            var sessionDate = nowIst.Date;
+            var fromIst = new DateTimeOffset(
+                sessionDate.AddHours(9).AddMinutes(15),
+                ist.GetUtcOffset(sessionDate.AddHours(9).AddMinutes(15)));
+            var toIst = new DateTimeOffset(
+                sessionDate.AddHours(15).AddMinutes(30),
+                ist.GetUtcOffset(sessionDate.AddHours(15).AddMinutes(30)));
+            IReadOnlyList<DayCandle> todayCandles = [];
+            try
             {
-                bars = symbol.Candles
-                    .GroupBy(c => c.Time.ToUnixTimeSeconds())
-                    .Select(g => g.Last())
-                    .OrderBy(c => c.Time)
-                    .Select(c => new ChartBar(c.Time.ToUnixTimeSeconds(), c.Open, c.High, c.Low, c.Close))
-                    .ToList();
+                todayCandles = await _broker.GetIntradayCandlesAsync(
+                    quote.Exchange,
+                    quote.InstrumentToken,
+                    mapped,
+                    ct);
+                if (todayCandles.Count == 0 && mapped != "minute")
+                {
+                    todayCandles = await _broker.GetIntradayCandlesAsync(
+                        quote.Exchange,
+                        quote.InstrumentToken,
+                        "minute",
+                        ct);
+                }
+                if (todayCandles.Count == 0)
+                {
+                    todayCandles = await _broker.GetCandlesAsync(
+                        quote.Exchange,
+                        quote.InstrumentToken,
+                        mapped,
+                        fromIst,
+                        toIst,
+                        ct);
+                }
+            }
+            catch (Exception exn)
+            {
+                _log.LogWarning(exn, "Today's option candles failed for {TradingSymbol}", quote.TradingSymbol);
+            }
+
+            var todayBars = mapped == "minute"
+                ? ChartSessionMerger.ToBars(todayCandles)
+                : ChartSessionMerger.ResampleToday(todayCandles, mapped);
+            if (todayBars.Count > 0)
+            {
+                bars = ChartSessionMerger.MergeHistoricalWithToday(bars, todayBars);
             }
             else
             {
-                bars = BuildSyntheticIntraday(snap, mapped);
+                var bucket = ChartSessionMerger.BucketStartIst(nowIst, ChartSessionMerger.StepMinutes(mapped));
+                var open = quote.Open > 0 ? quote.Open : quote.Last;
+                var current = new ChartBar(
+                    bucket.ToUnixTimeSeconds(),
+                    open,
+                    Math.Max(open, quote.Last),
+                    Math.Min(open, quote.Last),
+                    quote.Last);
+                bars = ChartSessionMerger.MergeHistoricalWithToday(bars, [current]);
             }
-
-            bars = SanitizeBars(bars, snap.Last);
-            if (bars.Count == 0)
-            {
-                bars = BuildSyntheticIntraday(snap, mapped);
-            }
-
-            return new ChartResponse(snap.Name, bars, snap.Last, snap.B2, snap.B1, snap.S, snap.S1, snap.S2);
         }
+        bars = SanitizeBars(bars, quote.Last);
+
+        SymbolSnapshot snap;
+        lock (_gate)
+        {
+            snap = ToSnapshot(symbol);
+        }
+        var expiryLabel = expiry.ToString("dd MMM", CultureInfo.InvariantCulture).ToUpperInvariant();
+        var right = side.Equals("PE", StringComparison.OrdinalIgnoreCase) ? "PE" : "CE";
+        var name = $"{underlying.ToUpperInvariant()} {expiryLabel} {strike:0.##} {right}";
+        return new OptionChartResponse(
+            name,
+            quote.TradingSymbol,
+            bars,
+            quote.Last,
+            quote.Open,
+            quote.Close,
+            snap.B2,
+            snap.B1,
+            snap.S,
+            snap.S1,
+            snap.S2);
+    }
+
+    public async Task<IReadOnlyList<OptionChainItem>> OptionChainAsync(
+        string underlying,
+        DateTime expiry,
+        CancellationToken ct)
+    {
+        LiveSymbol? symbol;
+        lock (_gate)
+        {
+            symbol = _symbols.FirstOrDefault(s => s.Name.Equals(underlying, StringComparison.OrdinalIgnoreCase));
+        }
+        if (symbol is null || !_broker.HasSession || expiry == default || symbol.Last <= 0)
+        {
+            return [];
+        }
+
+        var step = underlying.ToUpperInvariant() switch
+        {
+            "BANKNIFTY" => 100m,
+            "SENSEX" => 100m,
+            _ => 50m,
+        };
+        var atm = Math.Round(symbol.Last / step, 0, MidpointRounding.AwayFromZero) * step;
+        var requests = new List<OptionQuoteRequest>();
+        for (var offset = -8; offset <= 8; offset++)
+        {
+            var strike = atm + offset * step;
+            if (strike <= 0)
+            {
+                continue;
+            }
+            requests.Add(new OptionQuoteRequest(underlying, expiry, strike, "CE"));
+            requests.Add(new OptionQuoteRequest(underlying, expiry, strike, "PE"));
+        }
+
+        var quotes = await _broker.GetOptionQuotesAsync(requests, ct);
+        return quotes
+            .Select(quote =>
+            {
+                var changePercent = quote.PreviousClose > 0
+                    ? (quote.Last - quote.PreviousClose) / quote.PreviousClose * 100m
+                    : 0m;
+                return new OptionChainItem(
+                    quote.Strike,
+                    quote.Side,
+                    quote.TradingSymbol,
+                    quote.Last,
+                    quote.Open,
+                    quote.PreviousClose,
+                    Math.Round(changePercent, 2));
+            })
+            .OrderBy(quote => quote.Strike)
+            .ThenBy(quote => quote.Side)
+            .ToList();
     }
 
     private static List<ChartBar> SanitizeBars(IReadOnlyList<ChartBar> bars, decimal last)
@@ -213,6 +461,120 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
 
         return clean;
+    }
+
+    private async Task<List<ChartBar>> ResolveTodayBarsAsync(
+        string name,
+        SymbolSnapshot snap,
+        string mapped,
+        string exchange,
+        int token,
+        IReadOnlyList<DayCandle> minuteToday,
+        CancellationToken ct)
+    {
+        var todayBars = ChartSessionMerger.ResampleToday(minuteToday, mapped);
+        if (todayBars.Count > 0)
+        {
+            _log.LogInformation("Chart {Name} {Interval} merged {Count} today bars from minute feed.", name, mapped, todayBars.Count);
+            return todayBars;
+        }
+
+        if (token != 0 && minuteToday.Count == 0)
+        {
+            try
+            {
+                var intraday = await _broker.GetIntradayCandlesAsync(
+                    exchange,
+                    token,
+                    "minute",
+                    ct);
+                todayBars = ChartSessionMerger.ResampleToday(intraday, mapped);
+                if (todayBars.Count > 0)
+                {
+                    _log.LogInformation(
+                        "Chart {Name} {Interval} merged {Count} today bars from intraday feed.",
+                        name,
+                        mapped,
+                        todayBars.Count);
+                    return todayBars;
+                }
+            }
+            catch (Exception exn)
+            {
+                _log.LogDebug(exn, "Intraday candles failed for {Name}", name);
+            }
+
+            var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            var nowIst = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ist);
+            var fromIst = new DateTimeOffset(nowIst.Date.AddHours(9).AddMinutes(15), ist.GetUtcOffset(nowIst.Date.AddHours(9).AddMinutes(15)));
+            var toIst = new DateTimeOffset(nowIst.Date.AddHours(15).AddMinutes(30), ist.GetUtcOffset(nowIst.Date.AddHours(15).AddMinutes(30)));
+            foreach (var alt in new[] { "5minute", "1minute", "minute" })
+            {
+                try
+                {
+                    var altToday = await _broker.GetCandlesAsync(exchange, token, alt, fromIst, toIst, ct);
+                    todayBars = ChartSessionMerger.ResampleToday(altToday, mapped);
+                    if (todayBars.Count > 0)
+                    {
+                        _log.LogInformation("Chart {Name} {Interval} merged {Count} today bars from {Alt}.", name, mapped, todayBars.Count, alt);
+                        return todayBars;
+                    }
+                }
+                catch (Exception exn)
+                {
+                    _log.LogDebug(exn, "Today {Alt} candles failed for {Name}", alt, name);
+                }
+            }
+        }
+
+        List<IntradayTickBuilder.Tick> ticks;
+        lock (_gate)
+        {
+            if (!_intradayTicks.TryGetValue(name, out ticks!))
+            {
+                ticks = [];
+                _intradayTicks[name] = ticks;
+            }
+        }
+
+        todayBars = IntradayTickBuilder.BuildBars(ticks, mapped, snap.TodayOpen);
+        if (todayBars.Count > 0)
+        {
+            _log.LogInformation("Chart {Name} {Interval} built {Count} today bars from live ticks.", name, mapped, todayBars.Count);
+            return todayBars;
+        }
+
+        todayBars = ChartSessionMerger.BuildCurrentBar(snap, mapped, snap.Last);
+        if (todayBars.Count > 0)
+        {
+            _log.LogWarning("Chart {Name} {Interval} using current bar only; intraday history unavailable.", name, mapped);
+        }
+
+        return todayBars;
+    }
+
+    private void RecordIntradayTick(string name, decimal last, decimal todayOpen)
+    {
+        if (last <= 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_intradayTicks.TryGetValue(name, out var ticks))
+            {
+                ticks = [];
+                _intradayTicks[name] = ticks;
+            }
+
+            if (ticks.Count == 0 && todayOpen > 0)
+            {
+                IntradayTickBuilder.BootstrapFromOpen(ticks, todayOpen, last);
+            }
+
+            IntradayTickBuilder.Record(ticks, last);
+        }
     }
 
     private static List<ChartBar> BuildSyntheticIntraday(SymbolSnapshot snap, string interval)
@@ -287,13 +649,19 @@ public sealed class MockMarketService : IHostedService, IDisposable
             }
             else
             {
-                MockWalk();
+                lock (_gate)
+                {
+                    _feed = "awaiting m.Stock OTP";
+                }
             }
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Board tick failed; keeping last snapshot.");
-            MockWalk();
+            lock (_gate)
+            {
+                _feed = "m.Stock error";
+            }
         }
         finally
         {
@@ -307,12 +675,22 @@ public sealed class MockMarketService : IHostedService, IDisposable
         if (quotes.Count == 0)
         {
             _log.LogWarning("m.Stock OHLC returned no mapped symbols.");
+            if (!_broker.HasSession)
+            {
+                lock (_gate)
+                {
+                    _feed = "session expired — request OTP";
+                }
+
+                return;
+            }
+
             var ltp = await _broker.GetLtpAsync(CancellationToken.None);
             if (ltp.Count == 0)
             {
                 lock (_gate)
                 {
-                    _feed = "m.Stock (quotes empty)";
+                    _feed = !_broker.HasSession ? "session expired — request OTP" : "m.Stock (quotes empty)";
                 }
 
                 return;
@@ -325,6 +703,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
                     if (ltp.TryGetValue(symbol.Name, out var last) && last > 0)
                     {
                         symbol.Last = last;
+                        RecordIntradayTick(symbol.Name, last, symbol.TodayOpen);
                     }
                 }
 
@@ -347,6 +726,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
                 if (q.Last > 0)
                 {
                     symbol.Last = q.Last;
+                    RecordIntradayTick(symbol.Name, q.Last, q.Open > 0 ? q.Open : symbol.TodayOpen);
                 }
 
                 if (q.Open > 0)

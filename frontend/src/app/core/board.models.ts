@@ -41,11 +41,24 @@ export interface ChartBar {
 
 export interface ChartResponse {
   name: string;
+  tradingSymbol?: string;
   candles: ChartBar[];
   last: number;
+  todayOpen?: number;
+  previousClose?: number;
   b2: number;
   b1: number;
   s: number;
   s1: number;
   s2: number;
+}
+
+export interface OptionMarketQuote {
+  strike: number;
+  side: 'CE' | 'PE';
+  tradingSymbol: string;
+  last: number;
+  open: number;
+  previousClose: number;
+  changePercent: number;
 }

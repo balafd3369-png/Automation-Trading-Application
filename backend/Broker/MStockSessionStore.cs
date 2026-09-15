@@ -6,8 +6,15 @@ public sealed class MStockSessionStore
 {
     private readonly string _path;
 
-    public MStockSessionStore()
+    public MStockSessionStore(string? sessionFilePath = null)
     {
+        if (!string.IsNullOrWhiteSpace(sessionFilePath))
+        {
+            _path = sessionFilePath;
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_path))!);
+            return;
+        }
+
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TradeWithBeast");
         Directory.CreateDirectory(dir);
         _path = Path.Combine(dir, "mstock-session.json");
@@ -41,5 +48,13 @@ public sealed class MStockSessionStore
     {
         var json = JsonSerializer.Serialize(new { accessToken = token, savedAt = DateTimeOffset.Now });
         File.WriteAllText(_path, json);
+    }
+
+    public void ClearToken()
+    {
+        if (File.Exists(_path))
+        {
+            File.Delete(_path);
+        }
     }
 }
