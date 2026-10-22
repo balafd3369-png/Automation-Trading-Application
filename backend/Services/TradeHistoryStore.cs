@@ -54,6 +54,7 @@ public sealed class TradeHistoryStore
         decimal Target,
         decimal MaxRisk,
         decimal MaxReward,
+        decimal CapitalRequired,
         DateTimeOffset OpenedAt,
         IReadOnlyList<RecoveredLeg> Legs);
 
@@ -122,8 +123,8 @@ public sealed class TradeHistoryStore
             trade.CommandText =
                 """
                 INSERT OR REPLACE INTO paper_trades
-                    (id,user_id,status,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,created_at,updated_at)
-                VALUES($id,$user,'PROPOSED',$strategy,$underlying,$direction,$stop,$target,$risk,$reward,$at,$at);
+                    (id,user_id,status,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,capital_required,created_at,updated_at)
+                VALUES($id,$user,'PROPOSED',$strategy,$underlying,$direction,$stop,$target,$risk,$reward,$capital,$at,$at);
                 """;
             Add(trade, "$id", proposal.Id);
             Add(trade, "$user", LocalUserId);
@@ -134,6 +135,7 @@ public sealed class TradeHistoryStore
             Add(trade, "$target", DecimalText(proposal.Target));
             Add(trade, "$risk", DecimalText(proposal.MaxRisk));
             Add(trade, "$reward", DecimalText(proposal.MaxReward));
+            Add(trade, "$capital", DecimalText(proposal.CapitalRequired));
             Add(trade, "$at", UtcText(DateTimeOffset.UtcNow));
             trade.ExecuteNonQuery();
             foreach (var leg in proposal.Legs ?? [])
@@ -304,12 +306,12 @@ public sealed class TradeHistoryStore
             using var command = connection.CreateCommand();
             command.CommandText =
                 """
-                SELECT id,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,opened_at
+                SELECT id,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,capital_required,opened_at
                 FROM paper_trades WHERE user_id=$user AND status='OPEN' ORDER BY opened_at;
                 """;
             Add(command, "$user", LocalUserId);
             var rows = new List<(string Id, string Strategy, string Underlying, string Direction,
-                decimal Stop, decimal Target, decimal Risk, decimal Reward, DateTimeOffset Opened)>();
+                decimal Stop, decimal Target, decimal Risk, decimal Reward, decimal Capital, DateTimeOffset Opened)>();
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -319,12 +321,13 @@ public sealed class TradeHistoryStore
                     decimal.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
                     decimal.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
                     decimal.Parse(reader.GetString(7), CultureInfo.InvariantCulture),
-                    DateTimeOffset.Parse(reader.GetString(8), CultureInfo.InvariantCulture)));
+                    DecimalValue(reader, 8) ?? 0,
+                    DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture)));
             }
             reader.Close();
             return rows.Select(row => new RecoveredTrade(
                 row.Id, row.Strategy, row.Underlying, row.Direction, row.Stop, row.Target, row.Risk, row.Reward,
-                row.Opened, ReadLegs(connection, row.Id))).ToList();
+                row.Capital, row.Opened, ReadLegs(connection, row.Id))).ToList();
         }
     }
 
@@ -352,52 +355,167 @@ public sealed class TradeHistoryStore
         }
     }
 
+    public IReadOnlyDictionary<string, int> CountTradesByStrategyThisMonth(DateTimeOffset now)
+    {
+        var report = QueryStrategyTrackRecord(now);
+        return report.ByStrategy.ToDictionary(
+            row => StrategyRecommendationEngine.StrategyCodeFromCatalog(row.StrategyId),
+            row => row.Trades,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    public StrategyTrackRecordResponse QueryStrategyTrackRecord(DateTimeOffset now)
+    {
+        var from = StartOfIstMonth(now);
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        var local = TimeZoneInfo.ConvertTime(now, ist);
+        var monthLabel = local.ToString("MMMM yyyy", CultureInfo.InvariantCulture);
+        lock (_gate)
+        {
+            using var connection = Open();
+            var trades = ReadPaperTradesBetween(connection, from, now);
+            var catalog = StrategyCatalog.All();
+            var byStrategy = catalog.Select(entry =>
+            {
+                var matching = trades
+                    .Where(t => StrategyRecommendationEngine.MapStrategyCode(t.Strategy) == entry.Id)
+                    .ToList();
+                return BuildTrackRow(entry.Id, entry.Name, matching);
+            }).ToList();
+
+            var catalogIds = catalog.Select(c => c.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var other = trades
+                .Where(t => !catalogIds.Contains(StrategyRecommendationEngine.MapStrategyCode(t.Strategy)))
+                .ToList();
+            if (other.Count > 0)
+            {
+                byStrategy.Add(BuildTrackRow("other", "Other / legacy strategies", other));
+            }
+
+            return new(
+                monthLabel,
+                from,
+                now,
+                BuildTrackRow("all", "All strategies", trades),
+                byStrategy,
+                trades);
+        }
+    }
+
+    private static StrategyTrackRecordRow BuildTrackRow(
+        string strategyId,
+        string strategyName,
+        IReadOnlyList<PaperTradeHistorySnapshot> trades)
+    {
+        var closed = trades.Where(t => t.Status == "CLOSED").ToList();
+        var wins = closed.Count(t => t.Pnl > 0);
+        var losses = closed.Count(t => t.Pnl < 0);
+        var capitals = trades.Select(t => t.CapitalRequired).Where(c => c > 0).ToList();
+        var peakCapital = capitals.Count > 0 ? capitals.Max() : 0;
+        var avgCapital = capitals.Count > 0 ? capitals.Average() : 0;
+        var winRate = closed.Count > 0 ? wins * 100m / closed.Count : 0;
+        return new(
+            strategyId,
+            strategyName,
+            trades.Count,
+            closed.Count,
+            trades.Count(t => t.Status == "OPEN"),
+            wins,
+            losses,
+            winRate,
+            closed.Sum(t => t.Pnl ?? 0),
+            trades.Sum(t => t.MaxRisk),
+            trades.Sum(t => t.MaxReward),
+            peakCapital,
+            avgCapital);
+    }
+
+    private List<PaperTradeHistorySnapshot> ReadPaperTradesBetween(
+        SqliteConnection connection,
+        DateTimeOffset from,
+        DateTimeOffset to)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id,status,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,capital_required,pnl,exit_reason,
+                   (SELECT reason FROM paper_trade_events e WHERE e.trade_id=paper_trades.id AND e.event_type='PROPOSED' ORDER BY e.created_at ASC LIMIT 1),
+                   created_at,opened_at,closed_at
+            FROM paper_trades
+            WHERE user_id=$user AND created_at >= $from AND created_at <= $to
+            ORDER BY created_at DESC;
+            """;
+        Add(command, "$user", LocalUserId);
+        Add(command, "$from", UtcText(from));
+        Add(command, "$to", UtcText(to));
+        var rows = new List<(string Id, string Status, string Strategy, string Underlying, string Direction,
+            decimal Stop, decimal Target, decimal Risk, decimal Reward, decimal Capital, decimal? Pnl, string? Reason,
+            string? EntryReason, DateTimeOffset Created, DateTimeOffset? Opened, DateTimeOffset? Closed)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                rows.Add((
+                    reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                    reader.GetString(4), DecimalValue(reader, 5) ?? 0, DecimalValue(reader, 6) ?? 0,
+                    DecimalValue(reader, 7) ?? 0, DecimalValue(reader, 8) ?? 0,
+                    DecimalValue(reader, 9) ?? 0, DecimalValue(reader, 10), reader.IsDBNull(11) ? null : reader.GetString(11),
+                    reader.IsDBNull(12) ? null : reader.GetString(12),
+                    DateTimeOffset.Parse(reader.GetString(13), CultureInfo.InvariantCulture),
+                    DateValue(reader, 14), DateValue(reader, 15)));
+            }
+        }
+
+        return rows.Select(row => new PaperTradeHistorySnapshot(
+            row.Id, row.Status, row.Strategy, row.Underlying, row.Direction, row.Stop, row.Target, row.Risk, row.Reward,
+            row.Capital, row.Pnl, row.Reason, row.EntryReason, row.Created, row.Opened, row.Closed,
+            ReadHistoryLegs(connection, row.Id))).ToList();
+    }
+
+    private static DateTimeOffset StartOfIstMonth(DateTimeOffset now)
+    {
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        var local = TimeZoneInfo.ConvertTime(now, ist);
+        var start = new DateTime(local.Year, local.Month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        return new DateTimeOffset(start, ist.GetUtcOffset(start));
+    }
+
     public PaperTradeHistoryResponse QueryPaperTrades(string range, DateTimeOffset now)
     {
         var normalized = range.Trim().ToLowerInvariant();
         var from = normalized switch
         {
             "today" => StartOfIstDay(now),
+            "1w" => StartOfIstDay(now).AddDays(-6),
             "1m" => now.AddMonths(-1),
             "3m" => now.AddMonths(-3),
             _ => now.AddMonths(-12),
         };
-        var label = normalized is "today" or "1m" or "3m" ? normalized : "all";
+        var label = normalized is "today" or "1w" or "1m" or "3m" ? normalized : "all";
+        return QueryPaperTradesBetween(from, now, label);
+    }
+
+    public PaperTradeHistoryResponse QueryPaperTradesForIstDates(string fromYmd, string? toYmd, DateTimeOffset now)
+    {
+        var from = StartOfIstCalendarDay(fromYmd);
+        var to = EndOfIstCalendarDay(string.IsNullOrWhiteSpace(toYmd) ? fromYmd : toYmd!);
+        if (to < from)
+        {
+            to = EndOfIstCalendarDay(fromYmd);
+        }
+
+        var label = $"custom:{fromYmd}:{toYmd ?? fromYmd}";
+        return QueryPaperTradesBetween(from, to > now ? now : to, label);
+    }
+
+    private PaperTradeHistoryResponse QueryPaperTradesBetween(DateTimeOffset from, DateTimeOffset to, string label)
+    {
         lock (_gate)
         {
             using var connection = Open();
-            using var command = connection.CreateCommand();
-            command.CommandText =
-                """
-                SELECT id,status,strategy,underlying,direction,max_risk,max_reward,pnl,exit_reason,
-                       created_at,opened_at,closed_at
-                FROM paper_trades
-                WHERE user_id=$user AND created_at >= $from AND created_at <= $to
-                ORDER BY created_at DESC;
-                """;
-            Add(command, "$user", LocalUserId);
-            Add(command, "$from", UtcText(from));
-            Add(command, "$to", UtcText(now));
-            var rows = new List<(string Id, string Status, string Strategy, string Underlying, string Direction,
-                decimal Risk, decimal Reward, decimal? Pnl, string? Reason, DateTimeOffset Created,
-                DateTimeOffset? Opened, DateTimeOffset? Closed)>();
-            using (var reader = command.ExecuteReader())
-            {
-                while (reader.Read())
-                {
-                    rows.Add((
-                        reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                        reader.GetString(4), DecimalValue(reader, 5) ?? 0, DecimalValue(reader, 6) ?? 0,
-                        DecimalValue(reader, 7), reader.IsDBNull(8) ? null : reader.GetString(8),
-                        DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture),
-                        DateValue(reader, 10), DateValue(reader, 11)));
-                }
-            }
-            var trades = rows.Select(row => new PaperTradeHistorySnapshot(
-                row.Id, row.Status, row.Strategy, row.Underlying, row.Direction, row.Risk, row.Reward,
-                row.Pnl, row.Reason, row.Created, row.Opened, row.Closed,
-                ReadHistoryLegs(connection, row.Id))).ToList();
+            var trades = ReadPaperTradesBetween(connection, from, to);
             var closed = trades.Where(trade => trade.Status == "CLOSED").ToList();
+            var exitStats = SummarizeExitOutcomes(closed.Select(trade => (trade.Pnl, trade.ExitReason)));
             return new(
                 LocalUserId,
                 label,
@@ -406,7 +524,11 @@ public sealed class TradeHistoryStore
                     closed.Count(trade => trade.Pnl > 0),
                     closed.Count(trade => trade.Pnl < 0),
                     trades.Count(trade => trade.Status == "OPEN"),
-                    closed.Sum(trade => trade.Pnl ?? 0)),
+                    closed.Sum(trade => trade.Pnl ?? 0),
+                    exitStats.TargetHits,
+                    exitStats.StopLossHits,
+                    exitStats.TrailingStopHits,
+                    exitStats.BreakevenTrades),
                 trades);
         }
     }
@@ -490,11 +612,12 @@ public sealed class TradeHistoryStore
         var from = normalized switch
         {
             "today" => StartOfIstDay(now),
+            "1w" => StartOfIstDay(now).AddDays(-6),
             "1m" => now.AddMonths(-1),
             "3m" => now.AddMonths(-3),
             _ => now.AddMonths(-12),
         };
-        var label = normalized is "today" or "1m" or "3m" ? normalized : "all";
+        var label = normalized is "today" or "1w" or "1m" or "3m" ? normalized : "all";
         List<TradeHistoryItem> trades;
         lock (_gate)
         {
@@ -520,6 +643,7 @@ public sealed class TradeHistoryStore
             }
         }
         var closed = trades.Where(trade => trade.Status == "CLOSED").ToList();
+        var exitStats = SummarizeExitOutcomes(closed.Select(trade => (trade.Pnl, trade.ExitReason)));
         return new TradeHistoryResponse(
             LocalUserId,
             label,
@@ -530,8 +654,23 @@ public sealed class TradeHistoryStore
                 closed.Count(trade => trade.Pnl > 0),
                 closed.Count(trade => trade.Pnl < 0),
                 trades.Count(trade => trade.Status == "OPEN"),
-                closed.Sum(trade => trade.Pnl ?? 0m)),
+                closed.Sum(trade => trade.Pnl ?? 0m),
+                exitStats.TargetHits,
+                exitStats.StopLossHits,
+                exitStats.TrailingStopHits,
+                exitStats.BreakevenTrades),
             trades);
+    }
+
+    private static (int TargetHits, int StopLossHits, int TrailingStopHits, int BreakevenTrades) SummarizeExitOutcomes(
+        IEnumerable<(decimal? Pnl, string? ExitReason)> rows)
+    {
+        var list = rows.ToList();
+        return (
+            list.Count(row => PaperExitAnalytics.IsTargetHit(row.ExitReason)),
+            list.Count(row => PaperExitAnalytics.IsStopLossHit(row.ExitReason)),
+            list.Count(row => PaperExitAnalytics.IsTrailingStopHit(row.ExitReason)),
+            list.Count(row => row.Pnl == 0));
     }
 
     public void SaveLiveTrade(PaperTradeProposal proposal, string product)
@@ -769,6 +908,7 @@ public sealed class TradeHistoryStore
                 INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(3,datetime('now'));
                 """;
             command.ExecuteNonQuery();
+            ApplySchemaMigration(connection, 4, "ALTER TABLE paper_trades ADD COLUMN capital_required TEXT NOT NULL DEFAULT '0';");
             using var recovery = connection.CreateCommand();
             recovery.CommandText =
                 """
@@ -809,6 +949,33 @@ public sealed class TradeHistoryStore
             Add(command, "$user", LocalUserId);
             command.ExecuteNonQuery();
         }
+    }
+
+    private static void ApplySchemaMigration(SqliteConnection connection, int version, string sql)
+    {
+        using var check = connection.CreateCommand();
+        check.CommandText = "SELECT 1 FROM schema_migrations WHERE version=$version LIMIT 1;";
+        Add(check, "$version", version);
+        if (check.ExecuteScalar() is not null)
+        {
+            return;
+        }
+
+        using var migrate = connection.CreateCommand();
+        migrate.CommandText = sql;
+        try
+        {
+            migrate.ExecuteNonQuery();
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            // already applied manually
+        }
+
+        using var mark = connection.CreateCommand();
+        mark.CommandText = "INSERT INTO schema_migrations(version,applied_at) VALUES($version,datetime('now'));";
+        Add(mark, "$version", version);
+        mark.ExecuteNonQuery();
     }
 
     private SqliteConnection Open()
@@ -1000,6 +1167,21 @@ public sealed class TradeHistoryStore
         var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
         var local = TimeZoneInfo.ConvertTime(now, ist);
         return new DateTimeOffset(local.Date, ist.GetUtcOffset(local.Date));
+    }
+
+    private static DateTimeOffset StartOfIstCalendarDay(string ymd)
+    {
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        var local = DateTime.ParseExact(ymd.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return new DateTimeOffset(local.Date, ist.GetUtcOffset(local.Date));
+    }
+
+    private static DateTimeOffset EndOfIstCalendarDay(string ymd)
+    {
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        var local = DateTime.ParseExact(ymd.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var end = local.Date.AddDays(1).AddTicks(-1);
+        return new DateTimeOffset(end, ist.GetUtcOffset(end));
     }
 
     private static string UtcText(DateTimeOffset value) =>

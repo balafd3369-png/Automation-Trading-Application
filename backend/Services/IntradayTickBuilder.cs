@@ -44,8 +44,10 @@ public static class IntradayTickBuilder
 
         var step = ChartSessionMerger.StepMinutes(interval);
         var today = IstToday();
+        var sessionStart = today.AddHours(9).AddMinutes(15);
+        var sessionEnd = today.AddHours(15).AddMinutes(30);
         var sessionTicks = ticks
-            .Where(t => t.TimeIst.Date == today && t.TimeIst >= today.AddHours(9).AddMinutes(15))
+            .Where(t => t.TimeIst.Date == today && t.TimeIst >= sessionStart && t.TimeIst < sessionEnd)
             .OrderBy(t => t.TimeIst)
             .ToList();
         if (sessionTicks.Count == 0)
@@ -81,7 +83,8 @@ public static class IntradayTickBuilder
 
         var nowIst = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Ist);
         var sessionStart = nowIst.Date.AddHours(9).AddMinutes(15);
-        if (nowIst < sessionStart)
+        var sessionEnd = nowIst.Date.AddHours(15).AddMinutes(30);
+        if (nowIst < sessionStart || nowIst >= sessionEnd)
         {
             return;
         }

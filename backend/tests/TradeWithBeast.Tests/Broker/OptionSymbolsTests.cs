@@ -20,6 +20,25 @@ public sealed class OptionSymbolsTests
         var expiry = new DateTime(2026, 9, 18);
         var keys = OptionSymbols.QuoteKeys("SENSEX", expiry, 74000m, "PE");
         Assert.All(keys, key => Assert.StartsWith("BFO:", key, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(keys, key => key.Contains("74000PE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void QuoteKeys_uses_o_for_october_weekly_code()
+    {
+        var expiry = new DateTime(2026, 10, 6);
+        var keys = OptionSymbols.QuoteKeys("BANKNIFTY", expiry, 51300m, "CE");
+        Assert.Contains(keys, key => key.Contains("BANKNIFTY26O0651300CE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(10, "O")]
+    [InlineData(11, "N")]
+    [InlineData(12, "D")]
+    [InlineData(9, "9")]
+    public void MonthCode_matches_mstock_weekly_encoding(int month, string expected)
+    {
+        Assert.Equal(expected, OptionSymbols.MonthCode(month));
     }
 
     [Fact]

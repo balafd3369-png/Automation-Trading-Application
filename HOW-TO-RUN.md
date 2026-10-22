@@ -7,6 +7,19 @@ Cursor-style **pressure board** for NSE indices and stocks. Mock prices work out
 | Backend   | 45211 | http://127.0.0.1:45211 |
 | Frontend  | 45212 | http://127.0.0.1:45212 |
 
+### One-command start (Windows, recommended)
+
+From the repo root (`Automation-Trading-Application`):
+
+```powershell
+.\start-app.ps1
+```
+
+This stops anything already on **45211/45212** (fixes “DLL locked” and “port already in use”), then opens **two** PowerShell windows (backend + frontend).  
+To stop only: `.\stop-app.ps1`
+
+Health check: `http://127.0.0.1:45211/api/health`
+
 ---
 
 ## Prerequisites
@@ -63,6 +76,30 @@ Session token is saved to:
 `%APPDATA%\TradeWithBeast\mstock-session.json`
 
 Restart the backend after setting secrets.
+
+### ICICI Breeze credentials (for live quotes / orders)
+
+Register an app at [Breeze API home](https://api.icicidirect.com/apiuser/home), then:
+
+```powershell
+cd backend
+dotnet user-secrets set "Breeze:AppKey" "YOUR_APP_KEY"
+dotnet user-secrets set "Breeze:SecretKey" "YOUR_SECRET_KEY"
+```
+
+Restart the backend. ICICI calls use the official NuGet SDK [`com.breeze.breezeconnect`](https://www.nuget.org/packages/com.breeze.breezeconnect) (no Python package required).
+
+In the UI use **Broker → ICICI Direct** (same OTP-style flow as m.Stock).
+
+If you see *“ICICI connect failed / port 45211”* or *404*, you are usually running an **old** API build (e.g. `C:\dev\trade-with-beast-run\TradeWithBeast.dll`). Stop it and run from this repo:
+
+```powershell
+cd backend
+dotnet build
+dotnet run --no-launch-profile --urls http://0.0.0.0:45211
+```
+
+Check: `http://127.0.0.1:45211/api/broker/capabilities` should return `breezeOtp: true`.
 
 ### If backend DLL is locked
 

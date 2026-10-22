@@ -126,7 +126,7 @@ describe('BoardService', () => {
       marketRegime: { regime: 'TRENDING', dataTimestamp: '2026-09-15T10:00:00Z', isFresh: true, evidence: [] },
       recentDecisions: [{ id: 'd1', strategy: 'STOCK_ZONE_LONG', underlying: 'INFY', direction: 'BULLISH', evidenceScore: 75, accepted: true, evidence: ['trend=UP'], rejections: [], maxRisk: 500, maxReward: 1000, rewardRisk: 2, evaluatedAt: '2026-09-15T10:00:00Z', scoreMeaning: 'rule evidence' }],
       recentEvents: [],
-      performance: { closedTrades: 0, winningTrades: 0, losingTrades: 0, winRatePercent: 0, realizedPnl: 0, unrealizedPnl: 0, grossRiskOpen: 0 },
+      performance: { closedTrades: 0, winningTrades: 0, losingTrades: 0, winRatePercent: 0, realizedPnl: 0, unrealizedPnl: 0, grossRiskOpen: 0, targetHits: 0, stopLossHits: 0, trailingStopHits: 0, breakevenTrades: 0 },
       marketContext: [],
     });
 
@@ -144,11 +144,72 @@ describe('BoardService', () => {
     req.flush({
       userId: 'local-user',
       range: '1m',
-      summary: { closedTrades: 0, winningTrades: 0, losingTrades: 0, openTrades: 1, realizedPnl: 0 },
+      summary: { closedTrades: 0, winningTrades: 0, losingTrades: 0, openTrades: 1, realizedPnl: 0, targetHits: 0, stopLossHits: 0, trailingStopHits: 0, breakevenTrades: 0 },
       trades: [{ id: 't1', status: 'OPEN', strategy: 'VERTICAL_DEBIT_SPREAD', underlying: 'NIFTY', direction: 'BULLISH', maxRisk: 2600, maxReward: 3900, pnl: null, exitReason: null, createdAt: '2026-09-15T10:00:00Z', openedAt: '2026-09-15T10:00:01Z', closedAt: null, legs: [] }],
     });
 
     const history = await historyPromise;
     expect(history.trades[0].strategy).toBe('VERTICAL_DEBIT_SPREAD');
+  });
+
+  it('loads B1 rejection zone backtest for a stock', async () => {
+    const backtestPromise = firstValueFrom(service.zoneRejectionBacktest('FEDERALBNK'));
+    const req = httpMock.expectOne('/api/paper-agent/backtest/zone-rejection/FEDERALBNK');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      result: {
+        symbol: 'FEDERALBNK',
+        pattern: 'STOCK_B1_REJECTION_TO_S2',
+        samples: 10,
+        wins: 9,
+        losses: 1,
+        winRatePercent: 90,
+        avgRewardPoints: 12.5,
+        avgRiskPoints: 4.2,
+      },
+      qualifies: true,
+      minWinRate: 90,
+      minSamples: 8,
+    });
+
+    const backtest = await backtestPromise;
+    expect(backtest.qualifies).toBe(true);
+    expect(backtest.result.winRatePercent).toBe(90);
+  });
+
+  it('loads strategy catalog', async () => {
+    const listPromise = firstValueFrom(service.strategies());
+    const req = httpMock.expectOne('/api/strategies');
+    expect(req.request.method).toBe('GET');
+    req.flush([
+      {
+        id: 'bala-10am-high-fade',
+        name: '10 AM High Fade to Day Low',
+        author: 'Bala',
+        summary: 'test',
+        timeframe: '5 minute',
+        session: 'NSE',
+        status: 'catalog',
+        tags: [],
+        playbook: {
+          intent: 'test',
+          phases: [],
+          primarySetup: {
+            name: 'fade',
+            direction: 'SHORT',
+            validFromIst: '11:00',
+            trigger: 'close below H10',
+            target: 'day low',
+            stopLoss: 'tight',
+            reentry: 'once',
+          },
+          alternateSetup: null,
+          risk: { maxAttemptsPerDay: '2', notes: '' },
+        },
+      },
+    ]);
+
+    const list = await listPromise;
+    expect(list[0].id).toBe('bala-10am-high-fade');
   });
 });

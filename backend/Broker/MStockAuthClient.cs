@@ -5,9 +5,12 @@ using TradeWithBeast.Services;
 
 namespace TradeWithBeast.Broker;
 
-public sealed class MStockAuthClient
+public sealed class MStockAuthClient : IBrokerMarketClient
 {
     public static readonly Dictionary<string, string[]> QuoteKeys = IndexUniverse.QuoteKeys;
+
+    public string ProviderId => BrokerIds.MStock;
+    public string DisplayName => "m.Stock";
 
     private readonly HttpClient _http;
     private readonly MStockOptions _options;
@@ -72,73 +75,115 @@ public sealed class MStockAuthClient
 
     public async Task<JsonElement> VerifyOtpAsync(string otp, CancellationToken ct)
     {
+        var last = await ExchangeOtpForSessionAsync(otp, "L", ct);
+        if (TryReadAccessToken(last, out var token))
+        {
+            StoreSessionToken(token, "L");
+            return last;
+        }
+
+        var message = MStockJson.ReadMessage(last) ?? "";
+        if (message.Contains("incorrect", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("invalid", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("expired", StringComparison.OrdinalIgnoreCase))
+        {
+            _log.LogWarning("m.Stock OTP verify rejected: {Message}", message);
+            return last;
+        }
+
+        last = await ExchangeOtpForSessionAsync(otp, "W", ct);
+        if (TryReadAccessToken(last, out token))
+        {
+            StoreSessionToken(token, "W");
+            return last;
+        }
+
+        message = MStockJson.ReadMessage(last) ?? "no token";
+        _log.LogWarning("m.Stock OTP verify did not store a session: {Message}", message);
+        return last;
+    }
+
+    private async Task<JsonElement> ExchangeOtpForSessionAsync(string otp, string checksum, CancellationToken ct)
+    {
         using var req = new HttpRequestMessage(HttpMethod.Post, "openapi/typea/session/token");
         ApplyCommonHeaders(req);
         req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["api_key"] = _options.ApiKey,
             ["request_token"] = otp.Trim(),
-            ["checksum"] = "L",
+            ["checksum"] = checksum,
         });
-
-        var root = await SendJson(req, ct);
-        if (TryReadAccessToken(root, out var token))
-        {
-            lock (_gate)
-            {
-                _accessToken = token;
-            }
-
-            _sessions.SaveToken(token);
-            _log.LogInformation("m.Stock session stored locally.");
-        }
-        else
-        {
-            var message = root.TryGetProperty("message", out var msg) ? msg.GetString() : "no token";
-            _log.LogWarning("m.Stock OTP verify did not store a session: {Message}", message);
-        }
-
-        return root;
+        return await SendJson(req, ct);
     }
 
-    public async Task<IReadOnlyDictionary<string, QuoteSnap>> GetOhlcAsync(CancellationToken ct)
+    private void StoreSessionToken(string token, string checksum)
     {
-        var merged = new Dictionary<string, QuoteSnap>(StringComparer.OrdinalIgnoreCase);
-        foreach (var chunk in QuoteKeys.SelectMany(kv => kv.Value).Distinct().Chunk(12))
+        lock (_gate)
         {
-            var query = string.Join("&", chunk.Select(key => "i=" + Uri.EscapeDataString(key)));
-            using var req = new HttpRequestMessage(HttpMethod.Get, "openapi/typea/instruments/quote/ohlc?" + query);
-            ApplyCommonHeaders(req);
-            ApplyAuth(req);
-            var root = await SendJson(req, ct);
-            foreach (var kv in ParseQuotes(root))
-            {
-                merged[kv.Key] = kv.Value;
-            }
+            _accessToken = token;
         }
+
+        _sessions.SaveToken(token);
+        _log.LogInformation("m.Stock session stored locally (checksum {Checksum}).", checksum);
+    }
+
+    public async Task<IReadOnlyDictionary<string, QuoteSnap>> GetOhlcAsync(CancellationToken ct) =>
+        await FetchQuoteBatchesAsync("openapi/typea/instruments/quote/ohlc?", ParseQuotes, ct);
+
+    public async Task<IReadOnlyDictionary<string, decimal>> GetLtpAsync(CancellationToken ct) =>
+        await FetchQuoteBatchesAsync("openapi/typea/instruments/quote/ltp?", ParseLtpQuotes, ct);
+
+    public async Task<QuoteSnap?> GetBoardQuoteAsync(string boardName, CancellationToken ct)
+    {
+        if (!IndexUniverse.TryRegisterEquity(boardName, out var aliases))
+        {
+            return null;
+        }
+
+        var query = string.Join("&", aliases.Select(key => "i=" + Uri.EscapeDataString(key)));
+        using var req = new HttpRequestMessage(HttpMethod.Get, "openapi/typea/instruments/quote/ohlc?" + query);
+        ApplyCommonHeaders(req);
+        ApplyAuth(req);
+        var root = await SendJson(req, ct);
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return TryReadBoardQuote(data, aliases);
+    }
+
+    private async Task<IReadOnlyDictionary<string, TValue>> FetchQuoteBatchesAsync<TValue>(
+        string pathPrefix,
+        Func<JsonElement, Dictionary<string, TValue>> parse,
+        CancellationToken ct,
+        IEnumerable<string>? instrumentKeys = null)
+    {
+        var merged = new Dictionary<string, TValue>(StringComparer.OrdinalIgnoreCase);
+        var keys = (instrumentKeys ?? QuoteKeys.SelectMany(kv => kv.Value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var chunks = keys.Chunk(12).ToArray();
+        await Parallel.ForEachAsync(
+            chunks,
+            new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = ct },
+            async (chunk, token) =>
+            {
+                var query = string.Join("&", chunk.Select(key => "i=" + Uri.EscapeDataString(key)));
+                using var req = new HttpRequestMessage(HttpMethod.Get, pathPrefix + query);
+                ApplyCommonHeaders(req);
+                ApplyAuth(req);
+                var root = await SendJson(req, token);
+                foreach (var kv in parse(root))
+                {
+                    lock (merged)
+                    {
+                        merged[kv.Key] = kv.Value;
+                    }
+                }
+            });
 
         if (merged.Count == 0)
         {
-            _log.LogWarning("m.Stock OHLC empty after batched requests.");
-        }
-
-        return merged;
-    }
-
-    public async Task<IReadOnlyDictionary<string, decimal>> GetLtpAsync(CancellationToken ct)
-    {
-        var merged = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-        foreach (var chunk in QuoteKeys.SelectMany(kv => kv.Value).Distinct().Chunk(12))
-        {
-            var query = string.Join("&", chunk.Select(key => "i=" + Uri.EscapeDataString(key)));
-            using var req = new HttpRequestMessage(HttpMethod.Get, "openapi/typea/instruments/quote/ltp?" + query);
-            ApplyCommonHeaders(req);
-            ApplyAuth(req);
-            var root = await SendJson(req, ct);
-            foreach (var kv in ParseLtpQuotes(root))
-            {
-                merged[kv.Key] = kv.Value;
-            }
+            _log.LogWarning("m.Stock quote batch returned no mapped symbols for {Path}.", pathPrefix);
         }
 
         return merged;
@@ -162,47 +207,19 @@ public sealed class MStockAuthClient
             return null;
         }
 
-        foreach (var alias in aliases)
+        if (!TryReadOptionOhlc(data, aliases, out var matchedAlias, out var snap))
         {
-            if (!TryGetProp(data, alias, out var item))
-            {
-                continue;
-            }
-            var last = item.TryGetProperty("last_price", out var lp) ? ToDec(lp) : 0m;
-            var token = item.TryGetProperty("instrument_token", out var it) ? (int)ToDec(it) : 0;
-            decimal open = 0;
-            decimal close = 0;
-            if (item.TryGetProperty("ohlc", out var ohlc))
-            {
-                open = ohlc.TryGetProperty("open", out var o) ? ToDec(o) : 0m;
-                close = ohlc.TryGetProperty("close", out var c) ? ToDec(c) : 0m;
-            }
-            if (last > 0 || token > 0)
-            {
-                var liquidity = ParseLiquidity(item);
-                return new OptionQuoteSnap(
-                    alias,
-                    token,
-                    last,
-                    open,
-                    close,
-                    alias.Split(':')[0],
-                    liquidity.Bid,
-                    liquidity.Ask,
-                    liquidity.Volume,
-                    liquidity.OpenInterest,
-                    liquidity.Timestamp);
-            }
+            _log.LogWarning(
+                "No m.Stock option quote for {Underlying} {Expiry:yyyy-MM-dd} {Strike} {Side}; tried {Aliases}",
+                underlying,
+                expiry,
+                strike,
+                side,
+                string.Join(", ", aliases));
+            return null;
         }
 
-        _log.LogWarning(
-            "No m.Stock option quote for {Underlying} {Expiry:yyyy-MM-dd} {Strike} {Side}; tried {Aliases}",
-            underlying,
-            expiry,
-            strike,
-            side,
-            string.Join(", ", aliases));
-        return null;
+        return snap with { TradingSymbol = matchedAlias };
     }
 
     public async Task<IReadOnlyList<OptionMarketQuote>> GetOptionQuotesAsync(
@@ -213,17 +230,21 @@ public sealed class MStockAuthClient
             .Select(contract => new
             {
                 Contract = contract,
-                Symbol = OptionSymbols.QuoteKeys(
+                Aliases = OptionSymbols.QuoteKeys(
                     contract.Underlying,
                     contract.Expiry,
                     contract.Strike,
-                    contract.Side)[0],
+                    contract.Side),
             })
             .ToList();
         var quotes = new List<OptionMarketQuote>();
-        foreach (var chunk in requested.Chunk(12))
+        foreach (var chunk in requested.Chunk(4))
         {
-            var query = string.Join("&", chunk.Select(row => "i=" + Uri.EscapeDataString(row.Symbol)));
+            var aliasKeys = chunk
+                .SelectMany(row => row.Aliases)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var query = string.Join("&", aliasKeys.Select(key => "i=" + Uri.EscapeDataString(key)));
             using var req = new HttpRequestMessage(HttpMethod.Get, "openapi/typea/instruments/quote/ohlc?" + query);
             ApplyCommonHeaders(req);
             ApplyAuth(req);
@@ -235,34 +256,23 @@ public sealed class MStockAuthClient
 
             foreach (var row in chunk)
             {
-                if (!TryGetProp(data, row.Symbol, out var item))
+                if (!TryReadOptionOhlc(data, row.Aliases, out var matchedAlias, out var snap))
                 {
                     continue;
                 }
-                var last = item.TryGetProperty("last_price", out var lp) ? ToDec(lp) : 0m;
-                decimal open = 0;
-                decimal close = 0;
-                if (item.TryGetProperty("ohlc", out var ohlc))
-                {
-                    open = ohlc.TryGetProperty("open", out var o) ? ToDec(o) : 0m;
-                    close = ohlc.TryGetProperty("close", out var c) ? ToDec(c) : 0m;
-                }
-                if (last > 0)
-                {
-                    var liquidity = ParseLiquidity(item);
-                    quotes.Add(new OptionMarketQuote(
-                        row.Contract.Strike,
-                        row.Contract.Side.ToUpperInvariant(),
-                        row.Symbol,
-                        last,
-                        open,
-                        close,
-                        liquidity.Bid,
-                        liquidity.Ask,
-                        liquidity.Volume,
-                        liquidity.OpenInterest,
-                        liquidity.Timestamp));
-                }
+
+                quotes.Add(new OptionMarketQuote(
+                    row.Contract.Strike,
+                    row.Contract.Side.ToUpperInvariant(),
+                    matchedAlias,
+                    snap.Last,
+                    snap.Open,
+                    snap.Close,
+                    snap.Bid,
+                    snap.Ask,
+                    snap.Volume,
+                    snap.OpenInterest,
+                    snap.Timestamp));
             }
         }
         return quotes;
@@ -459,6 +469,54 @@ public sealed class MStockAuthClient
         return false;
     }
 
+    private static QuoteSnap? TryReadBoardQuote(JsonElement data, IReadOnlyList<string> aliases)
+    {
+        foreach (var alias in aliases)
+        {
+            if (!TryGetProp(data, alias, out var item))
+            {
+                continue;
+            }
+
+            var last = item.TryGetProperty("last_price", out var lp) ? ToDec(lp) : 0m;
+            var token = item.TryGetProperty("instrument_token", out var it) ? (int)ToDec(it) : 0;
+            decimal open = 0;
+            decimal close = 0;
+            if (item.TryGetProperty("ohlc", out var ohlc))
+            {
+                if (ohlc.TryGetProperty("open", out var o))
+                {
+                    open = ToDec(o);
+                }
+
+                if (ohlc.TryGetProperty("close", out var c))
+                {
+                    close = ToDec(c);
+                }
+            }
+
+            if (last <= 0 && token <= 0)
+            {
+                continue;
+            }
+
+            var liquidity = ParseLiquidity(item);
+            return new QuoteSnap(
+                token,
+                last,
+                open,
+                close,
+                alias.Split(':')[0],
+                liquidity.Bid,
+                liquidity.Ask,
+                liquidity.Volume,
+                liquidity.OpenInterest,
+                liquidity.Timestamp);
+        }
+
+        return null;
+    }
+
     private static Dictionary<string, QuoteSnap> ParseQuotes(JsonElement root)
     {
         var map = new Dictionary<string, QuoteSnap>(StringComparer.OrdinalIgnoreCase);
@@ -546,6 +604,56 @@ public sealed class MStockAuthClient
         }
 
         return map;
+    }
+
+    private static bool TryReadOptionOhlc(
+        JsonElement data,
+        IReadOnlyList<string> aliases,
+        out string matchedAlias,
+        out OptionQuoteSnap snap)
+    {
+        foreach (var alias in aliases)
+        {
+            if (!TryGetProp(data, alias, out var item))
+            {
+                continue;
+            }
+
+            var last = item.TryGetProperty("last_price", out var lp) ? ToDec(lp) : 0m;
+            var token = item.TryGetProperty("instrument_token", out var it) ? (int)ToDec(it) : 0;
+            decimal open = 0;
+            decimal close = 0;
+            if (item.TryGetProperty("ohlc", out var ohlc))
+            {
+                open = ohlc.TryGetProperty("open", out var o) ? ToDec(o) : 0m;
+                close = ohlc.TryGetProperty("close", out var c) ? ToDec(c) : 0m;
+            }
+
+            if (last <= 0 && token <= 0)
+            {
+                continue;
+            }
+
+            var liquidity = ParseLiquidity(item);
+            matchedAlias = alias;
+            snap = new OptionQuoteSnap(
+                alias,
+                token,
+                last,
+                open,
+                close,
+                alias.Split(':')[0],
+                liquidity.Bid,
+                liquidity.Ask,
+                liquidity.Volume,
+                liquidity.OpenInterest,
+                liquidity.Timestamp);
+            return true;
+        }
+
+        matchedAlias = string.Empty;
+        snap = default!;
+        return false;
     }
 
     private static bool TryGetProp(JsonElement data, string name, out JsonElement value)

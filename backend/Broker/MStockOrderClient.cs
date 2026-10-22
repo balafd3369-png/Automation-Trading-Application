@@ -15,7 +15,12 @@ public sealed record BrokerOrderRequest(
     decimal TriggerPrice = 0,
     string Validity = "DAY",
     string Variety = "regular",
-    string Tag = "");
+    string Tag = "",
+    string? Underlying = null,
+    DateTime? Expiry = null,
+    decimal? Strike = null,
+    string? OptionRight = null,
+    string? InstrumentType = null);
 
 public sealed record BrokerOrder(
     string OrderId,
@@ -72,7 +77,7 @@ public sealed record BrokerApiResult<T>(
         new(false, default, message, type, code);
 }
 
-public interface IMStockOrderClient
+public interface IBrokerOrderClient
 {
     Task<BrokerApiResult<string>> PlaceOrderAsync(BrokerOrderRequest order, CancellationToken ct);
     Task<BrokerApiResult<string>> ModifyOrderAsync(string orderId, BrokerOrderRequest order, int remainingQuantity, CancellationToken ct);
@@ -85,6 +90,8 @@ public interface IMStockOrderClient
         string tradingSymbol, string exchange, string transactionType, int quantity,
         string oldProduct, string newProduct, CancellationToken ct);
 }
+
+public interface IMStockOrderClient : IBrokerOrderClient;
 
 public sealed class MStockOrderClient : IMStockOrderClient
 {

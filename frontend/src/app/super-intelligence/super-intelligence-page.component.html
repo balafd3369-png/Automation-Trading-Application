@@ -1,0 +1,66 @@
+<section class="si-page" aria-label="Super Intelligence strategy journal">
+  <header class="si-hero">
+    <div>
+      <h1>Super Intelligence</h1>
+      <p class="si-sub">{{ journal.monthLabel }} · 360° strategy journal</p>
+      <p class="si-mission">{{ journal.strategyFocus }}</p>
+    </div>
+    <div class="si-legend" aria-hidden="true">
+      <span class="dot empty"></span> Not started
+      <span class="dot partial"></span> In progress
+      <span class="dot done"></span> Strong day
+    </div>
+  </header>
+
+  <div class="si-layout">
+    <nav class="si-calendar" aria-label="October days">
+      <h2>October — daily log</h2>
+      <p class="si-hint">Tap a day. We add analysis together — one section at a time.</p>
+      <ul class="si-days">
+        @for (d of journal.days; track d.day) {
+          <li>
+            <button
+              type="button"
+              class="si-day-btn"
+              [class.active]="selectedDay === d.day"
+              [class.partial]="completion(d) > 0 && completion(d) < 100"
+              [class.done]="completion(d) === 100"
+              (click)="selectDay(d.day)"
+            >
+              <span class="si-day-num">{{ d.day }}</span>
+              <span class="si-day-meta">{{ d.weekday }}</span>
+              <span class="si-day-pct">{{ completion(d) }}%</span>
+            </button>
+          </li>
+        }
+      </ul>
+    </nav>
+
+    <article class="si-editor">
+      <header class="si-editor-head">
+        <h2>
+          {{ activeEntry().isoDate }}
+          <small>{{ activeEntry().weekday }}</small>
+        </h2>
+        <span class="si-editor-pct">{{ completion(activeEntry()) }}% complete</span>
+      </header>
+
+      <div class="si-pillars">
+        @for (pillar of pillars; track pillar.id) {
+          <label class="si-pillar">
+            <span class="si-pillar-title">{{ pillar.title }}</span>
+            <span class="si-pillar-hint">{{ pillar.hint }}</span>
+            <textarea
+              rows="3"
+              [name]="'si-' + selectedDay + '-' + pillar.id"
+              [ngModel]="textField(pillar.id)"
+              (ngModelChange)="setTextField(pillar.id, $event)"
+              placeholder="Add notes for this pillar…"
+            ></textarea>
+          </label>
+        }
+      </div>
+      <p class="si-save-note">Saved automatically in this browser.</p>
+    </article>
+  </div>
+</section>

@@ -11,6 +11,20 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
     private readonly string _path = Path.Combine(Path.GetTempPath(), $"live-execution-{Guid.NewGuid():N}.db");
 
     [Fact]
+    public void ComputeBrokerPnl_splits_open_and_closed_positions()
+    {
+        var pnl = LiveExecutionCoordinator.ComputeBrokerPnl(
+        [
+            new("NFO", "NIFTY22SEP23400PE", "MIS", 65, 0, 137.65m, 143m, 347.75m),
+            new("NFO", "NIFTY22SEP23300PE", "MIS", 0, 0, 0m, 98.55m, -263.25m),
+        ]);
+
+        Assert.Equal(84.50m, pnl.TotalPnl);
+        Assert.Equal(-263.25m, pnl.RealisedPnl);
+        Assert.Equal(347.75m, pnl.UnrealisedPnl);
+    }
+
+    [Fact]
     public async Task Hedge_places_buy_first_and_compensates_when_sell_is_rejected()
     {
         var proposal = Proposal(
@@ -71,9 +85,11 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["TradeHistory:DatabasePath"] = _path })
             .Build();
+        var auth = CreateAuth();
+        var brokers = new BrokerConnectionManager(auth, broker);
+        brokers.OnMStockSessionEstablished();
         return new(
-            broker,
-            CreateAuth(),
+            brokers,
             new FakeProposalSource(proposal),
             new TradeHistoryStore(configuration),
             new LiveExecutionOptions { Enabled = true, OrderTimeoutSeconds = 3, TreatMarketAsOpen = true },
@@ -121,9 +137,13 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
             DateTimeOffset.UtcNow);
 
         public void CompleteExternalProposal(string proposalId, string reason) { }
+
+        public void ReleasePendingProposal(string proposalId, string reason) { }
+
+        public void SetAutoAdmitTrades(bool enabled) { }
     }
 
-    private sealed class FakeBroker : IMStockOrderClient
+    private sealed class FakeBroker : IBrokerOrderClient
     {
         public Func<BrokerOrderRequest, BrokerApiResult<string>> Place { get; init; } =
             _ => new(true, "order", "accepted");

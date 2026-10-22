@@ -4,7 +4,8 @@ public sealed record PaperAgentConfig(
     decimal AllocatedCapital,
     decimal ProfitTarget,
     decimal MaxDailyLoss,
-    int MaxOpenPositions);
+    int MaxOpenPositions,
+    bool AutoAdmitTrades = true);
 
 public sealed record PaperPositionSnapshot(
     string Id,
@@ -22,6 +23,7 @@ public sealed record PaperPositionSnapshot(
     string Strategy = "STOCK_ZONE_LONG",
     string Underlying = "",
     decimal MaxRisk = 0,
+    decimal CapitalRequired = 0,
     IReadOnlyList<PaperPositionLegSnapshot>? Legs = null,
     DateTimeOffset? ExitDeadline = null);
 
@@ -46,6 +48,7 @@ public sealed record PaperTradeProposal(
     decimal EvidenceScore = 0,
     decimal MaxRisk = 0,
     decimal MaxReward = 0,
+    decimal CapitalRequired = 0,
     decimal RewardRisk = 0,
     IReadOnlyList<string>? Evidence = null,
     IReadOnlyList<PaperTradeLegProposal>? Legs = null,

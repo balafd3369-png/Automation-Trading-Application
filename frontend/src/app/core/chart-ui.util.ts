@@ -34,6 +34,21 @@ export function istDate(time: number): string {
   }).format(new Date(time * 1000));
 }
 
+export function todayIstDateKey(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '0';
+  return `${value('year')}-${value('month')}-${value('day')}`;
+}
+
+export function countCandlesOnIstDate(candles: ChartBar[], dateKey: string): number {
+  return candles.filter((c) => istParts(c.time).dateKey === dateKey).length;
+}
+
 export function istParts(time: number): { dateKey: string; hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Kolkata',
@@ -55,6 +70,25 @@ export function istParts(time: number): { dateKey: string; hour: number; minute:
 export function isSessionOpen(time: number): boolean {
   const value = istParts(time);
   return value.hour === 9 && value.minute === 15;
+}
+
+/** NSE cash session window for live intraday candle updates (09:15–15:30 IST). */
+export function isIstCashSessionOpen(timeSec: number): boolean {
+  const value = istParts(timeSec);
+  const minutes = value.hour * 60 + value.minute;
+  const open = 9 * 60 + 15;
+  const close = 15 * 60 + 30;
+  return minutes >= open && minutes < close;
+}
+
+/** Start of the intraday bucket that contains `timeSec` (matches backend BucketStartIst). */
+export function istSessionBucketStart(timeSec: number, stepMinutes: number): number {
+  const parts = istParts(timeSec);
+  const sessionStartMs = Date.parse(`${parts.dateKey}T09:15:00+05:30`);
+  const timeMs = timeSec * 1000;
+  const minutesFromSession = Math.max(0, Math.floor((timeMs - sessionStartMs) / 60_000));
+  const bucketIndex = Math.floor(minutesFromSession / stepMinutes);
+  return Math.floor((sessionStartMs + bucketIndex * stepMinutes * 60_000) / 1000);
 }
 
 export function sessionStartBars(candles: ChartBar[]): ChartBar[] {

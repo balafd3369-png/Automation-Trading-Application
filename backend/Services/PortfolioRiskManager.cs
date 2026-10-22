@@ -36,7 +36,9 @@ public sealed class PortfolioRiskManager
         decimal aggregateOpenRisk,
         int openPositions,
         IReadOnlyList<PortfolioExposure> exposures,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool paperTrading = false,
+        decimal? brokerAvailableFunds = null)
     {
         var rejections = new List<string>();
         var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
@@ -48,7 +50,7 @@ public sealed class PortfolioRiskManager
             rejections.Add("outside entry session 09:20-15:10 IST");
         }
         if (openPositions >= config.MaxOpenPositions) rejections.Add("maximum open positions reached");
-        if (realizedPnl <= -config.MaxDailyLoss) rejections.Add("daily loss limit reached");
+        if (!paperTrading && realizedPnl <= -config.MaxDailyLoss) rejections.Add("daily loss limit reached");
         if (candidate.Legs.Any(x => x.Quote is null || !x.Quote.IsFresh)) rejections.Add("stale or unavailable quote");
         if (candidate.Legs.Any(x => x.InstrumentType == "OPTION"
             && (x.Quote?.Bid is null || x.Quote.Ask is null)))
@@ -81,13 +83,64 @@ public sealed class PortfolioRiskManager
         {
             rejections.Add("naked short options prohibited");
         }
-        if (candidate.Strategy == "NAKED_INDEX_OPTION_SHORT"
-            && (!IsIndex(candidate.Underlying)
-                || candidate.Legs.Count != 1
-                || candidate.Legs[0].InstrumentType != "OPTION"
-                || candidate.Legs[0].Side != "SELL"))
+        if (candidate.Strategy.Contains("NAKED", StringComparison.OrdinalIgnoreCase))
         {
-            rejections.Add("naked option selling is restricted to one index-option leg");
+            if (candidate.Legs.Count != 1)
+            {
+                rejections.Add("naked strategies must contain exactly one leg");
+            }
+            else
+            {
+                var leg = candidate.Legs[0];
+                var allowed = candidate.Strategy switch
+                {
+                    "NAKED_INDEX_OPTION_SHORT" => IsIndex(candidate.Underlying)
+                        && leg.InstrumentType == "OPTION"
+                        && leg.Side == "SELL",
+                    "NAKED_STOCK_OPTION_SHORT" => !IsIndex(candidate.Underlying)
+                        && leg.InstrumentType == "OPTION"
+                        && leg.Side == "SELL",
+                    "NAKED_INDEX_FUTURE" => IsIndex(candidate.Underlying)
+                        && leg.InstrumentType == "FUTURE",
+                    "NAKED_STOCK_FUTURE" => !IsIndex(candidate.Underlying)
+                        && leg.InstrumentType == "FUTURE",
+                    _ => false,
+                };
+                if (!allowed)
+                {
+                    rejections.Add("unsupported naked strategy shape");
+                }
+            }
+        }
+        if (candidate.Strategy == ZoneRejectionPattern.B1RejectionToS2)
+        {
+            if (candidate.Legs.Count != 1
+                || candidate.Legs[0].InstrumentType != "STOCK"
+                || candidate.Legs[0].Side != "SELL")
+            {
+                rejections.Add("B1 rejection pattern requires a single stock short leg");
+            }
+        }
+        if (candidate.Strategy is TenAmIntradayPattern.HighFadeStrategy or TenAmIntradayPattern.LowBreakStrategy)
+        {
+            if (candidate.Legs.Count != 1)
+            {
+                rejections.Add("10 AM intraday strategies require a single leg");
+            }
+            else
+            {
+                var leg = candidate.Legs[0];
+                var ok = leg.InstrumentType switch
+                {
+                    "FUTURE" => IsIndex(candidate.Underlying),
+                    "STOCK" => !IsIndex(candidate.Underlying),
+                    _ => false,
+                };
+                if (!ok)
+                {
+                    rejections.Add("10 AM strategy leg type does not match underlying");
+                }
+            }
         }
         var isHedgedSpread = candidate.Strategy.Contains("SPREAD", StringComparison.OrdinalIgnoreCase);
         if (isHedgedSpread)
@@ -109,15 +162,41 @@ public sealed class PortfolioRiskManager
                 rejections.Add("only one index option hedge may be open at a time");
             }
         }
-        if (candidate.Legs.Any(x => x.InstrumentType == "OPTION")
-            && exposures.Any(x => x.Direction == candidate.Direction && IsIndex(x.Underlying)))
+        if (candidate.Legs.Any(x => x.InstrumentType == "OPTION"
+            && exposures.Any(e => e.Direction == candidate.Direction
+                && e.Underlying.Equals(candidate.Underlying, StringComparison.OrdinalIgnoreCase))))
         {
-            rejections.Add("correlated index exposure already open");
+            rejections.Add("same underlying and direction already open");
         }
 
-        var lot = candidate.Legs.Any(x => x.InstrumentType == "OPTION") ? LotSize(candidate.Underlying) : 1;
-        var riskBudget = Math.Min(config.MaxDailyLoss * 0.35m, config.MaxDailyLoss + realizedPnl - aggregateOpenRisk);
-        var capitalBudget = config.AllocatedCapital - aggregateOpenRisk;
+        if (candidate.Strategy is ZoneBoardPattern.B1BreakLong
+            or ZoneBoardPattern.S1BreakShort
+            or ZoneBoardPattern.S2BounceLong)
+        {
+            if (!candidate.Legs.All(x => x.InstrumentType == "OPTION" && x.Side == "BUY")
+                && !candidate.Legs.All(x => x.InstrumentType is "STOCK" or "INDEX"))
+            {
+                rejections.Add("zone board index setup must be all option buys or single cash leg");
+            }
+        }
+
+        var lot = candidate.Legs.Any(x => x.InstrumentType is "OPTION" or "FUTURE") && IsIndex(candidate.Underlying)
+            ? LotSize(candidate.Underlying)
+            : 1;
+        decimal riskBudget;
+        decimal capitalBudget;
+        if (paperTrading)
+        {
+            // Paper auto-trading: size each setup independently; do not deplete a shared ₹1L pool across positions.
+            riskBudget = config.MaxDailyLoss * 0.35m;
+            var brokerPool = brokerAvailableFunds is > 0 ? brokerAvailableFunds.Value : 0m;
+            capitalBudget = Math.Max(config.AllocatedCapital, brokerPool);
+        }
+        else
+        {
+            riskBudget = Math.Min(config.MaxDailyLoss * 0.35m, config.MaxDailyLoss + realizedPnl - aggregateOpenRisk);
+            capitalBudget = config.AllocatedCapital - aggregateOpenRisk;
+        }
         var riskPerLot = candidate.MaxRiskPerUnit * lot;
         var debitPerUnit = Math.Max(0, candidate.Legs.Sum(x => (x.Side == "BUY" ? 1m : -1m) * x.Price * x.Ratio));
         var capitalPerLot = Math.Max(riskPerLot, debitPerUnit * lot);

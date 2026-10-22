@@ -21,6 +21,7 @@ public sealed class MarketContextService
     {
         var board = _market.Snapshot();
         var contexts = board.Symbols.Select(symbol => BuildUnderlying(board, symbol)).ToList();
+        AppendFutureSnapshots(contexts);
         if (!_broker.HasSession)
         {
             return contexts;
@@ -29,16 +30,28 @@ public sealed class MarketContextService
         var requests = new List<OptionQuoteRequest>();
         foreach (var index in board.Symbols.Where(x => Indices.Contains(x.Name, StringComparer.OrdinalIgnoreCase)))
         {
-            var expiry = NextWeeklyExpiry(index.Name, DateTimeOffset.UtcNow);
-            var step = index.Name is "BANKNIFTY" or "SENSEX" ? 100m : 50m;
-            var atm = Math.Round(index.Last / step, MidpointRounding.AwayFromZero) * step;
-            for (var offset = -1; offset <= 1; offset++)
-            {
-                requests.Add(new(index.Name, expiry.Date, atm + offset * step, "CE"));
-                requests.Add(new(index.Name, expiry.Date, atm + offset * step, "PE"));
-            }
+            requests.AddRange(BuildAtmOptionRequests(index.Name, index.Last));
         }
-        var quotes = await _broker.GetOptionQuotesAsync(requests, ct);
+
+        foreach (var stock in board.Symbols
+            .Where(x => IndexUniverse.Nifty50.Contains(x.Name, StringComparer.OrdinalIgnoreCase))
+            .Take(12))
+        {
+            requests.AddRange(BuildAtmOptionRequests(stock.Name, stock.Last));
+        }
+
+        IReadOnlyList<OptionMarketQuote> quotes;
+        try
+        {
+            using var optionBudget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            optionBudget.CancelAfter(TimeSpan.FromSeconds(8));
+            quotes = await _broker.GetOptionQuotesAsync(requests, optionBudget.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return contexts;
+        }
+
         foreach (var quote in quotes)
         {
             var request = requests.First(x => x.Strike == quote.Strike && x.Side == quote.Side
@@ -48,9 +61,46 @@ public sealed class MarketContextService
         return contexts;
     }
 
+    private static IEnumerable<OptionQuoteRequest> BuildAtmOptionRequests(string underlying, decimal last)
+    {
+        var expiry = NextWeeklyExpiry(underlying, DateTimeOffset.UtcNow);
+        var step = IndexUniverse.IsIndex(underlying)
+            ? underlying is "BANKNIFTY" or "SENSEX" ? 100m : 50m
+            : StockStrikeStep(last);
+        var atm = Math.Round(last / step, MidpointRounding.AwayFromZero) * step;
+        for (var offset = -1; offset <= 1; offset++)
+        {
+            yield return new(underlying, expiry.Date, atm + offset * step, "CE");
+            yield return new(underlying, expiry.Date, atm + offset * step, "PE");
+        }
+    }
+
+    private static decimal StockStrikeStep(decimal last) =>
+        last switch
+        {
+            < 500m => 5m,
+            < 2000m => 10m,
+            < 5000m => 20m,
+            _ => 50m,
+        };
+
+    private static void AppendFutureSnapshots(List<MarketContextSnapshot> contexts)
+    {
+        foreach (var underlying in contexts.Where(x => x.InstrumentType is "INDEX" or "STOCK").ToList())
+        {
+            contexts.Add(new(
+                $"{underlying.Symbol} FUT",
+                "FUTURE",
+                underlying.Last,
+                underlying.Quote,
+                underlying.Evidence));
+        }
+    }
+
     public static MarketEvidence CalculateEvidence(
         IReadOnlyList<decimal> prices,
         decimal last,
+        decimal todayOpen,
         decimal b1,
         decimal s,
         decimal s1,
@@ -72,6 +122,7 @@ public sealed class MarketContextService
             : "RANGE";
         var facts = new List<string>
         {
+            $"todayOpen={todayOpen.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             $"B1={b1.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             $"S={s.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             $"S1={s1.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
@@ -138,7 +189,7 @@ public sealed class MarketContextService
             IndexUniverse.IsIndex(symbol.Name) ? "INDEX" : "STOCK",
             symbol.Last,
             quote,
-            CalculateEvidence(prices, symbol.Last, symbol.B1, symbol.S, symbol.S1, symbol.B2, symbol.S2));
+            CalculateEvidence(prices, symbol.Last, symbol.TodayOpen, symbol.B1, symbol.S, symbol.S1, symbol.B2, symbol.S2));
     }
 
     private static MarketContextSnapshot BuildOption(

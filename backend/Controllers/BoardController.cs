@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using TradeWithBeast.Models;
 using TradeWithBeast.Services;
 
 namespace TradeWithBeast.Controllers;
@@ -16,6 +17,25 @@ public sealed class BoardController : ControllerBase
 
     [HttpGet("board")]
     public IActionResult GetBoard() => Ok(_market.Snapshot());
+
+    [HttpGet("board/symbols/search")]
+    public IActionResult SearchSymbols([FromQuery] string q, [FromQuery] int limit = 24)
+    {
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return Ok(Array.Empty<SymbolSearchHit>());
+        }
+
+        var hits = _market.SearchSymbols(q, Math.Clamp(limit, 1, 50));
+        return Ok(hits);
+    }
+
+    [HttpPost("board/symbols/{name}/ensure")]
+    public async Task<IActionResult> EnsureSymbol(string name, CancellationToken ct)
+    {
+        var snapshot = await _market.EnsureSymbolAsync(name, ct);
+        return snapshot is null ? NotFound(new { message = $"Symbol '{name}' was not found on NSE EQ list." }) : Ok(snapshot);
+    }
 
     [HttpGet("board/chart/{name}")]
     public async Task<IActionResult> GetChart(string name, [FromQuery] string interval = "5minute", CancellationToken ct = default)
@@ -35,7 +55,7 @@ public sealed class BoardController : ControllerBase
     {
         var chart = await _market.OptionChartAsync(underlying, expiry, strike, side, interval, ct);
         return chart is null
-            ? NotFound(new { message = "Live m.Stock data is unavailable for this option contract." })
+            ? NotFound(new { message = "Live broker data is unavailable for this option contract." })
             : Ok(chart);
     }
 

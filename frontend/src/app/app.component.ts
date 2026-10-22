@@ -1,24 +1,67 @@
 import { DatePipe, DecimalPipe, NgClass } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
-import { AfterViewChecked, Component, DestroyRef, ElementRef, OnInit, ViewChild, inject } from '@angular/core';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import {
+  AfterViewInit,
+  ChangeDetectionStrategy,
+  ChangeDetectorRef,
+  Component,
+  DestroyRef,
+  ElementRef,
+  HostListener,
+  NgZone,
+  OnInit,
+  ViewChild,
+  inject,
+} from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { EMPTY, Observable, Subject, catchError, filter, finalize, interval, map, merge, of, startWith, switchMap, tap } from 'rxjs';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
+import {
+  EMPTY,
+  Observable,
+  Subject,
+  catchError,
+  debounceTime,
+  distinctUntilChanged,
+  exhaustMap,
+  filter,
+  finalize,
+  interval,
+  map,
+  merge,
+  of,
+  startWith,
+  switchMap,
+  take,
+  tap,
+  timeout,
+} from 'rxjs';
 import {
   BoardResponse,
   ChartResponse,
   LiveExecutionSnapshot,
   OptionMarketQuote,
   PaperAgentSnapshot,
+  PaperPosition,
+  PaperTradeHistoryItem,
   PaperTradeHistoryResponse,
+  PaperTradeProposal,
   PressureMark,
+  STOCK_B1_REJECTION_STRATEGY,
+  SymbolSearchHit,
   SymbolSnapshot,
   TradeHistoryRange,
+  ZoneRejectionBacktestResponse,
 } from './core/board.models';
 import { BoardService } from './core/board.service';
+import { LiveClockComponent } from './live-clock.component';
+import { StrategiesPageComponent } from './strategies/strategies-page.component';
+import { SuperIntelligencePageComponent } from './super-intelligence/super-intelligence-page.component';
 import {
   ChartDrawing,
   IndicatorKind,
+  countCandlesOnIstDate,
   drawingStorageKey,
   firstChangedCandle,
   istDate,
@@ -26,16 +69,57 @@ import {
   movingAverage,
   parseDrawings,
   sessionStartBars,
+  todayIstDateKey,
 } from './core/chart-ui.util';
-import { brokerConnectedFromFeed, syncLiveCandle, tone as rowTone } from './core/trading-ui.util';
+import {
+  syncLiveCandle,
+  tone as rowTone,
+  isPaperStopLossExit,
+  isPaperTargetExit,
+  mergePaperPositions,
+  paperPositionCapitalUsed,
+  paperTradeCapitalUsed,
+  paperTradeEntryPrice,
+  paperTradeExitPrice,
+  paperTradeStopLoss,
+  paperTradeTarget,
+  filterCatalogPaperHistoryTrades,
+  formatPaperHistoryStrategyLabel,
+  paperTradeHistoryInIstDateRange,
+  istTodayCalendarYmd,
+  brokerOtpSendSucceeded,
+  preserveBrokerOtpEntry,
+} from './core/trading-ui.util';
+import {
+  APP_THEME_PRESETS,
+  AppThemePalette,
+  AppThemePresetId,
+  AppThemeSelection,
+  applyThemePalette,
+  loadThemeSelection,
+  resolveThemePalette,
+  saveThemeSelection,
+} from './core/app-theme';
+import {
+  APP_NAV_STORAGE_KEY,
+  parseRouterUrl,
+  readBootNavigationState,
+  routerPathForState,
+} from './core/app-navigation.util';
+
+const BOOT_NAV = readBootNavigationState();
 
 type UiState = 'loading' | 'ready' | 'error' | 'empty';
 type ZoneKey = 'B2' | 'B1' | 'S' | 'S1' | 'S2';
 type DrawTool = 'none' | 'hline' | 'trend';
 type MarketKind = 'stocks' | 'options';
+type MarketNavTab = 'dashboard' | 'options';
 type OptionSide = 'CE' | 'PE';
-type CenterView = 'market' | 'trades';
+type CenterView = 'market' | 'trades' | 'strategies' | 'intelligence';
 type ExecutionMode = 'paper' | 'live';
+type TradePanelTab = 'paper' | 'live' | 'history' | 'agent';
+type LiveBookView = 'positions' | 'orders';
+type LiveOrderFilter = 'pending' | 'executed' | 'trigger';
 const EXECUTION_MODE_KEY = 'twb-execution-mode';
 
 export interface OptionContract {
@@ -59,6 +143,7 @@ type TvChart = {
   removeSeries(series: TvLine): void;
   resize(width: number, height: number): void;
   remove(): void;
+  applyOptions?(options: Record<string, unknown>): void;
 };
 type TvPriceLine = { applyOptions(options: Record<string, unknown>): void };
 type TvLine = {
@@ -80,18 +165,36 @@ type TvCandle = {
 
 @Component({
   selector: 'app-root',
-  imports: [DecimalPipe, DatePipe, NgClass, FormsModule],
+  imports: [
+    DecimalPipe,
+    DatePipe,
+    NgClass,
+    FormsModule,
+    LiveClockComponent,
+    StrategiesPageComponent,
+    SuperIntelligencePageComponent,
+    RouterOutlet,
+  ],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss',
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class AppComponent implements OnInit, AfterViewChecked {
+export class AppComponent implements OnInit, AfterViewInit {
   private readonly board = inject(BoardService);
   private readonly http = inject(HttpClient);
+  private readonly sanitizer = inject(DomSanitizer);
+  private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly cdr = inject(ChangeDetectorRef);
+  private readonly ngZone = inject(NgZone);
   private readonly reload = new Subject<void>();
   private readonly optionChainReload = new Subject<void>();
   private readonly historyReload = new Subject<void>();
+  private readonly zoneBacktestReload = new Subject<void>();
   @ViewChild('chartHost') chartHost?: ElementRef<HTMLDivElement>;
+  @ViewChild('brokerHub') brokerHubRef?: ElementRef<HTMLDetailsElement>;
+  @ViewChild('symbolSearchInput') symbolSearchInput?: ElementRef<HTMLInputElement>;
+  @ViewChild('symbolSearchRoot') symbolSearchRoot?: ElementRef<HTMLElement>;
   private loadedChartName = '';
   private pendingChartName = '';
   private chartBusy = false;
@@ -101,6 +204,19 @@ export class AppComponent implements OnInit, AfterViewChecked {
   lastChart?: ChartResponse;
   private readonly chartRefreshSec = 1;
   private chartResize?: ResizeObserver;
+  private boardSymbolsRev = '';
+  private readonly railLists: {
+    selling: SymbolSnapshot[];
+    buying: SymbolSnapshot[];
+    ranged: SymbolSnapshot[];
+  } = { selling: [], buying: [], ranged: [] };
+  private lastIndicatorCandleKey = '';
+  private lastAppliedBoardKey = '';
+  private sessionMarkerKey = '';
+  private optionListRev = '';
+  private optionCeCache: OptionContract[] = [];
+  private optionPeCache: OptionContract[] = [];
+  private chartLoadFrame = 0;
   private trendFrom?: { time: number; value: number };
   private readonly indicatorSeries = new Map<IndicatorKind, TvLine>();
   private readonly drawingPriceLines = new Map<string, TvPriceLine>();
@@ -125,18 +241,39 @@ export class AppComponent implements OnInit, AfterViewChecked {
   boardData: BoardResponse | null = null;
   selectedName = 'NIFTY';
   selected: SymbolSnapshot | null = null;
-  clock = new Date();
   otp = '';
   otpRequested = false;
   brokerBusy = false;
   brokerConnected = false;
-  brokerMessage = 'Step 1: click Request OTP. Step 2: enter the code from your phone and submit.';
+  brokerAvailableFunds: number | null = null;
+  brokerUtilizedFunds: number | null = null;
+  brokerProvider: 'mstock' = 'mstock';
+  brokerDisplayName = 'm.Stock';
+  brokerMessage = 'Click Request OTP, then enter the code from your phone.';
+  readonly brokerChoices: ReadonlyArray<{
+    id: 'mstock';
+    name: string;
+    mark: string;
+    authLabel: string;
+    description: string;
+  }> = [
+    {
+      id: 'mstock',
+      name: 'm.Stock',
+      mark: 'MS',
+      authLabel: 'OTP',
+      description: 'Request OTP on your phone, then submit the code here.',
+    },
+  ];
   readonly indexTabs = ['NIFTY', 'SENSEX', 'BANKNIFTY', 'FINNIFTY'];
-  marketKind: MarketKind = 'stocks';
-  centerView: CenterView = 'market';
+  marketKind: MarketKind = BOOT_NAV.marketKind;
+  marketNavTab: MarketNavTab = BOOT_NAV.marketNavTab;
+  centerView: CenterView = BOOT_NAV.centerView;
   pickerOpen = false;
   pickerKind: MarketKind = 'stocks';
   pickerQuery = '';
+  pickerCatalogHits: SymbolSearchHit[] = [];
+  private readonly pickerSearchQuery$ = new Subject<string>();
   optionUnderlying = 'NIFTY';
   optionExpiry = '';
   optionSide: OptionSide = 'CE';
@@ -144,24 +281,52 @@ export class AppComponent implements OnInit, AfterViewChecked {
   optionChartError = '';
   optionQuotes = new Map<string, OptionMarketQuote>();
   paperAgent: PaperAgentSnapshot | null = null;
+  zoneBacktest: ZoneRejectionBacktestResponse | null = null;
+  zoneBacktestLoading = false;
+  zoneBacktestError = '';
+  readonly b1RejectionStrategy = STOCK_B1_REJECTION_STRATEGY;
   agentCommand = '';
   agentBusy = false;
   agentError = '';
   tradeHistory: PaperTradeHistoryResponse | null = null;
   historyRange: TradeHistoryRange = '1m';
+  historyPage = 1;
+  readonly historyPageSize = 10;
+  historyDetailTradeId: string | null = null;
+  historyPnlFilter: 'all' | 'positive' | 'negative' = 'all';
+  /** IST calendar dates `yyyy-MM-dd` — single day when only From is set. */
+  historyDateFrom: string | null = null;
+  historyDateTo: string | null = null;
+  /** Shows calendar pickers when user chose Custom date. */
+  historyCustomDateOpen = false;
   historyError = '';
-  executionMode: ExecutionMode = 'paper';
+  executionMode: ExecutionMode = BOOT_NAV.tradePanelTab === 'live' ? 'live' : 'paper';
+  tradePanelTab: TradePanelTab = BOOT_NAV.tradePanelTab;
   liveAgent: LiveExecutionSnapshot | null = null;
   liveAcknowledgement = '';
+  zoneAutoLiveAcknowledgement = '';
+  readonly zoneAutoLivePhrase = 'GO LIVE ZONE CSV ON REAL MONEY';
   liveProduct: 'MIS' | 'NRML' = 'MIS';
   liveBusy = false;
   liveError = '';
+  liveBookView: LiveBookView = 'positions';
+  liveOrderFilter: LiveOrderFilter = 'executed';
+  readonly themePresets = APP_THEME_PRESETS;
+  themeSelection: AppThemeSelection = { presetId: 'default' };
 
   ngOnInit(): void {
-    const savedMode = localStorage.getItem(EXECUTION_MODE_KEY);
-    if (savedMode === 'paper' || savedMode === 'live') {
-      this.executionMode = savedMode;
-    }
+    this.themeSelection = loadThemeSelection();
+    this.applyAppTheme();
+    this.router.events
+      .pipe(
+        filter((event): event is NavigationEnd => event instanceof NavigationEnd),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((event) => {
+        this.applyNavigationState(parseRouterUrl(event.urlAfterRedirects));
+        this.saveNavigationToStorage();
+        this.bumpView();
+      });
 
     this.reload
       .pipe(
@@ -172,7 +337,8 @@ export class AppComponent implements OnInit, AfterViewChecked {
             catchError(() => {
               this.state = 'error';
               this.errorMessage =
-                'Board API unreachable on /api/board. Is the backend on port 45211?';
+                'Backend on port 45211 is not responding (board timed out). Run stop-app.ps1 then start-app.ps1, wait for the backend window, then refresh.';
+              this.bumpView();
               return EMPTY;
             }),
           ),
@@ -195,7 +361,9 @@ export class AppComponent implements OnInit, AfterViewChecked {
       )
       .subscribe(({ data, requestKey }) => {
         if (requestKey === this.chartRequestKey()) {
-          this.applyChartData(data, false);
+          this.ngZone.runOutsideAngular(() => {
+            this.applyChartData(data, false);
+          });
         }
       });
 
@@ -214,49 +382,127 @@ export class AppComponent implements OnInit, AfterViewChecked {
         this.optionQuotes = new Map(
           quotes.map((quote) => [this.optionQuoteKey(quote.strike, quote.side), quote]),
         );
+        this.refreshOpenedOptionQuote();
+        this.refreshOptionContractRails();
+        this.bumpView();
       });
 
-    interval(2000)
+    interval(4000)
       .pipe(
         startWith(0),
-        switchMap(() => this.board.paperAgent().pipe(catchError(() => EMPTY))),
-        takeUntilDestroyed(this.destroyRef),
-      )
-      .subscribe((snapshot) => {
-        this.paperAgent = snapshot;
-        this.agentError = '';
-      });
-
-    interval(2000)
-      .pipe(
-        startWith(0),
-        switchMap(() => this.board.liveAgent().pipe(catchError(() => EMPTY))),
-        takeUntilDestroyed(this.destroyRef),
-      )
-      .subscribe((snapshot) => {
-        this.liveAgent = snapshot;
-      });
-
-    merge(interval(5000), this.historyReload)
-      .pipe(
-        startWith(0),
-        filter(() => this.centerView === 'trades'),
-        switchMap(() =>
-          this.board.paperTrades(this.historyRange).pipe(
+        filter(() => this.state === 'ready'),
+        exhaustMap(() =>
+          this.board.paperAgent().pipe(
             catchError(() => {
-              this.historyError = 'Trade history is unavailable.';
+              this.agentError =
+                'Strategy agent API unavailable (check backend on port 45211). Open positions below use trade history.';
+              this.bumpView();
               return EMPTY;
             }),
           ),
         ),
         takeUntilDestroyed(this.destroyRef),
       )
+      .subscribe((snapshot) => {
+        if (!this.shouldReplacePaperAgent(snapshot)) {
+          return;
+        }
+        this.paperAgent = snapshot;
+        this.agentError = '';
+        this.bumpView();
+      });
+
+    interval(4000)
+      .pipe(
+        startWith(0),
+        filter(() => this.state === 'ready'),
+        exhaustMap(() => this.board.liveAgent().pipe(catchError(() => EMPTY))),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((snapshot) => {
+        if (
+          this.liveAgent &&
+          snapshot.updatedAt === this.liveAgent.updatedAt &&
+          snapshot.state === this.liveAgent.state
+        ) {
+          return;
+        }
+        this.liveAgent = snapshot;
+        this.bumpView();
+      });
+
+    merge(interval(5000), this.historyReload)
+      .pipe(
+        startWith(0),
+        filter(() => this.centerView === 'trades' && (this.tradePanelTab === 'paper' || this.tradePanelTab === 'history')),
+        switchMap(() => {
+          const { range, from, to } = this.historyPaperTradesQuery();
+          return this.board.paperTrades(range, from, to).pipe(
+            catchError(() => {
+              this.historyError = 'Trade history is unavailable.';
+              return EMPTY;
+            }),
+          );
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
       .subscribe((history) => {
         this.tradeHistory = history;
         this.historyError = '';
+        this.clampHistoryPage();
+        this.bumpView();
       });
 
-    this.refreshSession();
+    merge(interval(60000), this.zoneBacktestReload)
+      .pipe(
+        startWith(undefined),
+        filter(() => this.tradePanelTab === 'paper' && this.centerView === 'trades'),
+        switchMap(() => {
+          const name = this.zoneBacktestTargetSymbol();
+          if (!name) {
+            this.zoneBacktest = null;
+            this.zoneBacktestError = '';
+            this.zoneBacktestLoading = false;
+            return of(null);
+          }
+          this.zoneBacktestLoading = true;
+          this.zoneBacktestError = '';
+          return this.board.zoneRejectionBacktest(name).pipe(
+            catchError(() => {
+              this.zoneBacktestError = `B1→S2 backtest unavailable for ${name}.`;
+              return of(null);
+            }),
+            finalize(() => {
+              this.zoneBacktestLoading = false;
+            }),
+          );
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((data) => {
+        this.zoneBacktest = data;
+        this.bumpView();
+      });
+
+    this.pickerSearchQuery$
+      .pipe(
+        debounceTime(220),
+        distinctUntilChanged(),
+        switchMap((q) => {
+          const trimmed = q.trim();
+          if (!trimmed) {
+            return of<SymbolSearchHit[]>([]);
+          }
+          return this.board.searchSymbols(trimmed).pipe(catchError(() => of<SymbolSearchHit[]>([])));
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((hits) => {
+        this.pickerCatalogHits = hits;
+        this.bumpView();
+      });
+
+    this.startBrokerSessionPoll();
 
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'p') {
@@ -278,6 +524,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
     window.addEventListener('keydown', onKey);
     this.destroyRef.onDestroy(() => {
       window.removeEventListener('keydown', onKey);
+      cancelAnimationFrame(this.chartLoadFrame);
       this.chartResize?.disconnect();
     });
   }
@@ -294,6 +541,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
       .pipe(
         catchError(() => {
           this.agentError = 'Paper agent API is unavailable.';
+          this.bumpView();
           return EMPTY;
         }),
         finalize(() => {
@@ -305,13 +553,643 @@ export class AppComponent implements OnInit, AfterViewChecked {
         this.paperAgent = snapshot;
         this.agentCommand = '';
         this.historyReload.next();
+        this.bumpView();
       });
   }
 
   setExecutionMode(mode: ExecutionMode): void {
     this.executionMode = mode;
+    this.tradePanelTab = mode;
     this.liveError = '';
     localStorage.setItem(EXECUTION_MODE_KEY, mode);
+  }
+
+  setTradePanelTab(tab: TradePanelTab): void {
+    void this.router.navigateByUrl(`/trades/${tab}`);
+  }
+
+  private applyTradePanelSideEffects(tab: TradePanelTab): void {
+    if (tab === 'history') {
+      this.historyReload.next();
+    }
+    if (tab === 'paper') {
+      this.historyRange = 'today';
+      this.historyReload.next();
+      this.zoneBacktestReload.next();
+    }
+  }
+
+  private navigateApp(state: ReturnType<typeof parseRouterUrl>): void {
+    const path = routerPathForState(state);
+    if (this.router.url !== path) {
+      void this.router.navigateByUrl(path);
+    }
+  }
+
+  private syncNavigationHash(): void {
+    this.navigateApp({
+      centerView: this.centerView,
+      tradePanelTab: this.tradePanelTab,
+      marketKind: this.marketKind,
+      marketNavTab: this.marketNavTab,
+    });
+    this.saveNavigationToStorage();
+  }
+
+  private saveNavigationToStorage(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+    localStorage.setItem(
+      APP_NAV_STORAGE_KEY,
+      JSON.stringify({
+        centerView: this.centerView,
+        tradePanelTab: this.tradePanelTab,
+        marketKind: this.marketKind,
+        marketNavTab: this.marketNavTab,
+      }),
+    );
+  }
+
+  private persistNavigationHash(): void {
+    this.syncNavigationHash();
+  }
+
+  private leaveMarketWorkbench(): void {
+    this.tvChart?.remove();
+    this.tvChart = undefined;
+    this.candleSeries = undefined;
+    this.chartResize?.disconnect();
+    this.loadedChartName = '';
+  }
+
+  private applyNavigationState(state: ReturnType<typeof parseRouterUrl>): void {
+    if (state.centerView !== 'market' && this.centerView === 'market') {
+      this.leaveMarketWorkbench();
+    }
+
+    this.centerView = state.centerView;
+    this.tradePanelTab = state.tradePanelTab;
+    this.marketNavTab = state.marketNavTab;
+
+    if (state.centerView === 'market') {
+      this.marketKind = state.marketKind;
+      if (state.marketKind === 'options') {
+        this.marketNavTab = 'options';
+        this.optionUnderlying = this.isIndex(this.selectedName) ? this.selectedName : 'NIFTY';
+        this.selectIndex(this.optionUnderlying);
+        this.ensureOptionExpiry();
+        if (!this.openedOption) {
+          this.openedOption = this.atmContract(this.optionUnderlying, this.optionExpiry, this.optionSide);
+        }
+        this.loadedChartName = '';
+        this.optionChainReload.next();
+      } else {
+        this.openedOption = null;
+        this.optionChartError = '';
+        this.loadedChartName = '';
+      }
+      if (this.selected) {
+        this.pendingChartName = this.selected.name;
+      }
+      this.scheduleChartLoad();
+      this.refreshOptionContractRails();
+      return;
+    }
+
+    if (state.centerView === 'trades') {
+      if (state.tradePanelTab === 'paper' || state.tradePanelTab === 'live') {
+        this.executionMode = state.tradePanelTab;
+        localStorage.setItem(EXECUTION_MODE_KEY, state.tradePanelTab);
+      }
+      this.applyTradePanelSideEffects(state.tradePanelTab);
+    }
+  }
+
+  zoneBacktestTargetSymbol(): string {
+    if (!this.isIndex(this.selectedName)) {
+      return this.selectedName;
+    }
+    const fromDecision = this.paperAgent?.recentDecisions?.find(
+      (d) => d.strategy === STOCK_B1_REJECTION_STRATEGY && d.underlying && !this.isIndex(d.underlying),
+    )?.underlying;
+    return fromDecision ?? '';
+  }
+
+  isB1RejectionStrategy(strategy: string | undefined): boolean {
+    return strategy === STOCK_B1_REJECTION_STRATEGY;
+  }
+
+  paperTargetTrades(): PaperTradeHistoryItem[] {
+    return filterCatalogPaperHistoryTrades(this.tradeHistory?.trades ?? []).filter(
+      (trade) => trade.status === 'CLOSED' && isPaperTargetExit(trade.exitReason),
+    );
+  }
+
+  paperStopLossTrades(): PaperTradeHistoryItem[] {
+    return filterCatalogPaperHistoryTrades(this.tradeHistory?.trades ?? []).filter(
+      (trade) => trade.status === 'CLOSED' && isPaperStopLossExit(trade.exitReason),
+    );
+  }
+
+  /** Trade History tab — catalog strategies only (Ten AM, zone board, B1 rejection). */
+  historyCatalogTrades(): PaperTradeHistoryItem[] {
+    if (this.historyCustomDateOpen && !this.historyDateFrom) {
+      return [];
+    }
+    let items = filterCatalogPaperHistoryTrades(this.tradeHistory?.trades ?? []);
+    if (this.historyDateFilterActive()) {
+      const from = this.historyDateFrom!;
+      const to = this.historyDateTo || from;
+      items = items.filter((t) => paperTradeHistoryInIstDateRange(t, from, to));
+    }
+    return items.sort((a, b) => {
+      const at = Date.parse(a.closedAt ?? a.openedAt ?? a.createdAt ?? '') || 0;
+      const bt = Date.parse(b.closedAt ?? b.openedAt ?? b.createdAt ?? '') || 0;
+      return bt - at;
+    });
+  }
+
+  historyCatalogSummary(): {
+    closedTrades: number;
+    winningTrades: number;
+    losingTrades: number;
+    openTrades: number;
+    realizedPnl: number;
+  } {
+    const trades = this.historyCatalogTrades();
+    const closed = trades.filter((t) => t.status === 'CLOSED');
+    return {
+      closedTrades: closed.length,
+      winningTrades: closed.filter((t) => (t.pnl ?? 0) > 0).length,
+      losingTrades: closed.filter((t) => (t.pnl ?? 0) < 0).length,
+      openTrades: trades.filter((t) => t.status === 'OPEN').length,
+      realizedPnl: closed.reduce((sum, t) => sum + (t.pnl ?? 0), 0),
+    };
+  }
+
+  historyDateFilterActive(): boolean {
+    return !!this.historyDateFrom;
+  }
+
+  historyTodayIstYmd(): string {
+    return istTodayCalendarYmd();
+  }
+
+  openHistoryCustomDate(): void {
+    this.historyCustomDateOpen = true;
+    this.resetHistoryListState();
+    this.bumpView();
+    queueMicrotask(() => this.focusHistoryFromDatePicker());
+  }
+
+  focusHistoryFromDatePicker(): void {
+    const input = document.querySelector<HTMLInputElement>('.history-date-input[data-history-from="1"]');
+    if (!input) {
+      return;
+    }
+    input.focus();
+    try {
+      input.showPicker?.();
+    } catch {
+      /* showPicker requires a user gesture in some browsers */
+    }
+  }
+
+  historyDateFilterLabel(): string {
+    const from = this.historyDateFrom;
+    if (!from) {
+      return '';
+    }
+    const to = this.historyDateTo || from;
+    if (to === from) {
+      return this.formatHistoryIstDayLabel(from);
+    }
+    return `${this.formatHistoryIstDayLabel(from)} – ${this.formatHistoryIstDayLabel(to)}`;
+  }
+
+  onHistoryDateFromChange(value: string): void {
+    this.historyCustomDateOpen = true;
+    this.historyDateFrom = value?.trim() || null;
+    if (!this.historyDateFrom) {
+      this.historyDateTo = null;
+    } else if (this.historyDateTo && this.historyDateTo < this.historyDateFrom) {
+      this.historyDateTo = this.historyDateFrom;
+    }
+    this.resetHistoryListState();
+    if (this.historyDateFrom) {
+      this.historyReload.next();
+    }
+  }
+
+  onHistoryDateToChange(value: string): void {
+    this.historyCustomDateOpen = true;
+    this.historyDateTo = value?.trim() || null;
+    if (this.historyDateFrom && this.historyDateTo && this.historyDateTo < this.historyDateFrom) {
+      this.historyDateFrom = this.historyDateTo;
+    }
+    this.resetHistoryListState();
+    if (this.historyDateFrom) {
+      this.historyReload.next();
+    }
+  }
+
+  clearHistoryDateFilter(): void {
+    this.historyDateFrom = null;
+    this.historyDateTo = null;
+    this.historyCustomDateOpen = false;
+    this.resetHistoryListState();
+    this.historyReload.next();
+  }
+
+  historyTradeStrategyLabel(trade: PaperTradeHistoryItem): string {
+    return formatPaperHistoryStrategyLabel(trade.strategy ?? '');
+  }
+
+  private historyPaperTradesQuery(): {
+    range: TradeHistoryRange;
+    from: string | null;
+    to: string | null;
+  } {
+    if (this.historyDateFrom) {
+      return {
+        range: '1m',
+        from: this.historyDateFrom,
+        to: this.historyDateTo || this.historyDateFrom,
+      };
+    }
+    return { range: this.historyRange, from: null, to: null };
+  }
+
+  private formatHistoryIstDayLabel(ymd: string): string {
+    const [y, m, d] = ymd.split('-').map((part) => Number(part));
+    if (!y || !m || !d) {
+      return ymd;
+    }
+    const utc = Date.UTC(y, m - 1, d, 5, 30);
+    return new Date(utc).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+  }
+
+  private resetHistoryListState(): void {
+    this.historyPage = 1;
+    this.historyDetailTradeId = null;
+  }
+
+  historyCatalogTradesFiltered(): PaperTradeHistoryItem[] {
+    const items = this.historyCatalogTrades();
+    if (this.historyPnlFilter === 'positive') {
+      return items.filter((t) => t.status === 'CLOSED' && (t.pnl ?? 0) > 0);
+    }
+    if (this.historyPnlFilter === 'negative') {
+      return items.filter((t) => t.status === 'CLOSED' && (t.pnl ?? 0) < 0);
+    }
+    return items;
+  }
+
+  historyCatalogClosedWinners(): PaperTradeHistoryItem[] {
+    return this.historyCatalogTrades().filter((t) => t.status === 'CLOSED' && (t.pnl ?? 0) > 0);
+  }
+
+  historyCatalogClosedLosers(): PaperTradeHistoryItem[] {
+    return this.historyCatalogTrades().filter((t) => t.status === 'CLOSED' && (t.pnl ?? 0) < 0);
+  }
+
+  historyCatalogPositivePnlSum(): number {
+    return this.historyCatalogClosedWinners().reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+  }
+
+  historyCatalogNegativePnlSum(): number {
+    return this.historyCatalogClosedLosers().reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+  }
+
+  historyCatalogFilteredPnlSum(): number {
+    return this.historyCatalogTradesFiltered().reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+  }
+
+  historyCatalogTradesPage(): PaperTradeHistoryItem[] {
+    const start = (this.historyPage - 1) * this.historyPageSize;
+    return this.historyCatalogTradesFiltered().slice(start, start + this.historyPageSize);
+  }
+
+  historyCatalogPageCount(): number {
+    const total = this.historyCatalogTradesFiltered().length;
+    return Math.max(1, Math.ceil(total / this.historyPageSize));
+  }
+
+  setHistoryPnlFilter(filter: 'all' | 'positive' | 'negative'): void {
+    this.historyPnlFilter = filter;
+    this.resetHistoryListState();
+    this.bumpView();
+  }
+
+  historyTradeCapital(trade: PaperTradeHistoryItem): number {
+    return paperTradeCapitalUsed(trade);
+  }
+
+  historyTradeQuantityTotal(trade: PaperTradeHistoryItem): number {
+    return (trade.legs ?? []).reduce((sum, leg) => sum + (leg.quantity ?? 0), 0);
+  }
+
+  historyTradeQuantityLabel(trade: PaperTradeHistoryItem): string {
+    const legs = trade.legs ?? [];
+    if (!legs.length) {
+      return '—';
+    }
+    if (legs.length === 1) {
+      return String(legs[0].quantity);
+    }
+    const total = this.historyTradeQuantityTotal(trade);
+    return `${total}`;
+  }
+
+  historyTradeQuantityTitle(trade: PaperTradeHistoryItem): string {
+    const legs = trade.legs ?? [];
+    if (!legs.length) {
+      return '';
+    }
+    return legs.map((leg) => `${leg.side} ${leg.symbol} × ${leg.quantity}`).join(' · ');
+  }
+
+  setHistoryPage(page: number): void {
+    this.historyPage = Math.min(Math.max(1, page), this.historyCatalogPageCount());
+    this.historyDetailTradeId = null;
+    this.bumpView();
+  }
+
+  toggleHistoryDetail(tradeId: string): void {
+    this.historyDetailTradeId = this.historyDetailTradeId === tradeId ? null : tradeId;
+    this.bumpView();
+  }
+
+  historyDetailOpen(tradeId: string): boolean {
+    return this.historyDetailTradeId === tradeId;
+  }
+
+  private clampHistoryPage(): void {
+    this.historyPage = Math.min(Math.max(1, this.historyPage), this.historyCatalogPageCount());
+  }
+
+  historyDirectionShort(direction: string): string {
+    if (direction === 'BULLISH' || direction === 'LONG') {
+      return 'Bull';
+    }
+    if (direction === 'BEARISH' || direction === 'SHORT') {
+      return 'Bear';
+    }
+    return direction.length > 5 ? direction.slice(0, 5) : direction;
+  }
+
+  /** When the position was actually opened (filled); falls back to created for open/closed rows. */
+  historyTradeExecutedAt(trade: PaperTradeHistoryItem): string | null {
+    if (trade.openedAt) {
+      return trade.openedAt;
+    }
+    if (trade.status === 'OPEN' || trade.status === 'CLOSED') {
+      return trade.createdAt;
+    }
+    return null;
+  }
+
+  historyTradeClosedAt(trade: PaperTradeHistoryItem): string | null {
+    return trade.closedAt;
+  }
+
+  historyTradeHasDetails(trade: PaperTradeHistoryItem): boolean {
+    return (
+      !!trade.entryReason ||
+      !!this.historyTradeExecutedAt(trade) ||
+      !!trade.closedAt ||
+      trade.legs.length > 0
+    );
+  }
+
+  historyTradeDurationLabel(trade: PaperTradeHistoryItem): string | null {
+    const start = this.historyTradeExecutedAt(trade);
+    const end = trade.closedAt;
+    if (!start || !end) {
+      return null;
+    }
+    const ms = Date.parse(end) - Date.parse(start);
+    if (!Number.isFinite(ms) || ms < 0) {
+      return null;
+    }
+    const mins = Math.round(ms / 60_000);
+    if (mins < 60) {
+      return `${mins} min`;
+    }
+    const hours = Math.floor(mins / 60);
+    const rem = mins % 60;
+    return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`;
+  }
+
+  historyTradeEntryFills(trade: PaperTradeHistoryItem): string {
+    return trade.legs
+      .filter((leg) => leg.entryPrice != null)
+      .map(
+        (leg) =>
+          `${leg.side} ${leg.symbol} × ${leg.quantity} @ ₹${leg.entryPrice!.toFixed(2)}`,
+      )
+      .join(' · ');
+  }
+
+  historyTradeExitFills(trade: PaperTradeHistoryItem): string {
+    return trade.legs
+      .filter((leg) => leg.exitPrice != null)
+      .map(
+        (leg) =>
+          `${leg.side} ${leg.symbol} × ${leg.quantity} @ ₹${leg.exitPrice!.toFixed(2)}`,
+      )
+      .join(' · ');
+  }
+
+  paperTodayCatalogExits(): PaperTradeHistoryItem[] {
+    const seen = new Set<string>();
+    const merged: PaperTradeHistoryItem[] = [];
+    for (const trade of [...this.paperStopLossTrades(), ...this.paperTargetTrades()]) {
+      if (seen.has(trade.id)) {
+        continue;
+      }
+      seen.add(trade.id);
+      merged.push(trade);
+    }
+    return merged.sort((a, b) => {
+      const at = Date.parse(this.paperTradeExitAt(a) ?? '') || 0;
+      const bt = Date.parse(this.paperTradeExitAt(b) ?? '') || 0;
+      return bt - at;
+    });
+  }
+
+  paperTodayDateLabel(): string {
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(new Date());
+  }
+
+  paperTradeExitAt(trade: PaperTradeHistoryItem): string | null {
+    return trade.closedAt ?? trade.createdAt ?? null;
+  }
+
+  paperTradeEntryAt(trade: PaperTradeHistoryItem): string | null {
+    return trade.openedAt ?? trade.createdAt ?? null;
+  }
+
+  paperTradeEntryPrice(trade: PaperTradeHistoryItem): number | null {
+    return paperTradeEntryPrice(trade);
+  }
+
+  paperTradeExitPrice(trade: PaperTradeHistoryItem): number | null {
+    return paperTradeExitPrice(trade);
+  }
+
+  paperTradeStopLoss(trade: PaperTradeHistoryItem): number | null {
+    return paperTradeStopLoss(trade);
+  }
+
+  paperTradeTarget(trade: PaperTradeHistoryItem): number | null {
+    return paperTradeTarget(trade);
+  }
+
+  paperTradeCapital(trade: PaperTradeHistoryItem): number {
+    return paperTradeCapitalUsed(trade);
+  }
+
+  paperPositionCapital(position: PaperPosition): number {
+    return paperPositionCapitalUsed(position, this.tradeHistory?.trades);
+  }
+
+  paperTodayExitCapitalUsed(): number {
+    let total = 0;
+    for (const trade of [...this.paperStopLossTrades(), ...this.paperTargetTrades()]) {
+      total += paperTradeCapitalUsed(trade);
+    }
+    return total;
+  }
+
+  paperProposalCapital(trade: PaperTradeProposal): number {
+    if (trade.capitalRequired != null && trade.capitalRequired > 0) {
+      return trade.capitalRequired;
+    }
+    return Math.abs(trade.indicativePrice * trade.quantity);
+  }
+
+  paperTodayPnlSummary(): { profit: number; loss: number; net: number } {
+    const closed = (this.tradeHistory?.trades ?? []).filter(
+      (t) => t.status === 'CLOSED' && t.pnl != null,
+    );
+    let profit = 0;
+    let loss = 0;
+    for (const trade of closed) {
+      const pnl = trade.pnl ?? 0;
+      if (pnl > 0) {
+        profit += pnl;
+      } else if (pnl < 0) {
+        loss += pnl;
+      }
+    }
+    return { profit, loss, net: profit + loss };
+  }
+
+  displayPaperTotalPnl(): number {
+    if (this.paperAgent != null && this.paperAgent.totalPnl != null) {
+      return this.paperAgent.totalPnl;
+    }
+    if (this.historyRange === 'today' && this.tradeHistory) {
+      return this.tradeHistory.summary.realizedPnl;
+    }
+    return 0;
+  }
+
+  displayPaperRealizedPnl(): number {
+    if (this.paperAgent?.realizedPnl != null) {
+      return this.paperAgent.realizedPnl;
+    }
+    if (this.historyRange === 'today' && this.tradeHistory) {
+      return this.tradeHistory.summary.realizedPnl;
+    }
+    return 0;
+  }
+
+  paperDisplayPositions(): PaperPosition[] {
+    return mergePaperPositions(this.paperAgent?.positions, this.tradeHistory?.trades ?? []);
+  }
+
+  paperDirectionIsUp(direction: string): boolean {
+    return direction === 'LONG' || direction === 'BULLISH';
+  }
+
+  paperDirectionIsDown(direction: string): boolean {
+    return direction === 'SHORT' || direction === 'BEARISH';
+  }
+
+  paperDisplayUnrealizedPnl(): number {
+    if (this.paperAgent?.performance?.unrealizedPnl != null && (this.paperAgent.positions?.length ?? 0) > 0) {
+      return this.paperAgent.performance.unrealizedPnl;
+    }
+    return this.paperDisplayPositions().reduce((sum, p) => sum + (p.pnl ?? 0), 0);
+  }
+
+  tradeDetailsPanelTitle(): string {
+    switch (this.tradePanelTab) {
+      case 'live':
+        return 'Live Trading';
+      case 'history':
+        return 'Trade History';
+      case 'agent':
+        return 'Agent';
+      default:
+        return 'Strategy Agent';
+    }
+  }
+
+  themePreviewColor(): string {
+    if (this.themeSelection.presetId === 'custom' && this.themeSelection.customBg) {
+      return this.themeSelection.customBg;
+    }
+    const preset = this.themePresets.find((p) => p.id === this.themeSelection.presetId);
+    return preset?.preview ?? '#1e1e1e';
+  }
+
+  themeCustomColorValue(): string {
+    return resolveThemePalette(this.themeSelection).bg;
+  }
+
+  isThemePresetActive(id: AppThemePresetId): boolean {
+    return this.themeSelection.presetId === id;
+  }
+
+  selectThemePreset(id: AppThemePresetId): void {
+    this.themeSelection = { presetId: id };
+    saveThemeSelection(this.themeSelection);
+    this.applyAppTheme();
+  }
+
+  onCustomThemeColor(hex: string): void {
+    this.themeSelection = { presetId: 'custom', customBg: hex };
+    saveThemeSelection(this.themeSelection);
+    this.applyAppTheme();
+  }
+
+  private applyAppTheme(): void {
+    const palette = resolveThemePalette(this.themeSelection);
+    applyThemePalette(palette);
+    this.syncChartTheme(palette);
+  }
+
+  private syncChartTheme(palette: AppThemePalette): void {
+    this.tvChart?.applyOptions?.({
+      layout: { background: { color: palette.chartBg }, textColor: palette.chartText },
+      grid: { vertLines: { color: palette.chartGrid }, horzLines: { color: palette.chartGrid } },
+      rightPriceScale: { borderColor: palette.chartGrid },
+      timeScale: { borderColor: palette.chartGrid },
+    });
   }
 
   canConfirmLive(): boolean {
@@ -327,7 +1205,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
       return 'Live trading is turned off in backend configuration.';
     }
     if (!this.brokerConnected || !this.liveAgent.brokerConnected) {
-      return 'Connect m.Stock OTP before live trading.';
+      return 'Connect your broker before live trading.';
     }
     if (!this.liveAgent.marketSession?.isOpen) {
       const next = this.liveAgent.marketSession?.nextEventAt;
@@ -350,7 +1228,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
       return;
     }
     if (!this.brokerConnected || !this.liveAgent.brokerConnected) {
-      this.liveError = 'Connect m.Stock OTP before confirming a live trade.';
+      this.liveError = 'Connect your broker before confirming a live trade.';
       return;
     }
     if (!this.liveAgent.marketSession?.isOpen) {
@@ -387,6 +1265,34 @@ export class AppComponent implements OnInit, AfterViewChecked {
     this.runLiveAction(this.board.disarmLive());
   }
 
+  armZoneAutoLive(): void {
+    if (this.liveBusy) return;
+    this.liveBusy = true;
+    this.liveError = '';
+    this.board.armZoneAutoLive(this.zoneAutoLiveAcknowledgement, this.liveProduct)
+      .pipe(
+        catchError(() => {
+          this.liveError = 'Zone go-live API is unavailable.';
+          return EMPTY;
+        }),
+        finalize(() => this.liveBusy = false),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((snapshot) => {
+        this.liveAgent = snapshot;
+        if (snapshot.zoneAutoLiveArmed) this.zoneAutoLiveAcknowledgement = '';
+      });
+  }
+
+  canArmZoneAutoLive(): boolean {
+    return !!this.liveAgent?.featureEnabled
+      && !!this.liveAgent?.brokerConnected
+      && !!this.liveAgent?.marketSession?.isOpen
+      && !this.liveAgent?.zoneAutoLiveArmed
+      && this.zoneAutoLiveAcknowledgement.trim() === this.zoneAutoLivePhrase
+      && !this.liveBusy;
+  }
+
   confirmLive(proposalId: string): void {
     this.runLiveAction(this.board.confirmLive(proposalId, this.liveProduct));
   }
@@ -415,18 +1321,155 @@ export class AppComponent implements OnInit, AfterViewChecked {
       .subscribe((snapshot) => this.liveAgent = snapshot);
   }
 
+  showBrokerConnectionBar(): boolean {
+    return this.centerView === 'market' && this.marketNavTab === 'dashboard';
+  }
+
+  brokerHubTriggerLabel(): string {
+    if (this.brokerConnected) {
+      return this.brokerShortName();
+    }
+    return 'Broker';
+  }
+
+  @HostListener('document:pointerdown', ['$event'])
+  onDocumentPointerDown(event: PointerEvent): void {
+    const hub = this.brokerHubRef?.nativeElement;
+    if (!hub?.open) {
+      return;
+    }
+    const target = event.target;
+    if (target instanceof Node && hub.contains(target)) {
+      return;
+    }
+    this.closeBrokerHub();
+  }
+
+  closeBrokerHub(): void {
+    const hub = this.brokerHubRef?.nativeElement;
+    if (hub?.open) {
+      hub.open = false;
+    }
+  }
+
+  brokerHubStatusClass(): 'live' | 'busy' | 'off' {
+    if (this.brokerBusy) {
+      return 'busy';
+    }
+    return this.brokerConnected ? 'live' : 'off';
+  }
+
+  isBrokerChoiceActive(id: 'mstock'): boolean {
+    return this.brokerProvider === id;
+  }
+
+  isBrokerChoiceConnected(id: 'mstock'): boolean {
+    return this.brokerConnected && this.brokerProvider === id;
+  }
+
+  chooseBroker(id: 'mstock'): void {
+    if (this.brokerConnected) {
+      return;
+    }
+    this.brokerProvider = id;
+    this.onBrokerProviderChange();
+    this.bumpView();
+  }
+
+  disconnectBroker(): void {
+    if (this.brokerBusy) {
+      return;
+    }
+    this.brokerBusy = true;
+    this.http.post<{ status?: string; message?: string }>('/api/broker/session/clear', {}).subscribe({
+      next: (res) => {
+        this.brokerBusy = false;
+        this.brokerConnected = false;
+        this.brokerAvailableFunds = null;
+        this.brokerUtilizedFunds = null;
+        this.otpRequested = false;
+        this.otp = '';
+        this.brokerMessage = res.message || 'Disconnected. Request OTP to connect again.';
+        this.onBrokerProviderChange();
+        this.bumpView();
+      },
+      error: () => {
+        this.brokerBusy = false;
+        this.brokerMessage = 'Could not disconnect. Try again.';
+      },
+    });
+  }
+
+  private brokerShortName(): string {
+    return 'm.Stock';
+  }
+
   showTradeDetails(): void {
-    this.centerView = 'trades';
-    this.historyReload.next();
-    this.tvChart?.remove();
-    this.tvChart = undefined;
-    this.candleSeries = undefined;
-    this.chartResize?.disconnect();
+    void this.router.navigateByUrl(routerPathForState({
+      centerView: 'trades',
+      tradePanelTab: this.tradePanelTab,
+      marketKind: this.marketKind,
+      marketNavTab: this.marketNavTab,
+    }));
+  }
+
+  showStrategies(): void {
+    void this.router.navigateByUrl('/strategies');
+  }
+
+  showSuperIntelligence(): void {
+    void this.router.navigateByUrl('/intelligence');
+  }
+
+  showDashboard(): void {
+    this.exitOptionsWorkbench();
+    this.marketNavTab = 'dashboard';
+    void this.router.navigateByUrl('/market');
+    this.persistNavigationHash();
+    this.scheduleChartLoad();
+    this.bumpView();
+  }
+
+  showOptions(): void {
+    this.setMarketKind('options');
+    this.marketNavTab = 'options';
+    void this.router.navigateByUrl('/market/options');
+    this.persistNavigationHash();
+    this.scheduleChartLoad();
+    this.bumpView();
+  }
+
+  /** Index tabs leave the options workbench and open the cash index chart (same as m.Stock). */
+  selectIndexTab(name: string): void {
+    if (this.marketKind === 'options') {
+      this.exitOptionsWorkbench();
+      this.marketNavTab = 'dashboard';
+      void this.router.navigateByUrl('/market');
+      this.persistNavigationHash();
+    }
+    this.selectIndex(name);
+    this.scheduleChartLoad();
+    this.bumpView();
+  }
+
+  private exitOptionsWorkbench(): void {
+    if (this.marketKind !== 'options') {
+      return;
+    }
+    this.marketKind = 'stocks';
+    this.openedOption = null;
+    this.optionChartError = '';
     this.loadedChartName = '';
   }
 
   setHistoryRange(range: TradeHistoryRange): void {
     this.historyRange = range;
+    this.historyDateFrom = null;
+    this.historyDateTo = null;
+    this.historyCustomDateOpen = false;
+    this.historyPage = 1;
+    this.historyDetailTradeId = null;
+    this.historyPnlFilter = 'all';
     this.historyReload.next();
   }
 
@@ -449,16 +1492,50 @@ export class AppComponent implements OnInit, AfterViewChecked {
   }
 
   openPicker(kind: MarketKind = this.marketKind): void {
+    if (this.centerView !== 'market') {
+      this.showDashboard();
+    }
     this.pickerKind = kind;
     this.pickerQuery = '';
     this.pickerOpen = true;
     if (kind === 'options') {
       this.ensureOptionExpiry();
     }
+    this.bumpView();
+    queueMicrotask(() => this.symbolSearchInput?.nativeElement.focus());
+  }
+
+  onSymbolSearchFocus(): void {
+    if (!this.pickerOpen) {
+      this.pickerOpen = true;
+      if (this.marketKind === 'options') {
+        this.pickerKind = 'options';
+        this.ensureOptionExpiry();
+      }
+      this.bumpView();
+    }
+  }
+
+  onSymbolSearchInput(): void {
+    this.pickerOpen = true;
+    this.pickerSearchQuery$.next(this.pickerQuery);
+    this.bumpView();
   }
 
   closePicker(): void {
     this.pickerOpen = false;
+    this.bumpView();
+  }
+
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent): void {
+    if (!this.pickerOpen) {
+      return;
+    }
+    const root = this.symbolSearchRoot?.nativeElement;
+    if (root && event.target instanceof Node && !root.contains(event.target)) {
+      this.closePicker();
+    }
   }
 
   pickPickerUnderlying(name: string): void {
@@ -474,14 +1551,50 @@ export class AppComponent implements OnInit, AfterViewChecked {
     }
   }
 
-  openStock(row: SymbolSnapshot): void {
+  openStock(row: { name: string }): void {
+    const onBoard = this.boardData?.symbols.find((s) => s.name === row.name);
+    if (onBoard) {
+      this.finishOpenStock(onBoard);
+      return;
+    }
+    this.board
+      .ensureSymbol(row.name)
+      .pipe(take(1))
+      .subscribe({
+        next: (snap) => this.finishOpenStock(snap),
+        error: () => this.bumpView(),
+      });
+  }
+
+  private finishOpenStock(row: SymbolSnapshot): void {
+    this.exitOptionsWorkbench();
     this.marketKind = 'stocks';
+    this.marketNavTab = 'dashboard';
     this.openedOption = null;
+    this.mergeBoardSymbol(row);
     this.select(row);
+    void this.router.navigateByUrl('/market');
+    this.persistNavigationHash();
+    this.scheduleChartLoad();
     this.closePicker();
+    this.bumpView();
+  }
+
+  /** Keep zone chips in sync when a symbol is added from NSE search (not yet on the polled board). */
+  private mergeBoardSymbol(row: SymbolSnapshot): void {
+    if (!this.boardData) {
+      return;
+    }
+    const idx = this.boardData.symbols.findIndex((s) => s.name === row.name);
+    if (idx >= 0) {
+      this.boardData.symbols[idx] = row;
+    } else {
+      this.boardData.symbols = [...this.boardData.symbols, row];
+    }
   }
 
   openOption(contract: OptionContract): void {
+    this.marketNavTab = 'options';
     this.marketKind = 'options';
     this.openedOption = contract;
     this.optionUnderlying = contract.underlying;
@@ -491,7 +1604,11 @@ export class AppComponent implements OnInit, AfterViewChecked {
     this.optionChartError = '';
     this.loadedChartName = '';
     this.optionChainReload.next();
+    void this.router.navigateByUrl('/market/options');
+    this.persistNavigationHash();
+    this.scheduleChartLoad();
     this.closePicker();
+    this.bumpView();
   }
 
   setOptionUnderlying(name: string): void {
@@ -503,6 +1620,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
     this.loadedChartName = '';
     this.optionQuotes = new Map();
     this.optionChainReload.next();
+    this.scheduleChartLoad();
   }
 
   setOptionExpiry(expiry: string): void {
@@ -518,6 +1636,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
       this.loadedChartName = '';
       this.optionQuotes = new Map();
       this.optionChainReload.next();
+      this.scheduleChartLoad();
     }
   }
 
@@ -532,25 +1651,53 @@ export class AppComponent implements OnInit, AfterViewChecked {
       );
       this.optionChartError = '';
       this.loadedChartName = '';
+      this.scheduleChartLoad();
     }
   }
 
-  pickerStocks(): SymbolSnapshot[] {
+  pickerQueryActive(): boolean {
+    return this.pickerQuery.trim().length > 0;
+  }
+
+  pickerStockRows(): Array<{ name: string; last: number | null; subtitle?: string }> {
     const q = this.pickerQuery.trim().toLowerCase();
     const rows = this.boardData?.symbols ?? [];
     if (!q) {
-      return rows;
+      const indexSet = new Set(this.indexTabs);
+      const indices = this.indexTabs
+        .map((name) => rows.find((s) => s.name === name))
+        .filter((s): s is SymbolSnapshot => !!s)
+        .map((s) => ({ name: s.name, last: s.last, subtitle: undefined }));
+      const rest = rows
+        .filter((s) => !indexSet.has(s.name))
+        .slice(0, 6)
+        .map((s) => ({ name: s.name, last: s.last, subtitle: undefined }));
+      return [...indices, ...rest];
     }
-    return rows.filter((s) => s.name.toLowerCase().includes(q));
+
+    const boardMatches = rows
+      .filter((s) => s.name.toLowerCase().includes(q))
+      .map((s) => ({ name: s.name, last: s.last, subtitle: undefined }));
+    const boardNames = new Set(boardMatches.map((r) => r.name.toUpperCase()));
+    const catalogMatches = this.pickerCatalogHits
+      .filter((h) => !boardNames.has(h.name.toUpperCase()))
+      .map((h) => ({
+        name: h.name,
+        last: null,
+        subtitle: h.companyName || h.exchange,
+      }));
+    return [...boardMatches, ...catalogMatches].slice(0, 24);
   }
 
   pickerOptions(): OptionContract[] {
     const q = this.pickerQuery.trim().toLowerCase();
     const rows = this.optionChain(this.optionUnderlying, this.optionExpiry);
     if (!q) {
-      return rows;
+      return [];
     }
-    return rows.filter((c) => c.label.toLowerCase().includes(q) || String(c.strike).includes(q));
+    return rows
+      .filter((c) => c.label.toLowerCase().includes(q) || String(c.strike).includes(q))
+      .slice(0, 24);
   }
 
   expiries(underlying = this.optionUnderlying): Array<{ id: string; label: string }> {
@@ -594,11 +1741,46 @@ export class AppComponent implements OnInit, AfterViewChecked {
   }
 
   ceContracts(): OptionContract[] {
-    return this.optionChain(this.optionUnderlying, this.optionExpiry).filter((c) => c.side === 'CE');
+    return this.optionCeCache;
   }
 
   peContracts(): OptionContract[] {
-    return this.optionChain(this.optionUnderlying, this.optionExpiry).filter((c) => c.side === 'PE');
+    return this.optionPeCache;
+  }
+
+  private refreshOptionContractRails(): void {
+    if (!this.optionExpiry && this.marketKind === 'options') {
+      this.ensureOptionExpiry();
+    }
+    const row = this.indexRow(this.optionUnderlying) ?? this.selected;
+    let quoteSig = '';
+    for (const quote of this.optionQuotes.values()) {
+      quoteSig += `${quote.strike}|${quote.side}:${quote.last};`;
+    }
+    const rev = `${this.optionUnderlying}|${this.optionExpiry}|${row?.last ?? 0}|${quoteSig}`;
+    if (rev === this.optionListRev) {
+      return;
+    }
+    this.optionListRev = rev;
+    const chain = this.optionChain(this.optionUnderlying, this.optionExpiry);
+    this.optionCeCache = chain.filter((contract) => contract.side === 'CE');
+    this.optionPeCache = chain.filter((contract) => contract.side === 'PE');
+  }
+
+  private refreshOpenedOptionQuote(): void {
+    if (!this.openedOption) {
+      return;
+    }
+    const refreshed = this.makeContract(
+      this.openedOption.underlying,
+      this.openedOption.expiry,
+      this.openedOption.strike,
+      this.openedOption.side,
+    );
+    this.openedOption.last = refreshed.last;
+    this.openedOption.changePoints = refreshed.changePoints;
+    this.openedOption.changePercent = refreshed.changePercent;
+    this.openedOption.previousClose = refreshed.previousClose;
   }
 
   optionSelected(contract: OptionContract): boolean {
@@ -617,6 +1799,16 @@ export class AppComponent implements OnInit, AfterViewChecked {
       return 'down';
     }
     return 'flat';
+  }
+
+  optionIsAtm(contract: OptionContract): boolean {
+    const row = this.indexRow(contract.underlying) ?? this.selected;
+    const step = this.strikeStep(contract.underlying);
+    if (!row || step <= 0) {
+      return false;
+    }
+    const atm = Math.round(row.last / step) * step;
+    return contract.strike === atm;
   }
 
   private optionQuoteKey(strike: number, side: OptionSide): string {
@@ -678,32 +1870,221 @@ export class AppComponent implements OnInit, AfterViewChecked {
     return 50;
   }
 
-  requestBrokerOtp(): void {
-    this.brokerBusy = true;
+  displayAvailableFunds(): number | null {
+    return this.brokerAvailableFunds ?? this.paperAgent?.brokerAvailableFunds ?? null;
+  }
+
+  displayUtilizedFunds(): number | null {
+    return this.brokerUtilizedFunds ?? this.paperAgent?.brokerUtilizedFunds ?? null;
+  }
+
+  setLiveBookView(view: LiveBookView): void {
+    this.liveBookView = view;
+    if (view === 'orders') {
+      this.liveOrderFilter = 'executed';
+    }
+    this.bumpView();
+  }
+
+  setLiveOrderFilter(filter: LiveOrderFilter): void {
+    this.liveOrderFilter = filter;
+    this.bumpView();
+  }
+
+  liveOpenPositionCount(): number {
+    return (this.liveAgent?.brokerPositions ?? []).filter((row) => row.quantity !== 0).length;
+  }
+
+  livePositionRows() {
+    return this.liveAgent?.brokerPositions ?? [];
+  }
+
+  liveAllOrderRows() {
+    return [...(this.liveAgent?.brokerOrders ?? [])].sort((left, right) => {
+      const leftTime = left.updatedAt ? Date.parse(left.updatedAt) : 0;
+      const rightTime = right.updatedAt ? Date.parse(right.updatedAt) : 0;
+      return rightTime - leftTime;
+    });
+  }
+
+  livePendingOrderCount(): number {
+    return this.liveAllOrderRows().filter((row) => this.isPendingOrder(row)).length;
+  }
+
+  liveExecutedOrderCount(): number {
+    return this.liveAllOrderRows().filter((row) => this.isExecutedOrder(row)).length;
+  }
+
+  liveTriggerOrderCount(): number {
+    return this.liveAllOrderRows().filter((row) => this.isTriggerOrder(row)).length;
+  }
+
+  liveFilteredOrders() {
+    return this.liveAllOrderRows().filter((row) => {
+      if (this.liveOrderFilter === 'pending') return this.isPendingOrder(row);
+      if (this.liveOrderFilter === 'executed') return this.isExecutedOrder(row);
+      return this.isTriggerOrder(row);
+    });
+  }
+
+  livePositionLtp(row: { lastPrice: number; averagePrice: number; quantity: number }): number | null {
+    return row.lastPrice > 0 ? row.lastPrice : null;
+  }
+
+  livePositionLtpChange(row: { lastPrice: number; averagePrice: number; quantity: number }): { points: number; percent: number } | null {
+    if (row.quantity === 0 || row.lastPrice <= 0 || row.averagePrice <= 0) {
+      return null;
+    }
+    const points = row.lastPrice - row.averagePrice;
+    return { points, percent: (points / row.averagePrice) * 100 };
+  }
+
+  liveOrderLtp(symbol: string): number | null {
+    const position = (this.liveAgent?.brokerPositions ?? []).find((row) => row.tradingSymbol === symbol);
+    return position && position.lastPrice > 0 ? position.lastPrice : null;
+  }
+
+  liveOrderLtpChange(symbol: string, tradedPrice: number): { points: number; percent: number } | null {
+    const ltp = this.liveOrderLtp(symbol);
+    if (ltp == null || tradedPrice <= 0) {
+      return null;
+    }
+    const points = ltp - tradedPrice;
+    return { points, percent: (points / tradedPrice) * 100 };
+  }
+
+  formatLiveSymbol(symbol: string): { title: string; subtitle: string; right: string } {
+    const match = symbol.match(/^([A-Z]+)(\d{2})([A-Z]{3})(\d+)(CE|PE)$/i);
+    if (!match) {
+      return { title: symbol, subtitle: '', right: '' };
+    }
+    return {
+      title: match[1],
+      subtitle: `${match[2]} ${match[3]} ${match[4]}`,
+      right: match[5].toUpperCase(),
+    };
+  }
+
+  liveOrderStatusLabel(status: string): string {
+    const normalized = status.trim().toUpperCase();
+    if (normalized.includes('COMPLETE') || normalized.includes('FILLED')) {
+      return 'Executed';
+    }
+    if (normalized.includes('CANCEL')) {
+      return 'Cancelled';
+    }
+    if (normalized.includes('REJECT')) {
+      return 'Rejected';
+    }
+    if (normalized.includes('TRIGGER')) {
+      return 'Trigger pending';
+    }
+    return status || 'Pending';
+  }
+
+  isPendingOrder(order: { status: string; filledQuantity: number; quantity: number; orderType: string }): boolean {
+    const status = order.status.trim().toUpperCase();
+    if (this.isExecutedOrder(order) || this.isTriggerOrder(order)) {
+      return false;
+    }
+    return status.includes('OPEN') || status.includes('PENDING') || status.includes('AMO') || order.filledQuantity < order.quantity;
+  }
+
+  isExecutedOrder(order: { status: string; filledQuantity: number; quantity: number }): boolean {
+    const status = order.status.trim().toUpperCase();
+    return status.includes('COMPLETE') || status.includes('FILLED')
+      || (order.quantity > 0 && order.filledQuantity >= order.quantity);
+  }
+
+  isTriggerOrder(order: { status: string; orderType: string }): boolean {
+    const type = order.orderType.trim().toUpperCase();
+    const status = order.status.trim().toUpperCase();
+    return type.includes('SL') || type.includes('TRIGGER') || type.includes('STOP') || status.includes('TRIGGER');
+  }
+
+  onBrokerProviderChange(): void {
+    if (this.brokerConnected) {
+      return;
+    }
     this.otpRequested = false;
     this.otp = '';
-    this.brokerMessage = this.brokerConnected
-      ? 'Clearing old session and requesting a new OTP…'
-      : 'Requesting OTP from m.Stock…';
-    const start = this.brokerConnected
-      ? this.http.post<{ connected?: boolean; message?: string }>('/api/broker/session/clear', {})
-      : of({ connected: false });
-    start.pipe(switchMap(() => this.http.post<{ status?: string; message?: string }>('/api/broker/otp/send', {}))).subscribe({
-      next: (res) => {
-        this.brokerBusy = false;
-        this.brokerConnected = false;
-        if (res.status === 'success') {
-          this.otpRequested = true;
-          this.brokerMessage = 'OTP sent. Enter the code below and click Submit OTP.';
-          return;
-        }
-        this.brokerMessage = res.message || 'Could not request OTP.';
-      },
-      error: () => {
-        this.brokerBusy = false;
-        this.brokerMessage = 'OTP request failed. Is the backend running?';
-      },
+    this.brokerMessage = 'Click Request OTP, then enter the code from your phone.';
+    this.bumpView();
+  }
+
+  private brokerHttpErrorMessage(err: unknown, brokerLabel: string): string {
+    if (err && typeof err === 'object' && 'name' in err && (err as { name: string }).name === 'TimeoutError') {
+      return `${brokerLabel} request timed out. SMS may still arrive — enter the code if you received it.`;
+    }
+    if (err instanceof HttpErrorResponse) {
+      if (err.status === 404) {
+        return `${brokerLabel} login API not found (404). Restart the backend from the latest code — your running API on port 45211 is outdated.`;
+      }
+      if (err.status === 0) {
+        return `Cannot reach the backend (port 45211). Run start-app.ps1 or restart the backend window, then use http://127.0.0.1:45212 (not a file:// URL).`;
+      }
+      if (err.status === 504 || err.status === 408) {
+        return `${brokerLabel} request timed out. The server may still have triggered SMS.`;
+      }
+      const body = err.error as { message?: string } | null;
+      if (body?.message) {
+        return body.message;
+      }
+      return `${brokerLabel} request failed (HTTP ${err.status}).`;
+    }
+    return `${brokerLabel} connect failed. Is the backend running on port 45211?`;
+  }
+
+  private focusBrokerOtpInput(): void {
+    queueMicrotask(() => {
+      const input = document.querySelector<HTMLInputElement>('input.broker-otp-input:not([disabled])');
+      input?.focus();
+      input?.select();
     });
+  }
+
+  requestBrokerOtp(): void {
+    if (this.brokerConnected) {
+      return;
+    }
+    this.brokerProvider = 'mstock';
+    // Keep entry open for the whole OTP flow (SMS can arrive even if HTTP times out).
+    this.otpRequested = true;
+    this.brokerBusy = true;
+    this.otp = '';
+    this.brokerMessage = 'Requesting OTP from m.Stock…';
+    this.bumpView();
+    this.http
+      .post<{ status?: string; message?: string }>('/api/broker/otp/send', {})
+      .pipe(timeout(90_000))
+      .subscribe({
+        next: (res) => {
+          this.brokerBusy = false;
+          this.brokerConnected = false;
+          this.brokerAvailableFunds = null;
+          this.brokerUtilizedFunds = null;
+          this.otpRequested = true;
+          if (brokerOtpSendSucceeded(res)) {
+            this.brokerMessage = 'OTP sent. Enter the code below and click Submit OTP.';
+            this.focusBrokerOtpInput();
+          } else {
+            this.brokerMessage =
+              (res.message || 'Broker did not confirm OTP delivery.')
+              + ' If you already received SMS, enter the code and click Submit.';
+            this.focusBrokerOtpInput();
+          }
+          this.bumpView();
+        },
+        error: (err: unknown) => {
+          this.brokerBusy = false;
+          this.otpRequested = true;
+          this.brokerMessage =
+            this.brokerHttpErrorMessage(err, 'OTP')
+            + ' If you received SMS, enter the code and click Submit.';
+          this.bumpView();
+          this.focusBrokerOtpInput();
+        },
+      });
   }
 
   submitBrokerOtp(): void {
@@ -717,43 +2098,122 @@ export class AppComponent implements OnInit, AfterViewChecked {
       return;
     }
     this.brokerBusy = true;
-    this.http.post<{ status?: string; connected?: boolean; message?: string }>('/api/broker/otp/verify', { otp: code }).subscribe({
+    this.brokerMessage = 'Verifying OTP with m.Stock…';
+    this.bumpView();
+    this.http
+      .post<{ status?: string; connected?: boolean; message?: string }>('/api/broker/otp/verify', { otp: code })
+      .pipe(
+        timeout(45_000),
+        finalize(() => {
+          this.brokerBusy = false;
+          this.bumpView();
+        }),
+      )
+      .subscribe({
       next: (res) => {
-        this.brokerBusy = false;
-        this.otp = '';
-        this.otpRequested = false;
         this.brokerConnected = !!res.connected;
+        if (this.brokerConnected) {
+          this.otp = '';
+          this.otpRequested = false;
+        } else {
+          this.otpRequested = true;
+        }
         this.brokerMessage = res.message || (this.brokerConnected ? 'Live market prices active.' : 'OTP submit failed.');
+        if (this.brokerConnected) {
+          this.closeBrokerHub();
+          this.pollBrokerSession();
+          this.reload.next();
+        } else {
+          this.brokerAvailableFunds = null;
+          this.brokerUtilizedFunds = null;
+          this.focusBrokerOtpInput();
+        }
+        this.bumpView();
       },
-      error: () => {
-        this.brokerBusy = false;
-        this.brokerMessage = 'OTP submit failed.';
+      error: (err: unknown) => {
+        this.otpRequested = true;
+        this.brokerMessage = this.brokerHttpErrorMessage(err, 'OTP submit');
+        this.focusBrokerOtpInput();
       },
     });
   }
 
-  private refreshSession(): void {
-    this.http.get<{ connected?: boolean }>('/api/broker/session').subscribe({
-      next: (res) => (this.brokerConnected = !!res.connected),
-      error: () => (this.brokerConnected = false),
-    });
+  private startBrokerSessionPoll(): void {
+    this.pollBrokerSessionRequest().subscribe((res) => this.applyBrokerSession(res));
+    interval(10_000)
+      .pipe(
+        exhaustMap(() => this.pollBrokerSessionRequest()),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((res) => this.applyBrokerSession(res));
+  }
+
+  private pollBrokerSession(): void {
+    this.pollBrokerSessionRequest().subscribe((res) => this.applyBrokerSession(res));
+  }
+
+  private pollBrokerSessionRequest(): Observable<{
+    connected?: boolean;
+    provider?: string | null;
+    displayName?: string | null;
+    availableFunds?: number | null;
+    utilizedFunds?: number | null;
+  }> {
+    return this.http
+      .get<{
+        connected?: boolean;
+        provider?: string | null;
+        displayName?: string | null;
+        availableFunds?: number | null;
+        utilizedFunds?: number | null;
+      }>('/api/broker/session')
+      .pipe(timeout(8_000), catchError(() => of({ connected: false })));
+  }
+
+  private applyBrokerSession(res: {
+    connected?: boolean;
+    provider?: string | null;
+    displayName?: string | null;
+    availableFunds?: number | null;
+    utilizedFunds?: number | null;
+  }): void {
+    const wasConnected = this.brokerConnected;
+    this.brokerConnected = !!res.connected;
+    if (this.brokerConnected && !wasConnected) {
+      this.closeBrokerHub();
+      this.loadedChartName = '';
+      this.lastChart = undefined;
+      this.scheduleChartLoad();
+    }
+    if (res.provider === 'mstock') {
+      this.brokerProvider = 'mstock';
+    }
+    if (res.displayName) {
+      this.brokerDisplayName = res.displayName;
+    }
+    if (this.brokerConnected) {
+      this.brokerAvailableFunds = res.availableFunds ?? this.brokerAvailableFunds;
+      this.brokerUtilizedFunds = res.utilizedFunds ?? this.brokerUtilizedFunds;
+      if (!this.otpRequested && !this.brokerBusy) {
+        this.brokerMessage = `Connected to ${this.brokerDisplayName}. Live market prices active.`;
+      }
+      this.bumpView();
+      return;
+    }
+
+    this.brokerAvailableFunds = null;
+    this.brokerUtilizedFunds = null;
+    if (!this.otpRequested && !this.brokerBusy) {
+      this.onBrokerProviderChange();
+    }
+    this.bumpView();
   }
 
   retry(): void {
     this.state = 'loading';
+    this.lastAppliedBoardKey = '';
     this.reload.next();
-  }
-
-  ngAfterViewChecked(): void {
-    const key = this.chartRequestKey();
-    const host = this.chartHost?.nativeElement;
-    if (!host || !this.pendingChartName || key === this.loadedChartName || this.chartBusy) {
-      return;
-    }
-    if (host.clientWidth < 16 || host.clientHeight < 16) {
-      return;
-    }
-    this.loadChart(this.pendingChartName, this.chartInterval);
+    this.bumpView();
   }
 
   setChartInterval(id: string): void {
@@ -762,6 +2222,8 @@ export class AppComponent implements OnInit, AfterViewChecked {
     this.drawTool = 'none';
     this.trendFrom = undefined;
     this.drawingStatus = '';
+    this.scheduleChartLoad();
+    this.bumpView();
   }
 
   clearDrawings(): void {
@@ -832,10 +2294,17 @@ export class AppComponent implements OnInit, AfterViewChecked {
   }
 
   select(symbol: SymbolSnapshot): void {
-    this.centerView = 'market';
+    if (this.centerView !== 'trades' && this.centerView !== 'strategies') {
+      this.centerView = 'market';
+    }
     this.selectedName = symbol.name;
     this.selected = symbol;
     this.pendingChartName = symbol.name;
+    if (this.tradePanelTab === 'paper' && !this.isIndex(symbol.name)) {
+      this.zoneBacktestReload.next();
+    }
+    this.scheduleChartLoad();
+    this.bumpView();
   }
 
   selectIndex(name: string): void {
@@ -862,19 +2331,15 @@ export class AppComponent implements OnInit, AfterViewChecked {
   }
 
   selling(): SymbolSnapshot[] {
-    return (this.boardData?.symbols.filter((s) => s.mark === 'SELLING' && !this.isIndex(s.name)) ?? [])
-      .slice()
-      .sort((a, b) => a.last - a.s1 - (b.last - b.s1));
+    return this.railLists.selling;
   }
 
   buying(): SymbolSnapshot[] {
-    return (this.boardData?.symbols.filter((s) => s.mark === 'BUYING' && !this.isIndex(s.name)) ?? [])
-      .slice()
-      .sort((a, b) => b.last - b.b1 - (a.last - a.b1));
+    return this.railLists.buying;
   }
 
   ranged(): SymbolSnapshot[] {
-    return this.boardData?.symbols.filter((s) => s.mark === 'RANGE BOUND' && !this.isIndex(s.name)) ?? [];
+    return this.railLists.ranged;
   }
 
   zoneLines(symbol: SymbolSnapshot): Array<{ k: ZoneKey; v: number }> {
@@ -925,32 +2390,172 @@ export class AppComponent implements OnInit, AfterViewChecked {
   }
 
   private apply(data: BoardResponse): void {
-    this.clock = new Date();
-    this.boardData = data;
-    if (!data.symbols.length) {
-      this.state = 'empty';
-      this.selected = null;
+    const boardKey = `${this.boardSymbolsRevision(data.symbols)}|${data.feed}`;
+    const boardChanged = boardKey !== this.lastAppliedBoardKey || this.state !== 'ready';
+    if (boardChanged) {
+      this.lastAppliedBoardKey = boardKey;
+      this.ingestBoard(data);
+      if (!data.symbols.length) {
+        this.state = 'empty';
+        this.selected = null;
+        this.bumpView();
+        return;
+      }
+      this.state = 'ready';
+      const preferred = this.marketKind === 'options' ? this.optionUnderlying : this.selectedName;
+      const preferredRow =
+        this.boardData?.symbols.find((s) => s.name === preferred) ?? this.boardData!.symbols[0];
+      if (this.selected?.name === preferredRow.name) {
+        Object.assign(this.selected, preferredRow);
+      } else {
+        this.selected = preferredRow;
+        this.selectedName = preferredRow.name;
+        this.pendingChartName = preferredRow.name;
+        this.scheduleChartLoad();
+      }
+      this.applyBrokerMessageFromBoardFeed(data);
+      this.refreshOptionContractRails();
+      this.bumpView();
+    }
+    this.ngZone.runOutsideAngular(() => {
+      this.syncLiveChart();
+    });
+    if (boardChanged) {
+      this.scheduleChartLoad();
+    }
+  }
+
+  private bumpView(): void {
+    this.cdr.markForCheck();
+  }
+
+  ngAfterViewInit(): void {
+    this.scheduleChartLoad();
+  }
+
+  private scheduleChartLoad(): void {
+    if (this.centerView !== 'market' || this.state !== 'ready') {
       return;
     }
-    this.state = 'ready';
-    const preferred = this.marketKind === 'options' ? this.optionUnderlying : this.selectedName;
-    this.selected = data.symbols.find((s) => s.name === preferred) ?? data.symbols[0];
-    this.selectedName = this.selected.name;
-    this.pendingChartName = this.selected.name;
-    this.brokerConnected = brokerConnectedFromFeed(data.feed);
+    const key = this.chartRequestKey();
+    const hasInstrument =
+      (this.marketKind === 'options' && !!this.openedOption) || !!this.pendingChartName;
+    if (!hasInstrument || key === this.loadedChartName || this.chartBusy) {
+      return;
+    }
+    cancelAnimationFrame(this.chartLoadFrame);
+    this.chartLoadFrame = requestAnimationFrame(() => {
+      this.chartLoadFrame = 0;
+      const host = this.chartHost?.nativeElement;
+      const instrumentReady =
+        (this.marketKind === 'options' && !!this.openedOption) || !!this.pendingChartName;
+      if (!host || !instrumentReady || this.chartRequestKey() !== key || this.chartBusy) {
+        return;
+      }
+      if (host.clientWidth < 16 || host.clientHeight < 16) {
+        this.scheduleChartLoad();
+        return;
+      }
+      if (key === this.loadedChartName) {
+        return;
+      }
+      this.loadChart(this.pendingChartName, this.chartInterval);
+    });
+  }
+
+  private ingestBoard(data: BoardResponse): void {
+    const rev = this.boardSymbolsRevision(data.symbols);
+    if (!this.boardData) {
+      this.boardData = {
+        counts: data.counts,
+        updatedAt: data.updatedAt,
+        feed: data.feed,
+        symbols: data.symbols.map((symbol) => ({ ...symbol })),
+      };
+      this.boardSymbolsRev = rev;
+      this.refreshRailLists();
+      return;
+    }
+
+    this.boardData.counts = data.counts;
+    this.boardData.updatedAt = data.updatedAt;
+    this.boardData.feed = data.feed;
+    const existingByName = new Map(this.boardData.symbols.map((symbol) => [symbol.name, symbol]));
+    this.boardData.symbols = data.symbols.map((incoming) => {
+      const existing = existingByName.get(incoming.name);
+      if (existing) {
+        Object.assign(existing, incoming);
+        return existing;
+      }
+      return { ...incoming };
+    });
+    if (rev !== this.boardSymbolsRev) {
+      this.boardSymbolsRev = rev;
+      this.refreshRailLists();
+    }
+  }
+
+  private boardSymbolsRevision(symbols: SymbolSnapshot[]): string {
+    return symbols
+      .map((symbol) => `${symbol.name}:${symbol.mark}:${symbol.last}:${symbol.b1}:${symbol.s1}`)
+      .join('|');
+  }
+
+  private refreshRailLists(): void {
+    const symbols = this.boardData?.symbols ?? [];
+    this.railLists.selling = symbols
+      .filter((symbol) => symbol.mark === 'SELLING' && !this.isIndex(symbol.name))
+      .sort((a, b) => a.last - a.s1 - (b.last - b.s1));
+    this.railLists.buying = symbols
+      .filter((symbol) => symbol.mark === 'BUYING' && !this.isIndex(symbol.name))
+      .sort((a, b) => b.last - b.b1 - (a.last - a.b1));
+    this.railLists.ranged = symbols.filter(
+      (symbol) => symbol.mark === 'RANGE BOUND' && !this.isIndex(symbol.name),
+    );
+  }
+
+  private shouldReplacePaperAgent(snapshot: PaperAgentSnapshot): boolean {
+    const current = this.paperAgent;
+    if (!current) {
+      return true;
+    }
+    if (snapshot.updatedAt !== current.updatedAt) {
+      return true;
+    }
+    if (snapshot.state !== current.state || snapshot.running !== current.running) {
+      return true;
+    }
+    if (snapshot.totalPnl !== current.totalPnl || snapshot.positions.length !== current.positions.length) {
+      return true;
+    }
+    return (
+      (snapshot.recentDecisions?.length ?? 0) !== (current.recentDecisions?.length ?? 0) ||
+      (snapshot.messages?.length ?? 0) !== (current.messages?.length ?? 0)
+    );
+  }
+
+  private applyBrokerMessageFromBoardFeed(data: BoardResponse): void {
+    let next = this.brokerMessage;
     if (data.feed.includes('session expired')) {
       this.brokerConnected = false;
-      this.otpRequested = false;
-      this.brokerMessage = 'Session expired. Click Request OTP, then submit the new code.';
+      this.brokerAvailableFunds = null;
+      this.brokerUtilizedFunds = null;
+      if (preserveBrokerOtpEntry(data.feed, this.otpRequested, this.brokerBusy)) {
+        next = 'OTP sent. Enter the code below and click Submit OTP.';
+      } else if (!this.otpRequested && !this.brokerBusy) {
+        next = 'Session expired. Click Request OTP, then submit the new code.';
+      }
     } else if (data.feed.includes('quotes empty')) {
-      this.brokerConnected = false;
-      this.brokerMessage = 'Connected but quotes empty. Retry Request OTP or wait for market hours.';
-    } else if (this.brokerConnected) {
-      this.brokerMessage = 'Live market prices from m.Stock (no orders).';
-    } else if (data.feed.includes('awaiting m.Stock OTP') && !this.otpRequested && !this.brokerBusy) {
-      this.brokerMessage = 'Step 1: click Request OTP. Step 2: enter the code from your phone and submit.';
+      next = 'Connected but quotes empty. Wait for market hours or reconnect with Request OTP.';
+    } else if (this.brokerConnected && !this.otpRequested && !this.brokerBusy) {
+      next = 'Connected. Live market prices active.';
+    } else if (data.feed.includes('awaiting broker login') && !this.otpRequested && !this.brokerBusy) {
+      this.onBrokerProviderChange();
+      next = this.brokerMessage;
     }
-    this.syncLiveChart();
+    if (next !== this.brokerMessage) {
+      this.brokerMessage = next;
+    }
   }
 
   private loadChart(name: string, interval: string): void {
@@ -965,16 +2570,31 @@ export class AppComponent implements OnInit, AfterViewChecked {
     this.chartRequest(name, interval).subscribe({
       next: (data) => {
         if (requestKey === this.chartRequestKey()) {
-          this.applyChartData(data, true);
+          const row = this.selected?.name === name ? this.selected : this.indexRow(name);
+          const payload =
+            data.candles.length > 0 || !row ? data : this.fallbackChart(name, row);
+          this.ngZone.runOutsideAngular(() => {
+            this.applyChartData(payload, true);
+          });
         }
         this.chartBusy = false;
+        this.bumpView();
       },
       error: () => {
         this.chartBusy = false;
-        this.loadedChartName = '';
-        if (this.marketKind === 'options' && this.openedOption) {
-          this.optionChartError = `No live m.Stock quote found for ${this.openedOption.label}. Try another expiry or strike.`;
+        const row = this.selected?.name === name ? this.selected : this.indexRow(name);
+        if (requestKey === this.chartRequestKey() && row && this.marketKind !== 'options') {
+          this.ngZone.runOutsideAngular(() => {
+            this.applyChartData(this.fallbackChart(name, row), true);
+          });
+        } else {
+          this.loadedChartName = '';
         }
+        if (this.marketKind === 'options' && this.openedOption) {
+          this.optionChartError = `No live ${this.brokerDisplayName} quote for ${this.openedOption.label}. Try another expiry or strike, or reconnect the broker.`;
+        }
+        this.scheduleChartLoad();
+        this.bumpView();
       },
     });
   }
@@ -1006,7 +2626,18 @@ export class AppComponent implements OnInit, AfterViewChecked {
   }
 
   private applyChartData(data: ChartResponse, remount: boolean): void {
-    if (remount || !this.candleSeries) {
+    const prevCount = this.lastChart?.candles.length ?? 0;
+    const nextCount = data.candles.length;
+    const istToday = todayIstDateKey();
+    const prevToday = countCandlesOnIstDate(this.lastChart?.candles ?? [], istToday);
+    const nextToday = countCandlesOnIstDate(data.candles, istToday);
+    const needsFullSeries =
+      remount ||
+      !this.candleSeries ||
+      (nextCount > 0 && nextCount < 16) ||
+      (prevCount > 0 && nextCount >= prevCount + 8) ||
+      nextToday > prevToday + 1;
+    if (needsFullSeries) {
       this.lastChart = { ...data, candles: [...data.candles] };
       this.mountChart(data);
       return;
@@ -1045,15 +2676,29 @@ export class AppComponent implements OnInit, AfterViewChecked {
       s1: this.selected.s1,
       s2: this.selected.s2,
     };
-    this.updateZonePriceLines(this.selected);
+    this.updateZonePriceLines(this.lastChart);
     this.updateIndicators();
   }
 
-  private updateZonePriceLines(symbol: SymbolSnapshot): void {
+  /** Board row is the source of truth for B1/B2/S/S1/S2 (same formula as chips). */
+  private chartZoneLevels(data: ChartResponse): Pick<ChartResponse, 'b2' | 'b1' | 's' | 's1' | 's2'> {
+    const row = this.selected?.name === data.name ? this.selected : this.indexRow(data.name);
+    const fromRow =
+      row && row.b1 > 0 && row.b2 > 0 && row.s1 > 0 && row.s2 > 0
+        ? { b2: row.b2, b1: row.b1, s: row.s, s1: row.s1, s2: row.s2 }
+        : null;
+    const fromChart =
+      data.b1 > 0 && data.b2 > 0 && data.s1 > 0 && data.s2 > 0
+        ? { b2: data.b2, b1: data.b1, s: data.s, s1: data.s1, s2: data.s2 }
+        : null;
+    return fromRow ?? fromChart ?? { b2: data.b2, b1: data.b1, s: data.s, s1: data.s1, s2: data.s2 };
+  }
+
+  private updateZonePriceLines(zones: Pick<ChartResponse, 'b2' | 'b1' | 's' | 's1' | 's2'>): void {
     if (this.zonePriceLines.length !== 5) {
       return;
     }
-    const levels = [symbol.b2, symbol.b1, symbol.s, symbol.s1, symbol.s2];
+    const levels = [zones.b2, zones.b1, zones.s, zones.s1, zones.s2];
     for (let i = 0; i < this.zonePriceLines.length; i++) {
       this.zonePriceLines[i].applyOptions({ price: levels[i] });
     }
@@ -1090,10 +2735,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
       this.candleSeries.setData(candles);
     }
     this.lastChart = { ...data, candles: [...data.candles] };
-    const row = this.selected ?? this.indexRow(data.name);
-    if (row) {
-      this.updateZonePriceLines(row);
-    }
+    this.updateZonePriceLines(this.chartZoneLevels(data));
     this.updateSessionMarkers(data);
     this.updateIndicators();
   }
@@ -1136,6 +2778,8 @@ export class AppComponent implements OnInit, AfterViewChecked {
     }
     this.tvChart?.remove();
     this.chartResize?.disconnect();
+    this.lastIndicatorCandleKey = '';
+    this.sessionMarkerKey = '';
     this.trendFrom = undefined;
     this.zonePriceLines = [];
     this.indicatorSeries.clear();
@@ -1144,19 +2788,20 @@ export class AppComponent implements OnInit, AfterViewChecked {
     this.crosshairCandle = undefined;
     const width = Math.max(host.clientWidth, 320);
     const height = Math.max(host.clientHeight, 360);
+    const theme = resolveThemePalette(this.themeSelection);
     this.tvChart = tv.createChart(host, {
       width,
       height,
-      layout: { background: { color: '#131313' }, textColor: '#d1d4dc' },
-      grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
-      rightPriceScale: { borderColor: '#363a45', scaleMargins: { top: 0.08, bottom: 0.08 } },
+      layout: { background: { color: theme.chartBg }, textColor: theme.chartText },
+      grid: { vertLines: { color: theme.chartGrid }, horzLines: { color: theme.chartGrid } },
+      rightPriceScale: { borderColor: theme.chartGrid, scaleMargins: { top: 0.08, bottom: 0.08 } },
       timeScale: {
-        borderColor: '#363a45',
+        borderColor: theme.chartGrid,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 6,
-        barSpacing: 6,
-        minBarSpacing: 2,
+        barSpacing: 8,
+        minBarSpacing: 4,
         fixLeftEdge: false,
         fixRightEdge: false,
         tickMarkFormatter: (time: number, tickMarkType: number) =>
@@ -1192,8 +2837,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
       }))
       .filter((c) => c.open > 0 && c.high >= c.low);
     this.candleSeries.setData(candles);
-    const row = this.selected ?? this.indexRow(data.name);
-    const zones = row ?? data;
+    const zones = this.chartZoneLevels(data);
     const lines = this.openedOption ? [] : [
       { price: Number(zones.b2), color: '#238636', title: 'B2' },
       { price: Number(zones.b1), color: '#3fb950', title: 'B1' },
@@ -1220,10 +2864,11 @@ export class AppComponent implements OnInit, AfterViewChecked {
     this.loadDrawings();
     this.renderDrawings();
     this.tvChart.timeScale().fitContent();
-    this.tvChart.timeScale().scrollToRealTime();
     this.tvChart.subscribeClick((param) => this.onChartClick(param));
     this.tvChart.subscribeCrosshairMove((param) => this.onCrosshairMove(param));
-    this.syncLiveChart();
+    this.ngZone.runOutsideAngular(() => {
+      this.syncLiveChart();
+    });
   }
 
   private createIndicatorSeries(): void {
@@ -1252,6 +2897,15 @@ export class AppComponent implements OnInit, AfterViewChecked {
   }
 
   private updateIndicators(candles = this.lastChart?.candles ?? []): void {
+    const last = candles.at(-1);
+    const candleKey = last ? `${candles.length}:${last.close}:${last.high}:${last.low}` : '';
+    const activeKey = [...this.activeIndicators].sort().join(',');
+    const revision = `${activeKey}|${candleKey}`;
+    if (revision === this.lastIndicatorCandleKey) {
+      return;
+    }
+    this.lastIndicatorCandleKey = revision;
+
     const definitions: Record<IndicatorKind, { period: number; kind: 'sma' | 'ema' }> = {
       sma20: { period: 20, kind: 'sma' },
       sma50: { period: 50, kind: 'sma' },
@@ -1272,8 +2926,14 @@ export class AppComponent implements OnInit, AfterViewChecked {
     if (!this.candleSeries) {
       return;
     }
+    const bars = sessionStartBars(data.candles);
+    const key = bars.map((bar) => bar.time).join(',');
+    if (key === this.sessionMarkerKey) {
+      return;
+    }
+    this.sessionMarkerKey = key;
     this.candleSeries.setMarkers(
-      sessionStartBars(data.candles).map((bar) => ({
+      bars.map((bar) => ({
         time: bar.time,
         position: 'belowBar',
         color: '#787b86',
@@ -1303,6 +2963,7 @@ export class AppComponent implements OnInit, AfterViewChecked {
       low: value.low,
       close: value.close,
     };
+    this.bumpView();
   }
 
   private loadDrawings(): void {

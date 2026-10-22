@@ -1,0 +1,284 @@
+<section class="strategies-page" aria-label="Live strategy recommendations">
+  <header class="strategies-hero">
+    <div>
+      <h1>Strategies</h1>
+      <p>Live 15m signals (09:20–15:10 IST). Zone strategies roll out in phases: monitor → paper auto → verify P&amp;L here before live.</p>
+    </div>
+    @if (feed?.updatedAt) {
+      <small class="feed-updated">Updated {{ feed!.updatedAt | date: 'HH:mm:ss':'+0530' }} IST</small>
+    }
+  </header>
+
+  @if (paperMessage) {
+    <p class="paper-action-msg">{{ paperMessage }}</p>
+  }
+
+  @if (zoneRollout) {
+    <section class="zone-rollout-board" aria-label="Zone strategy rollout">
+      <header class="zone-rollout-head">
+        <div>
+          <h2>Rollout policy</h2>
+          <p>
+            Based on {{ zoneRollout.lookbackDays }}d backtest (≥{{ zoneRollout.minWinRatePercent }}% win, ≥{{ zoneRollout.minSamples }} samples).
+            {{ zoneRollout.liveTradingNote }}
+          </p>
+        </div>
+        <small class="zone-rollout-version">Policy {{ zoneRollout.policyVersion }}</small>
+      </header>
+      <div class="strategy-pnl-table-wrap">
+        <table class="strategy-pnl-table zone-rollout-table">
+          <thead>
+            <tr>
+              <th scope="col">Strategy</th>
+              <th scope="col">Index</th>
+              <th scope="col">Phase</th>
+              <th scope="col">Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of zoneRollout.rows; track row.strategyCode + row.index) {
+              <tr>
+                <td>{{ row.strategyLabel }}</td>
+                <td>{{ row.index }}</td>
+                <td>
+                  <span class="rollout-phase" [class.rollout-phase-auto]="row.phase === 'paper_auto'" [class.rollout-phase-monitor]="row.phase === 'monitor'">
+                    {{ rolloutPhaseLabel(row.phase) }}
+                  </span>
+                </td>
+                <td class="rollout-reason">{{ row.reason }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  }
+
+  <section class="strategy-pnl-board" aria-label="Profit and loss by strategy">
+    <header class="strategy-pnl-head">
+      <div>
+        <h2>P&amp;L by strategy</h2>
+        <p>Paper trades grouped by the strategy that executed them. More analytics will be added here later.</p>
+      </div>
+      <div class="strategy-pnl-range" role="group" aria-label="Time range">
+        <button type="button" [class.active]="pnlRange === 'today'" (click)="setPnlRange('today')">1 Day</button>
+        <button type="button" [class.active]="pnlRange === '1w'" (click)="setPnlRange('1w')">1 Week</button>
+        <button type="button" [class.active]="pnlRange === '1m'" (click)="setPnlRange('1m')">1 Month</button>
+      </div>
+    </header>
+    <div class="strategy-pnl-summary">
+      <span>Realized P&amp;L <b [class.up]="strategyPnlSummary().realizedPnl >= 0" [class.down]="strategyPnlSummary().realizedPnl < 0">₹{{ strategyPnlSummary().realizedPnl | number: '1.2-2' }}</b></span>
+      <span>Closed <b>{{ strategyPnlSummary().closedTrades }}</b></span>
+      <span>Positive <b class="up">{{ strategyPnlSummary().winningTrades }}</b></span>
+      <span>Losses <b class="down">{{ strategyPnlSummary().losingTrades }}</b></span>
+      <span>Open <b>{{ strategyPnlSummary().openTrades }}</b></span>
+    </div>
+    @if (pnlLoading && !strategyPnlBreakdown().length) {
+      <p class="strategies-msg">Loading strategy P&amp;L…</p>
+    } @else if (!strategyPnlBreakdown().length) {
+      <p class="strategies-msg">No catalog strategy trades in this period.</p>
+    } @else {
+      <div class="strategy-pnl-table-wrap">
+        <table class="strategy-pnl-table">
+          <thead>
+            <tr>
+              <th scope="col">Strategy</th>
+              <th scope="col" class="num">Closed</th>
+              <th scope="col" class="num">Wins</th>
+              <th scope="col" class="num">Losses</th>
+              <th scope="col" class="num">Open</th>
+              <th scope="col" class="num">Realized P&amp;L (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of strategyPnlBreakdown(); track row.strategy) {
+              <tr
+                class="strategy-pnl-row"
+                [class.active]="strategyPnlFilter === row.strategy"
+                [class.strategy-pnl-row-win]="row.realizedPnl > 0"
+                [class.strategy-pnl-row-loss]="row.realizedPnl < 0"
+              >
+                <td>
+                  <button
+                    type="button"
+                    class="strategy-pnl-name"
+                    [title]="row.strategy"
+                    (click)="toggleStrategyPnlFilter(row.strategy)"
+                  >
+                    {{ row.label }}
+                  </button>
+                </td>
+                <td class="num">{{ row.closed }}</td>
+                <td class="num up">{{ row.wins }}</td>
+                <td class="num down">{{ row.losses }}</td>
+                <td class="num">{{ row.open }}</td>
+                <td class="num strategy-pnl-amount" [class.up]="row.realizedPnl > 0" [class.down]="row.realizedPnl < 0">
+                  {{ row.realizedPnl | number: '1.2-2' }}
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+      @if (strategyPnlFilter) {
+        <div class="strategy-pnl-preview-head">
+          <strong>Trades · {{ strategyFilterLabel() }}</strong>
+          <button type="button" class="strategy-pnl-clear" (click)="clearStrategyPnlFilter()">Clear filter</button>
+        </div>
+        <ul class="strategy-pnl-preview">
+          @for (t of strategyPnlTradesPreview(); track t.id) {
+            <li>
+              <strong>{{ t.underlying }}</strong>
+              · {{ t.status }}
+              @if (t.pnl != null) {
+                · P&amp;L <span [class.up]="t.pnl > 0" [class.down]="t.pnl < 0">₹{{ t.pnl | number: '1.2-2' }}</span>
+              }
+              @if (t.exitReason) { · {{ t.exitReason }} }
+            </li>
+          }
+        </ul>
+        <p class="strategy-pnl-footnote">Full trade log with dates and qty is under <strong>Trade Details → Trade History</strong>.</p>
+      }
+    }
+  </section>
+
+  @if (loading && !feed) {
+    <p class="strategies-msg">Scanning market for strategy setups…</p>
+  } @else if (error && !feed) {
+    <p class="strategies-msg strategies-error">{{ error }}</p>
+  } @else {
+    <section class="live-section" aria-label="Live recommendations">
+      <h2>Live now</h2>
+      @if (liveRecommendations().length === 0) {
+        <p class="live-empty">No strategy is firing right now. This page refreshes every few seconds during the session.</p>
+      } @else {
+        <div class="live-grid">
+          @for (rec of liveRecommendations(); track rec.id) {
+            <article class="live-card">
+              <header>
+                <span class="live-badge">Happening now</span>
+                <strong>{{ rec.strategyName }}</strong>
+                <span class="live-symbol">{{ rec.symbol }} · {{ rec.direction }}</span>
+              </header>
+              <p class="live-headline">{{ rec.headline }}</p>
+              <ul class="live-why">
+                @for (line of rec.whyNow; track line) {
+                  <li>{{ line }}</li>
+                }
+              </ul>
+              <div class="live-levels">
+                <span>Entry <b>{{ rec.entryPrice | number: '1.2-2' }}</b></span>
+                <span>Stop <b class="down">{{ rec.stopLoss | number: '1.2-2' }}</b></span>
+                <span>Target <b class="up">{{ rec.target | number: '1.2-2' }}</b></span>
+                <span>R:R <b>{{ rec.rewardRisk | number: '1.2-2' }}</b></span>
+              </div>
+              <div class="live-pnl">
+                <span class="up">{{ rec.ifTargetHit[0] }}</span>
+                <span class="down">{{ rec.ifStopHit[0] }}</span>
+              </div>
+              <button
+                type="button"
+                class="paper-trade-btn"
+                [disabled]="paperBusy || !rec.canPaperTrade"
+                (click)="takePaperTrade(rec)"
+              >
+                Execute paper trade
+              </button>
+            </article>
+          }
+        </div>
+      }
+    </section>
+
+    @if (trackRecord) {
+      <section class="month-track" aria-label="Monthly paper track record">
+        <header class="month-track-head">
+          <h2>{{ trackRecord.monthLabel }} — paper track record</h2>
+          <p>
+            Every auto or manual strategy paper trade is logged with strategy, reason, live capital estimate,
+            max profit, and max loss so you can review performance after a full month.
+          </p>
+        </header>
+        <div class="month-overall">
+          <span>Trades <b>{{ trackRecord.overall.trades }}</b></span>
+          <span>Closed <b>{{ trackRecord.overall.closedTrades }}</b></span>
+          <span>Win rate <b>{{ trackRecord.overall.winRatePercent | number: '1.0-1' }}%</b></span>
+          <span>P&amp;L <b [class.up]="trackRecord.overall.realizedPnl > 0" [class.down]="trackRecord.overall.realizedPnl < 0">₹{{ trackRecord.overall.realizedPnl | number: '1.0-0' }}</b></span>
+          <span>Peak live capital <b>₹{{ trackRecord.overall.peakLiveCapital | number: '1.0-0' }}</b></span>
+        </div>
+        <div class="month-table" role="table">
+          <div class="month-table-head" role="row">
+            <span>Strategy</span>
+            <span>Trades</span>
+            <span>Win %</span>
+            <span>P&amp;L</span>
+            <span>Max loss (sum)</span>
+            <span>Max profit (sum)</span>
+            <span>Live capital (peak)</span>
+          </div>
+          @for (row of trackRecord.byStrategy; track row.strategyId) {
+            <div class="month-table-row" role="row" [class.month-table-row-muted]="row.trades === 0">
+              <span>{{ row.strategyName }}</span>
+              <span>{{ row.trades }}</span>
+              <span>{{ row.winRatePercent | number: '1.0-1' }}%</span>
+              <span [class.up]="row.realizedPnl > 0" [class.down]="row.realizedPnl < 0">₹{{ row.realizedPnl | number: '1.0-0' }}</span>
+              <span class="down">₹{{ row.totalMaxRisk | number: '1.0-0' }}</span>
+              <span class="up">₹{{ row.totalMaxReward | number: '1.0-0' }}</span>
+              <span>₹{{ row.peakLiveCapital | number: '1.0-0' }}</span>
+            </div>
+          }
+        </div>
+        @if (catalogTradesThisMonth().length) {
+          <details class="month-trades-log">
+            <summary>Catalog strategy trades this month ({{ catalogTradesThisMonth().length }})</summary>
+            <ul>
+              @for (t of catalogTradesThisMonth(); track t.id) {
+                <li>
+                  <strong>{{ t.strategy }} · {{ t.underlying }}</strong>
+                  · {{ t.status }}
+                  @if (t.pnl != null) { · P&amp;L ₹{{ t.pnl | number: '1.2-2' }} }
+                  @if (t.exitReason) { · {{ t.exitReason }} }
+                  @if (t.entryReason) {
+                    <div class="month-trade-why"><em>Why executed:</em> {{ t.entryReason }}</div>
+                  }
+                </li>
+              }
+            </ul>
+          </details>
+        }
+      </section>
+    }
+
+    <section class="strategy-tracker" aria-label="Strategy list">
+      <h2>Your strategies</h2>
+      @for (item of feed?.strategies ?? []; track item.id) {
+        <details class="strategy-row" [open]="statsExpanded(item.id)">
+          <summary (click)="toggleStats(item.id); $event.preventDefault()">
+            <span class="strategy-row-name">{{ item.name }}</span>
+            <span class="strategy-row-meta">{{ item.timeframe }} · {{ item.session }}</span>
+            <span class="strategy-row-count">This month: {{ monthlyCount(item.id) }} trades</span>
+          </summary>
+          <div class="strategy-row-body">
+            <p>{{ item.summary }}</p>
+            @if (monthlyStat(item.id); as stat) {
+              @if (stat.tradesThisMonth > 0) {
+                <p class="strategy-row-stats">
+                  Win {{ stat.winRatePercent | number: '1.0-1' }}%
+                  · P&amp;L ₹{{ stat.realizedPnl | number: '1.0-0' }}
+                  · peak live capital ₹{{ stat.peakLiveCapital | number: '1.0-0' }}
+                </p>
+              }
+            }
+            @if (liveForStrategy(item.id).length) {
+              <p class="strategy-row-live">Active on:
+                @for (r of liveForStrategy(item.id); track r.id) {
+                  <b>{{ r.symbol }}</b>
+                }
+              </p>
+            }
+          </div>
+        </details>
+      }
+    </section>
+  }
+</section>

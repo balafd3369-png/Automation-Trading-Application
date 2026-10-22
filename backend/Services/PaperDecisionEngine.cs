@@ -35,47 +35,6 @@ public interface IPaperStrategy
         IReadOnlyDictionary<string, decimal> previous);
 }
 
-public sealed class StockZoneLongStrategy : IPaperStrategy
-{
-    public IEnumerable<StrategyCandidate> Generate(
-        IReadOnlyList<MarketContextSnapshot> context,
-        IReadOnlyDictionary<string, decimal> previous)
-    {
-        foreach (var item in context.Where(x => x.InstrumentType == "STOCK"))
-        {
-            var b1Fact = item.Evidence.Facts.FirstOrDefault(x => x.StartsWith("B1=", StringComparison.Ordinal));
-            var stopFact = item.Evidence.Facts.FirstOrDefault(x => x.StartsWith("S=", StringComparison.Ordinal));
-            var targetFact = item.Evidence.Facts.FirstOrDefault(x => x.StartsWith("B2=", StringComparison.Ordinal));
-            if (!TryFact(b1Fact, out var b1) || !TryFact(stopFact, out var stop)
-                || !TryFact(targetFact, out var target) || !previous.TryGetValue(item.Symbol, out var prior)
-                || PaperTradeRules.DetectZoneCross(prior, item.Last, b1, decimal.MinValue) != PaperEntrySignal.Long)
-            {
-                continue;
-            }
-            var risk = item.Last - stop;
-            var reward = target - item.Last;
-            if (risk <= 0 || reward <= 0)
-            {
-                continue;
-            }
-            var evidence = new List<string> { $"price crossed B1 {b1:0.##}", $"zone={item.Evidence.Zone}" };
-            if (item.Evidence.Trend == "UP") evidence.Add("fast EMA above slow EMA");
-            if (item.Evidence.MomentumPercent > 0) evidence.Add("positive momentum");
-            yield return new StrategyCandidate(
-                "STOCK_ZONE_LONG", item.Symbol, "BULLISH", 55m + 10m * (evidence.Count - 2),
-                evidence, [new(item.Symbol, item.Symbol, "STOCK", "BUY", 1, item.Last, Quote: item.Quote)],
-                stop, target, risk, reward, item.Quote.DataTimestamp);
-        }
-    }
-
-    private static bool TryFact(string? fact, out decimal value)
-    {
-        value = 0;
-        return fact is not null
-            && decimal.TryParse(fact[(fact.IndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture, out value);
-    }
-}
-
 public sealed class IndexOptionStrategy : IPaperStrategy
 {
     public IEnumerable<StrategyCandidate> Generate(
@@ -84,6 +43,11 @@ public sealed class IndexOptionStrategy : IPaperStrategy
     {
         foreach (var index in context.Where(x => x.InstrumentType == "INDEX"))
         {
+            if (IndexUniverse.IndexNames.Contains(index.Symbol, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             var options = context.Where(x => x.InstrumentType == "OPTION" && x.Symbol.StartsWith(index.Symbol, StringComparison.OrdinalIgnoreCase)).ToList();
             if (options.Count == 0 || index.Evidence.Trend == "UNKNOWN" || index.Evidence.Regime == "UNKNOWN")
             {
@@ -114,49 +78,9 @@ public sealed class IndexOptionStrategy : IPaperStrategy
 
             if (index.Evidence.Regime is "RANGE" or "QUIET")
             {
-                var shortRight = index.Evidence.Trend == "UP" ? "PE" : "CE";
-                var shortDirection = shortRight == "PE" ? "BULLISH" : "BEARISH";
-                var shortOptionCandidate = options
-                    .Where(option => option.Symbol.EndsWith(shortRight, StringComparison.OrdinalIgnoreCase)
-                        && option.Last > 0
-                        && (shortRight == "PE"
-                            ? ReadStrike(option.Symbol) < index.Last
-                            : ReadStrike(option.Symbol) > index.Last))
-                    .OrderBy(option => Math.Abs(ReadStrike(option.Symbol) - index.Last))
-                    .FirstOrDefault();
-                if (shortOptionCandidate is not null)
+                foreach (var naked in NakedOptionRules.BuildIndexNakedShort(index, options))
                 {
-                    var shortPrice = SellPrice(shortOptionCandidate);
-                    var nakedStrike = ReadStrike(shortOptionCandidate.Symbol);
-                    var shortExpiry = ReadExpiry(shortOptionCandidate.Evidence.Facts);
-                    yield return new StrategyCandidate(
-                        "NAKED_INDEX_OPTION_SHORT",
-                        index.Symbol,
-                        shortDirection,
-                        index.Evidence.Regime == "QUIET" ? 72m : 68m,
-                        [
-                            $"underlying trend={index.Evidence.Trend}",
-                            $"regime={index.Evidence.Regime}",
-                            "single short option; loss can exceed stop during a price gap",
-                        ],
-                        [
-                            new(
-                                shortOptionCandidate.Symbol,
-                                index.Symbol,
-                                "OPTION",
-                                "SELL",
-                                1,
-                                shortPrice,
-                                nakedStrike,
-                                shortRight,
-                                shortExpiry,
-                                shortOptionCandidate.Quote),
-                        ],
-                        decimal.Round(shortPrice * 1.5m, 2),
-                        decimal.Round(shortPrice * 0.5m, 2),
-                        shortPrice * 0.5m,
-                        shortPrice * 0.5m,
-                        shortOptionCandidate.Quote.DataTimestamp);
+                    yield return naked;
                 }
             }
 
@@ -242,6 +166,229 @@ public sealed class IndexOptionStrategy : IPaperStrategy
 
     private static decimal SellPrice(MarketContextSnapshot option) =>
         option.Quote.Bid is > 0 ? option.Quote.Bid.Value : option.Last;
+}
+
+public static class NakedOptionRules
+{
+    public static IEnumerable<StrategyCandidate> BuildIndexNakedShort(
+        MarketContextSnapshot index,
+        IReadOnlyList<MarketContextSnapshot> options)
+    {
+        if (index.Evidence.Trend is "UNKNOWN" or "FLAT")
+        {
+            yield break;
+        }
+
+        var shortRight = index.Evidence.Trend == "UP" ? "PE" : "CE";
+        var shortDirection = shortRight == "PE" ? "BULLISH" : "BEARISH";
+        var shortOptionCandidate = options
+            .Where(option => option.Symbol.StartsWith(index.Symbol + " ", StringComparison.OrdinalIgnoreCase)
+                && option.Symbol.EndsWith(shortRight, StringComparison.OrdinalIgnoreCase)
+                && option.Last > 0
+                && (shortRight == "PE"
+                    ? ReadStrike(option.Symbol) < index.Last
+                    : ReadStrike(option.Symbol) > index.Last))
+            .OrderBy(option => Math.Abs(ReadStrike(option.Symbol) - index.Last))
+            .FirstOrDefault();
+        if (shortOptionCandidate is null)
+        {
+            yield break;
+        }
+
+        var shortPrice = SellPrice(shortOptionCandidate);
+        var nakedStrike = ReadStrike(shortOptionCandidate.Symbol);
+        var shortExpiry = ReadExpiry(shortOptionCandidate.Evidence.Facts);
+        yield return new StrategyCandidate(
+            "NAKED_INDEX_OPTION_SHORT",
+            index.Symbol,
+            shortDirection,
+            index.Evidence.Regime == "QUIET" ? 72m : 68m,
+            [
+                $"underlying trend={index.Evidence.Trend}",
+                $"regime={index.Evidence.Regime}",
+                "single short option; loss can exceed stop during a price gap",
+            ],
+            [
+                new(
+                    shortOptionCandidate.Symbol,
+                    index.Symbol,
+                    "OPTION",
+                    "SELL",
+                    1,
+                    shortPrice,
+                    nakedStrike,
+                    shortRight,
+                    shortExpiry,
+                    shortOptionCandidate.Quote),
+            ],
+            decimal.Round(shortPrice * 1.5m, 2),
+            decimal.Round(shortPrice * 0.5m, 2),
+            shortPrice * 0.5m,
+            shortPrice * 0.5m,
+            shortOptionCandidate.Quote.DataTimestamp);
+    }
+
+    public static IEnumerable<StrategyCandidate> BuildStockNakedShort(
+        MarketContextSnapshot stock,
+        IReadOnlyList<MarketContextSnapshot> options)
+    {
+        if (stock.Evidence.Regime is not ("RANGE" or "QUIET") || stock.Evidence.Trend is "UNKNOWN" or "FLAT")
+        {
+            yield break;
+        }
+
+        var shortRight = stock.Evidence.Trend == "UP" ? "PE" : "CE";
+        var shortDirection = shortRight == "PE" ? "BULLISH" : "BEARISH";
+        var shortOptionCandidate = options
+            .Where(option => option.Symbol.StartsWith(stock.Symbol + " ", StringComparison.OrdinalIgnoreCase)
+                && option.Symbol.EndsWith(shortRight, StringComparison.OrdinalIgnoreCase)
+                && option.Last > 0
+                && (shortRight == "PE"
+                    ? ReadStrike(option.Symbol) < stock.Last
+                    : ReadStrike(option.Symbol) > stock.Last))
+            .OrderBy(option => Math.Abs(ReadStrike(option.Symbol) - stock.Last))
+            .FirstOrDefault();
+        if (shortOptionCandidate is null)
+        {
+            yield break;
+        }
+
+        var shortPrice = SellPrice(shortOptionCandidate);
+        yield return new StrategyCandidate(
+            "NAKED_STOCK_OPTION_SHORT",
+            stock.Symbol,
+            shortDirection,
+            stock.Evidence.Regime == "QUIET" ? 70m : 66m,
+            [
+                $"underlying trend={stock.Evidence.Trend}",
+                $"regime={stock.Evidence.Regime}",
+                "single short stock option; gap risk applies",
+            ],
+            [
+                new(
+                    shortOptionCandidate.Symbol,
+                    stock.Symbol,
+                    "OPTION",
+                    "SELL",
+                    1,
+                    shortPrice,
+                    ReadStrike(shortOptionCandidate.Symbol),
+                    shortRight,
+                    ReadExpiry(shortOptionCandidate.Evidence.Facts),
+                    shortOptionCandidate.Quote),
+            ],
+            decimal.Round(shortPrice * 1.5m, 2),
+            decimal.Round(shortPrice * 0.5m, 2),
+            shortPrice * 0.5m,
+            shortPrice * 0.5m,
+            shortOptionCandidate.Quote.DataTimestamp);
+    }
+
+    private static decimal ReadStrike(string symbol)
+    {
+        var parts = symbol.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Reverse().Skip(1).Select(x => decimal.TryParse(x, out var value) ? value : 0m).FirstOrDefault(x => x > 0);
+    }
+
+    private static DateTimeOffset? ReadExpiry(IReadOnlyList<string> facts)
+    {
+        var value = facts.FirstOrDefault(x => x.StartsWith("expiry=", StringComparison.Ordinal))?[7..];
+        return DateTimeOffset.TryParse(value, out var expiry) ? expiry : null;
+    }
+
+    private static decimal SellPrice(MarketContextSnapshot option) =>
+        option.Quote.Bid is > 0 ? option.Quote.Bid.Value : option.Last;
+}
+
+public sealed class StockNakedOptionStrategy : IPaperStrategy
+{
+    public IEnumerable<StrategyCandidate> Generate(
+        IReadOnlyList<MarketContextSnapshot> context,
+        IReadOnlyDictionary<string, decimal> previous)
+    {
+        var options = context.Where(x => x.InstrumentType == "OPTION").ToList();
+        foreach (var stock in context.Where(x => x.InstrumentType == "STOCK"))
+        {
+            foreach (var candidate in NakedOptionRules.BuildStockNakedShort(stock, options))
+            {
+                yield return candidate;
+            }
+        }
+    }
+}
+
+public sealed class NakedFutureStrategy : IPaperStrategy
+{
+    public IEnumerable<StrategyCandidate> Generate(
+        IReadOnlyList<MarketContextSnapshot> context,
+        IReadOnlyDictionary<string, decimal> previous)
+    {
+        foreach (var future in context.Where(x => x.InstrumentType == "FUTURE"))
+        {
+            var underlyingSymbol = future.Symbol.Replace(" FUT", "", StringComparison.OrdinalIgnoreCase).Trim();
+            var spot = context.FirstOrDefault(x =>
+                x.Symbol.Equals(underlyingSymbol, StringComparison.OrdinalIgnoreCase));
+            if (spot is null || spot.Evidence.Regime != "TRENDING" || spot.Evidence.Trend is "UNKNOWN" or "FLAT")
+            {
+                continue;
+            }
+
+            if (!TryFact(spot.Evidence.Facts, "S=", out var stopLong)
+                || !TryFact(spot.Evidence.Facts, "B1=", out var stopShort)
+                || !TryFact(spot.Evidence.Facts, "B2=", out var targetLong)
+                || !TryFact(spot.Evidence.Facts, "S2=", out var targetShort))
+            {
+                continue;
+            }
+
+            var isIndex = IndexUniverse.IsIndex(underlyingSymbol);
+            var strategy = isIndex ? "NAKED_INDEX_FUTURE" : "NAKED_STOCK_FUTURE";
+            if (spot.Evidence.Trend == "UP")
+            {
+                var risk = future.Last - stopLong;
+                var reward = targetLong - future.Last;
+                if (risk <= 0 || reward <= 0) continue;
+                yield return new StrategyCandidate(
+                    strategy,
+                    underlyingSymbol,
+                    "BULLISH",
+                    74m,
+                    [$"trend={spot.Evidence.Trend}", "naked long future", $"regime={spot.Evidence.Regime}"],
+                    [new(future.Symbol, underlyingSymbol, "FUTURE", "BUY", 1, future.Last, Quote: future.Quote)],
+                    stopLong,
+                    targetLong,
+                    risk,
+                    reward,
+                    future.Quote.DataTimestamp);
+            }
+            else
+            {
+                var risk = stopShort - future.Last;
+                var reward = future.Last - targetShort;
+                if (risk <= 0 || reward <= 0) continue;
+                yield return new StrategyCandidate(
+                    strategy,
+                    underlyingSymbol,
+                    "BEARISH",
+                    74m,
+                    [$"trend={spot.Evidence.Trend}", "naked short future", $"regime={spot.Evidence.Regime}"],
+                    [new(future.Symbol, underlyingSymbol, "FUTURE", "SELL", 1, future.Last, Quote: future.Quote)],
+                    stopShort,
+                    targetShort,
+                    risk,
+                    reward,
+                    future.Quote.DataTimestamp);
+            }
+        }
+    }
+
+    private static bool TryFact(IReadOnlyList<string> facts, string prefix, out decimal value)
+    {
+        value = 0;
+        var fact = facts.FirstOrDefault(x => x.StartsWith(prefix, StringComparison.Ordinal));
+        return fact is not null
+            && decimal.TryParse(fact[(fact.IndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture, out value);
+    }
 }
 
 public sealed class PaperDecisionEngine(IEnumerable<IPaperStrategy> strategies)

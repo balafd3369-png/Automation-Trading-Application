@@ -7,6 +7,8 @@ public interface IPaperProposalSource
 {
     PaperAgentSnapshot Snapshot();
     void CompleteExternalProposal(string proposalId, string reason);
+    void ReleasePendingProposal(string proposalId, string reason);
+    void SetAutoAdmitTrades(bool enabled);
 }
 
 public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperProposalSource
@@ -14,45 +16,67 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
     private static readonly TimeZoneInfo Ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
     private readonly object _gate = new();
     private readonly MarketContextService _marketContext;
-    private readonly MStockAuthClient _broker;
+    private readonly BrokerConnectionManager _brokers;
     private readonly TradeHistoryStore _history;
     private readonly PaperDecisionEngine _decisions;
     private readonly PortfolioRiskManager _risk;
+    private readonly ZoneSessionTracker _zoneSessions;
+    private readonly ZoneBoardSessionTracker _zoneBoardSessions;
+    private readonly StrategyRecommendationEngine _strategyFeed;
+    private readonly Lazy<IZoneLiveAutoGateway> _zoneLive;
     private readonly ILogger<PaperTradingAgent> _log;
+    private string? _deferZoneLiveProposalId;
     private readonly Dictionary<string, decimal> _previous = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<Position> _positions = [];
     private readonly List<PaperAgentMessage> _messages = [];
     private readonly List<RankedDecisionSnapshot> _recentDecisions = [];
+    private readonly Dictionary<string, DateTimeOffset> _signalNotifiedAt = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<MarketContextSnapshot> _latestContext = [];
     private Timer? _timer;
-    private PaperAgentConfig? _config = new(100_000m, 1_000m, 500m, 3);
+    private PaperAgentConfig? _config = new(1_000_000m, 10_000m, 5_000m, 30, true);
     private PaperTradeProposal? _pending;
     private bool _running;
+    private bool _userStoppedPaper;
     private decimal? _availableFunds;
     private decimal? _utilizedFunds;
     private decimal _realizedPnl;
     private int _closedTrades;
     private int _winningTrades;
     private int _losingTrades;
+    private int _targetHits;
+    private int _stopLossHits;
+    private int _trailingStopHits;
+    private int _breakevenTrades;
     private DateTime _sessionDate = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Ist).Date;
     private DateTimeOffset _updatedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastFundsRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset _lastDecisionScan = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastCatalogAutoAdmit = DateTimeOffset.MinValue;
+    private readonly HashSet<string> _catalogSignalsAdmitted = new(StringComparer.OrdinalIgnoreCase);
+    private DateOnly _catalogAdmitDay;
     private int _busy;
 
     public PaperTradingAgent(
         MarketContextService marketContext,
-        MStockAuthClient broker,
+        BrokerConnectionManager brokers,
         TradeHistoryStore history,
         PaperDecisionEngine decisions,
         PortfolioRiskManager risk,
+        ZoneSessionTracker zoneSessions,
+        ZoneBoardSessionTracker zoneBoardSessions,
+        StrategyRecommendationEngine strategyFeed,
+        Lazy<IZoneLiveAutoGateway> zoneLive,
         ILogger<PaperTradingAgent> log)
     {
         _marketContext = marketContext;
-        _broker = broker;
+        _brokers = brokers;
         _history = history;
         _decisions = decisions;
         _risk = risk;
+        _zoneSessions = zoneSessions;
+        _zoneBoardSessions = zoneBoardSessions;
+        _strategyFeed = strategyFeed;
+        _zoneLive = zoneLive;
         _log = log;
         foreach (var trade in history.RecoverOpenTrades())
         {
@@ -61,13 +85,17 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         AddMessage(
             "assistant",
             _positions.Count == 0
-                ? "Paper agent ready with ₹1,00,000 allocated. Every new position requires confirmation."
+                ? "Paper agent ready with ₹10,00,000 allocated. Auto-admit ON — zone setups on all four indices (no confirm)."
                 : $"Paper agent recovered {_positions.Count} open multi-leg paper position(s).");
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _timer = new Timer(_ => _ = TickAsync(), null, TimeSpan.Zero, TimeSpan.FromSeconds(2));
+        lock (_gate)
+        {
+            _running = true;
+        }
+        _timer = new Timer(_ => _ = TickAsync(), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5));
         return Task.CompletedTask;
     }
 
@@ -91,6 +119,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 CloseAllUnsafe("agent stopped");
                 CancelPendingUnsafe("CANCELLED", "agent stopped");
                 _running = false;
+                _userStoppedPaper = true;
                 AddMessageUnsafe("assistant", "Paper automation stopped and all paper positions were closed.");
                 return SnapshotUnsafe();
             }
@@ -183,16 +212,24 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
             }
             CloseAllUnsafe("agent reconfigured");
             CancelPendingUnsafe("CANCELLED", "agent configuration changed");
-            _config = new(capital!.Value, target!.Value, loss!.Value, 3);
+            _config = new(capital!.Value, target!.Value, loss!.Value, 3, true);
             _running = true;
+            _userStoppedPaper = false;
             _realizedPnl = 0;
+            _closedTrades = 0;
+            _winningTrades = 0;
+            _losingTrades = 0;
+            _targetHits = 0;
+            _stopLossHits = 0;
+            _trailingStopHits = 0;
+            _breakevenTrades = 0;
             _previous.Clear();
             AddMessageUnsafe(
                 "assistant",
                 $"Paper automation started: capital ₹{capital:N0}, target ₹{target:N0}, daily loss ₹{loss:N0}. "
-                + "Scores are deterministic rule evidence, not probabilities. Every entry requires confirmation. "
-                + "Index hedging requires ₹1,00,000 allocation and only one protected spread may be open. "
-                + "Naked index-option selling is risk-gated; stock-option selling is disabled.");
+                + "Scores are deterministic rule evidence, not probabilities. "
+                + "Paper trades auto-admit when a signal passes risk; arming live trading pauses auto-admit. "
+                + "Track positive trades, target hits, and stop-loss exits in the Paper performance panel.");
             return SnapshotUnsafe();
         }
     }
@@ -213,9 +250,98 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         }
     }
 
+    public void ReleasePendingProposal(string proposalId, string reason)
+    {
+        lock (_gate)
+        {
+            if (_pending is null || !_pending.Id.Equals(proposalId, StringComparison.Ordinal)) return;
+            var underlying = _pending.Underlying;
+            CancelPendingUnsafe("CANCELLED", reason);
+            AddMessageUnsafe("assistant", $"{underlying} live entry cleared: {reason}");
+        }
+    }
+
+    public void SetAutoAdmitTrades(bool enabled)
+    {
+        lock (_gate)
+        {
+            if (_config is null) return;
+            _config = _config with { AutoAdmitTrades = enabled };
+        }
+    }
+
+    public PaperAgentSnapshot RequestStrategyPaperTrade(string strategy, string underlying)
+    {
+        lock (_gate)
+        {
+            if (_config is null)
+            {
+                _config = new PaperAgentConfig(1_000_000m, 10_000m, 5_000m, 30, true);
+            }
+
+            _running = true;
+            if (_latestContext.Count == 0)
+            {
+                AddMessageUnsafe("assistant", "Market data is still loading — try the paper trade again in a few seconds.");
+                return SnapshotUnsafe();
+            }
+
+            var strategyCode = StrategyRecommendationEngine.StrategyCodeFromCatalog(
+                StrategyRecommendationEngine.MapStrategyCode(strategy));
+
+            StrategyLiveRecommendation? feedRec = null;
+            try
+            {
+                feedRec = _strategyFeed.BuildFeed(CancellationToken.None).LiveNow.FirstOrDefault(r =>
+                    StrategyRecommendationEngine.StrategyCodeFromCatalog(
+                        StrategyRecommendationEngine.MapStrategyCode(r.StrategyId))
+                        .Equals(strategyCode, StringComparison.OrdinalIgnoreCase)
+                    && r.Symbol.Equals(underlying, StringComparison.OrdinalIgnoreCase));
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Strategy feed unavailable for take-strategy.");
+            }
+
+            var candidate = ResolveCandidateForFeed(feedRec, strategyCode, underlying)
+                ?? _decisions.Rank(_latestContext, _previous).FirstOrDefault(c =>
+                    c.Strategy.Equals(strategyCode, StringComparison.OrdinalIgnoreCase)
+                    && c.Underlying.Equals(underlying, StringComparison.OrdinalIgnoreCase));
+            if (candidate is null)
+            {
+                AddMessageUnsafe(
+                    "assistant",
+                    $"No active {strategy} setup on {underlying} for the agent right now. The signal may have expired.");
+                return SnapshotUnsafe();
+            }
+
+            var assessment = AssessPaperRisk(candidate, DateTimeOffset.UtcNow);
+            if (!assessment.Accepted)
+            {
+                AddMessageUnsafe(
+                    "assistant",
+                    $"Paper trade blocked for {underlying}: {string.Join("; ", assessment.Rejections)}");
+                return SnapshotUnsafe();
+            }
+
+            if (_pending is not null)
+            {
+                CancelPendingUnsafe("CANCELLED", "replaced by strategy paper trade");
+            }
+
+            CreateProposalUnsafe(candidate, assessment, DateTimeOffset.UtcNow, _latestContext);
+            AddMessageUnsafe(
+                "assistant",
+                $"Strategy paper trade requested: {candidate.Strategy} on {underlying}. "
+                + $"Why: {string.Join(" · ", candidate.Evidence)}");
+            return SnapshotUnsafe();
+        }
+    }
+
     private async Task TickAsync()
     {
         if (Interlocked.Exchange(ref _busy, 1) == 1) return;
+        string? zoneLiveProposalId = null;
         try
         {
             await RefreshFundsAsync(CancellationToken.None);
@@ -230,8 +356,21 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                     CloseAllUnsafe("new trading day");
                     CancelPendingUnsafe("EXPIRED", "new trading day");
                     _realizedPnl = 0;
+                    _closedTrades = 0;
+                    _winningTrades = 0;
+                    _losingTrades = 0;
+                    _targetHits = 0;
+                    _stopLossHits = 0;
+                    _trailingStopHits = 0;
+                    _breakevenTrades = 0;
                     _sessionDate = nowIst.Date;
                     _previous.Clear();
+                    _catalogSignalsAdmitted.Clear();
+                    _catalogAdmitDay = default;
+                    if (!_userStoppedPaper && _config is not null)
+                    {
+                        _running = true;
+                    }
                 }
                 UpdatePositionsUnsafe(context, nowIst);
                 if (_pending is not null && _pending.ExpiresAt <= now)
@@ -247,8 +386,30 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                     ScanEntriesUnsafe(context, now);
                     _lastDecisionScan = now;
                 }
+                if (_running && _config?.AutoAdmitTrades == true && _pending is null
+                    && now - _lastCatalogAutoAdmit >= TimeSpan.FromSeconds(8))
+                {
+                    AutoAdmitCatalogStrategiesUnsafe(context, now);
+                    _lastCatalogAutoAdmit = now;
+                }
                 foreach (var item in context.Where(x => x.InstrumentType != "OPTION")) _previous[item.Symbol] = item.Last;
+                var istDay = DateOnly.FromDateTime(nowIst.DateTime);
+                foreach (var item in context.Where(x => x.InstrumentType is "STOCK" or "INDEX"))
+                {
+                    if (ZoneRejectionPattern.TryReadZoneFact(item.Evidence.Facts, "B1=", out var b1)
+                        && ZoneRejectionPattern.TryReadZoneFact(item.Evidence.Facts, "S1=", out var s1)
+                        && ZoneRejectionPattern.TryReadZoneFact(item.Evidence.Facts, "S2=", out var s2))
+                    {
+                        _zoneBoardSessions.Update(item.Symbol, item.Last, b1, s1, s2, istDay);
+                        if (item.InstrumentType == "STOCK")
+                        {
+                            _zoneSessions.Update(item.Symbol, item.Last, b1, istDay);
+                        }
+                    }
+                }
                 _updatedAt = now;
+                zoneLiveProposalId = _deferZoneLiveProposalId;
+                _deferZoneLiveProposalId = null;
             }
         }
         catch (Exception ex)
@@ -259,25 +420,25 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         {
             Interlocked.Exchange(ref _busy, 0);
         }
+
+        if (zoneLiveProposalId is not null)
+        {
+            try
+            {
+                await _zoneLive.Value.ExecuteZoneProposalAsync(zoneLiveProposalId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Zone auto-live execution failed for proposal {ProposalId}.", zoneLiveProposalId);
+            }
+        }
     }
 
     private void ApplySessionLimitsUnsafe(DateTimeOffset nowIst)
     {
         if (!_running || _config is null) return;
-        var total = _realizedPnl + UnrealizedPnlUnsafe();
-        if (total >= _config.ProfitTarget)
-        {
-            CloseAllUnsafe("daily profit target reached");
-            CancelPendingUnsafe("CANCELLED", "daily profit target reached");
-            _running = false;
-        }
-        else if (total <= -_config.MaxDailyLoss)
-        {
-            CloseAllUnsafe("daily loss limit reached");
-            CancelPendingUnsafe("CANCELLED", "daily loss limit reached");
-            _running = false;
-        }
-        else if (nowIst.TimeOfDay >= new TimeSpan(15, 20, 0))
+        // Paper mode: no daily profit target or loss limit — agent keeps scanning until EOD square-off.
+        if (nowIst.TimeOfDay >= new TimeSpan(15, 20, 0))
         {
             CloseAllUnsafe("15:20 intraday square-off");
             CancelPendingUnsafe("EXPIRED", "15:20 intraday square-off");
@@ -285,19 +446,143 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         }
     }
 
+    private static bool IsCatalogStrategy(string strategy) =>
+        strategy is TenAmIntradayPattern.HighFadeStrategy
+            or TenAmIntradayPattern.LowBreakStrategy
+            or ZoneRejectionPattern.B1RejectionToS2;
+
+    private RiskAssessment AssessPaperRisk(StrategyCandidate candidate, DateTimeOffset now) =>
+        _risk.Assess(
+            candidate,
+            _config!,
+            _realizedPnl,
+            _positions.Sum(x => x.MaxRisk),
+            _positions.Count,
+            _positions.Select(x => new PortfolioExposure(x.Underlying, x.Direction, x.MaxRisk, x.Strategy)).ToList(),
+            now,
+            paperTrading: true,
+            brokerAvailableFunds: _availableFunds);
+
+    private bool HasOpenPaperSetup(string strategy, string underlying) =>
+        _positions.Any(p =>
+            p.Strategy.Equals(strategy, StringComparison.OrdinalIgnoreCase)
+            && p.Underlying.Equals(underlying, StringComparison.OrdinalIgnoreCase));
+
+    private void AutoAdmitCatalogStrategiesUnsafe(
+        IReadOnlyList<MarketContextSnapshot> context,
+        DateTimeOffset now)
+    {
+        if (_config is null || !_running || _pending is not null
+            || _positions.Count >= _config.MaxOpenPositions)
+        {
+            return;
+        }
+
+        var istDay = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, Ist).DateTime);
+        if (_catalogAdmitDay != istDay)
+        {
+            _catalogAdmitDay = istDay;
+            _catalogSignalsAdmitted.Clear();
+        }
+
+        StrategyFeedResponse feed;
+        try
+        {
+            feed = _strategyFeed.BuildFeed(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Strategy feed unavailable for catalog auto-admit.");
+            return;
+        }
+
+        foreach (var rec in feed.LiveNow.Where(r => r.CanPaperTrade))
+        {
+            if (_catalogSignalsAdmitted.Contains(rec.Id))
+            {
+                continue;
+            }
+
+            var strategyCode = StrategyRecommendationEngine.StrategyCodeFromCatalog(
+                StrategyRecommendationEngine.MapStrategyCode(rec.StrategyId));
+
+            if (HasOpenPaperSetup(strategyCode, rec.Symbol))
+            {
+                _catalogSignalsAdmitted.Add(rec.Id);
+                continue;
+            }
+
+            var candidate = ResolveCandidateForFeed(rec, strategyCode);
+            if (candidate is null)
+            {
+                continue;
+            }
+
+            var assessment = AssessPaperRisk(candidate, now);
+            if (!assessment.Accepted)
+            {
+                _log.LogDebug(
+                    "Auto-admit skipped {Symbol} {Strategy}: {Rejections}",
+                    rec.Symbol,
+                    strategyCode,
+                    string.Join("; ", assessment.Rejections));
+                continue;
+            }
+
+            _catalogSignalsAdmitted.Add(rec.Id);
+            CreateProposalUnsafe(candidate, assessment, now, context);
+            AddMessageUnsafe(
+                "assistant",
+                $"Auto paper trade — {rec.StrategyName} on {rec.Symbol}. "
+                + $"Why: {string.Join(" · ", candidate.Evidence)}. "
+                + $"Live capital about ₹{assessment.CapitalRequired:N0}, max loss ₹{assessment.MaxRisk:N0}, max profit ₹{assessment.MaxReward:N0}.");
+            if (_positions.Count >= _config!.MaxOpenPositions || _pending is not null)
+            {
+                break;
+            }
+        }
+    }
+
+    private StrategyCandidate? ResolveCandidateForFeed(
+        StrategyLiveRecommendation rec,
+        string strategyCode) =>
+        ResolveCandidateForFeed(rec, strategyCode, rec.Symbol);
+
+    private StrategyCandidate? ResolveCandidateForFeed(
+        StrategyLiveRecommendation? rec,
+        string strategyCode,
+        string underlying)
+    {
+        if (_latestContext.Count == 0)
+        {
+            return null;
+        }
+
+        var fromEngine = _decisions.Rank(_latestContext, _previous).FirstOrDefault(c =>
+            c.Strategy.Equals(strategyCode, StringComparison.OrdinalIgnoreCase)
+            && c.Underlying.Equals(underlying, StringComparison.OrdinalIgnoreCase));
+        if (fromEngine is not null)
+        {
+            return fromEngine;
+        }
+
+        if (rec is null)
+        {
+            return null;
+        }
+
+        return FeedPaperCandidateBuilder.FromRecommendation(rec, _latestContext);
+    }
+
     private void ScanEntriesUnsafe(IReadOnlyList<MarketContextSnapshot> context, DateTimeOffset now)
     {
         if (_config is null || _positions.Count >= _config.MaxOpenPositions) return;
+        StrategyCandidate? proposalCandidate = null;
+        RiskAssessment? proposalAssessment = null;
+        var autoAdmitAll = _config.AutoAdmitTrades;
         foreach (var candidate in _decisions.Rank(context, _previous))
         {
-            var assessment = _risk.Assess(
-                candidate,
-                _config,
-                _realizedPnl,
-                _positions.Sum(x => x.MaxRisk),
-                _positions.Count,
-                _positions.Select(x => new PortfolioExposure(x.Underlying, x.Direction, x.MaxRisk, x.Strategy)).ToList(),
-                now);
+            var assessment = AssessPaperRisk(candidate, now);
             var id = Guid.NewGuid().ToString("N");
             var decision = new RankedDecisionSnapshot(
                 id, candidate.Strategy, candidate.Underlying, candidate.Direction, candidate.EvidenceScore,
@@ -308,12 +593,72 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
             RememberDecisionUnsafe(decision);
             _history.SaveDecision(decision);
             if (!assessment.Accepted) continue;
-            CreateProposalUnsafe(candidate, assessment, now);
-            break;
+            if (IsUniverseUnderlying(candidate.Underlying))
+            {
+                MaybeNotifySignalUnsafe(candidate, assessment, now);
+            }
+                if (autoAdmitAll)
+            {
+                if (_pending is not null || _positions.Count >= _config.MaxOpenPositions)
+                {
+                    break;
+                }
+                if (HasOpenPaperSetup(candidate.Strategy, candidate.Underlying))
+                {
+                    continue;
+                }
+                if (IsZoneBoardStrategy(candidate.Strategy)
+                    && !IndexUniverse.IndexNames.Contains(candidate.Underlying, StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (IsZoneBoardStrategy(candidate.Strategy)
+                    && !ZoneStrategyRollout.AllowPaperAutoExecute(candidate.Strategy, candidate.Underlying))
+                {
+                    continue;
+                }
+
+                CreateProposalUnsafe(candidate, assessment, now, context);
+                continue;
+            }
+            proposalCandidate ??= candidate;
+            proposalAssessment ??= assessment;
+        }
+
+        if (!autoAdmitAll && proposalCandidate is not null && proposalAssessment is not null)
+        {
+            CreateProposalUnsafe(proposalCandidate, proposalAssessment, now, context);
         }
     }
 
-    private void CreateProposalUnsafe(StrategyCandidate candidate, RiskAssessment assessment, DateTimeOffset now)
+    private static bool IsUniverseUnderlying(string underlying) =>
+        IndexUniverse.IsIndex(underlying)
+        || IndexUniverse.Equities.Contains(underlying, StringComparer.OrdinalIgnoreCase);
+
+    private void MaybeNotifySignalUnsafe(StrategyCandidate candidate, RiskAssessment assessment, DateTimeOffset now)
+    {
+        var key = $"{candidate.Underlying}|{candidate.Strategy}";
+        if (_signalNotifiedAt.TryGetValue(key, out var last) && now - last < TimeSpan.FromMinutes(15))
+        {
+            return;
+        }
+        _signalNotifiedAt[key] = now;
+        var followUp = _config?.AutoAdmitTrades == true
+            ? "Auto-admit will enter paper if risk checks pass."
+            : "Watch for the confirmation prompt or review Recent decisions.";
+        AddMessageUnsafe(
+            "assistant",
+            $"Signal — {candidate.Strategy} on {candidate.Underlying} ({candidate.Direction}): "
+            + $"score {candidate.EvidenceScore:N0}, max risk ₹{assessment.MaxRisk:N2}, max reward ₹{assessment.MaxReward:N2}. "
+            + followUp);
+    }
+
+    private void CreateProposalUnsafe(
+        StrategyCandidate candidate,
+        RiskAssessment assessment,
+        DateTimeOffset now,
+        IReadOnlyList<MarketContextSnapshot> context)
     {
         var id = Guid.NewGuid().ToString("N");
         var legs = candidate.Legs.Select((leg, i) => new PaperTradeLegProposal(
@@ -336,11 +681,27 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
             candidate.EvidenceScore,
             assessment.MaxRisk,
             assessment.MaxReward,
+            assessment.CapitalRequired,
             assessment.MaxRisk > 0 ? assessment.MaxReward / assessment.MaxRisk : 0,
             candidate.Evidence,
             legs,
             candidate.DataTimestamp);
         _history.SaveMultiProposal(_pending);
+        if (_config?.AutoAdmitTrades == true)
+        {
+            if (_zoneLive.Value.ShouldAutoExecuteZoneLive(candidate.Strategy, candidate.Underlying))
+            {
+                AddMessageUnsafe(
+                    "assistant",
+                    $"Zone LIVE AUTO: {candidate.Strategy} on {candidate.Underlying} — submitting {string.Join(", ", legs.Select(x => $"{x.Side} {x.Symbol}"))} to broker.");
+                _deferZoneLiveProposalId = id;
+                return;
+            }
+
+            ConfirmPendingUnsafe(context);
+            return;
+        }
+
         AddMessageUnsafe(
             "assistant",
             $"Paper proposal {candidate.Strategy} on {candidate.Underlying}: "
@@ -379,8 +740,9 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
             || nowIst.TimeOfDay < new TimeSpan(9, 20, 0)
             || nowIst.TimeOfDay >= new TimeSpan(15, 10, 0)
             || (proposedLegs.Any(x => x.InstrumentType == "OPTION")
+                && !IsZoneBoardStrategy(proposal.Strategy)
                 && _positions.Any(x => IsIndexUnderlying(x.Underlying)
-                    && x.Underlying != proposal.Underlying
+                    && x.Underlying.Equals(proposal.Underlying, StringComparison.OrdinalIgnoreCase)
                     && x.Direction == proposal.Direction)))
         {
             CancelPendingUnsafe("CANCELLED", "portfolio or entry-session constraints changed");
@@ -428,7 +790,8 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
             || validatedRisk <= 0
             || validatedReward <= 0
             || validatedRisk > proposal.MaxRisk * 1.02m
-            || _positions.Sum(x => x.MaxRisk) + validatedRisk > _config.MaxDailyLoss + _realizedPnl)
+            || (_config.AutoAdmitTrades != true
+                && _positions.Sum(x => x.MaxRisk) + validatedRisk > _config.MaxDailyLoss + _realizedPnl))
         {
             CancelPendingUnsafe("CANCELLED", "aggregate risk changed");
             AddMessageUnsafe("assistant", "Aggregate risk changed, so the proposal was cancelled.");
@@ -449,7 +812,8 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         _history.MarkOpened(proposal.Id, proposal.Quantity, validatedNet, openedAt);
         _positions.Add(position);
         _pending = null;
-        AddMessageUnsafe("assistant", $"Confirmed atomic PAPER fill: {proposal.Strategy} {proposal.Underlying}, {fills.Count} leg(s).");
+        var admitLabel = _config?.AutoAdmitTrades == true ? "Auto-admitted" : "Confirmed";
+        AddMessageUnsafe("assistant", $"{admitLabel} paper fill: {proposal.Strategy} {proposal.Underlying}, {fills.Count} leg(s).");
     }
 
     private void UpdatePositionsUnsafe(IReadOnlyList<MarketContextSnapshot> context, DateTimeOffset nowIst)
@@ -472,11 +836,44 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
             var pnl = PositionPnl(position);
             position.PeakPnl = Math.Max(position.PeakPnl, pnl);
             string? reason = null;
-            if (position.Strategy == "STOCK_ZONE_LONG")
+            if (position.Strategy is ZoneBoardPattern.B1BreakLong or ZoneBoardPattern.S2BounceLong)
             {
-                var last = position.Legs[0].CurrentPrice;
+                var last = ZoneBoardMarkPrice(position, context) ?? position.Legs[0].CurrentPrice;
                 if (last <= position.StopLoss) reason = "hard stop";
                 else if (last >= position.Target) reason = "target reached";
+            }
+            else if (position.Strategy is ZoneBoardPattern.S1BreakShort or ZoneRejectionPattern.B1RejectionToS2)
+            {
+                var last = ZoneBoardMarkPrice(position, context) ?? position.Legs[0].CurrentPrice;
+                if (last >= position.StopLoss) reason = "hard stop";
+                else if (last <= position.Target) reason = "target reached";
+            }
+            else if (position.Strategy is TenAmIntradayPattern.HighFadeStrategy or TenAmIntradayPattern.LowBreakStrategy)
+            {
+                var leg = position.Legs[0];
+                var last = leg.CurrentPrice;
+                var entry = leg.EntryPrice;
+                var isShort = leg.Side == "SELL";
+                var reference = ParseTenAmReference(position.TriggerReason);
+                var stop = position.StopLoss;
+                TenAmIntradayPattern.ApplyTrailingStop(
+                    position.Strategy,
+                    reference,
+                    entry,
+                    last,
+                    ref stop,
+                    isShort);
+                position.StopLoss = stop;
+                if (isShort)
+                {
+                    if (last >= position.StopLoss) reason = "hard stop";
+                    else if (last <= position.Target) reason = "target reached";
+                }
+                else
+                {
+                    if (last <= position.StopLoss) reason = "hard stop";
+                    else if (last >= position.Target) reason = "target reached";
+                }
             }
             if (reason is null && pnl <= -position.MaxRisk * 0.55m) reason = "hard stop";
             if (reason is null && position.MaxReward > 0 && pnl >= position.MaxReward * 0.65m) reason = "target reached";
@@ -496,6 +893,25 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         foreach (var position in _positions.ToList()) CloseUnsafe(position, reason);
     }
 
+    private static decimal ParseTenAmReference(string reason)
+    {
+        foreach (var token in reason.Split('·', '|', ';', '\n', ' '))
+        {
+            if (token.StartsWith("H10=", StringComparison.OrdinalIgnoreCase)
+                || token.StartsWith("L10=", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = token[(token.IndexOf('=') + 1)..];
+                if (decimal.TryParse(value, System.Globalization.NumberStyles.Number,
+                        System.Globalization.CultureInfo.InvariantCulture, out var level))
+                {
+                    return level;
+                }
+            }
+        }
+
+        return 0;
+    }
+
     private void CloseUnsafe(Position position, string reason)
     {
         var pnl = PositionPnl(position);
@@ -503,6 +919,10 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         _closedTrades++;
         if (pnl > 0) _winningTrades++;
         else if (pnl < 0) _losingTrades++;
+        else _breakevenTrades++;
+        if (PaperExitAnalytics.IsTargetHit(reason)) _targetHits++;
+        if (PaperExitAnalytics.IsStopLossHit(reason)) _stopLossHits++;
+        if (PaperExitAnalytics.IsTrailingStopHit(reason)) _trailingStopHits++;
         _positions.Remove(position);
         var legs = position.LegSnapshots();
         _history.CloseMultiLegAtomic(position.Id, legs, reason, pnl, DateTimeOffset.UtcNow);
@@ -520,10 +940,11 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
 
     private async Task RefreshFundsAsync(CancellationToken ct, bool force = false)
     {
-        if (!_broker.HasSession || (!force && DateTimeOffset.UtcNow - _lastFundsRefresh < TimeSpan.FromSeconds(15))) return;
+        var broker = _brokers.Market;
+        if (!broker.HasSession || (!force && DateTimeOffset.UtcNow - _lastFundsRefresh < TimeSpan.FromSeconds(15))) return;
         try
         {
-            var funds = await _broker.GetFundSummaryAsync(ct);
+            var funds = await broker.GetFundSummaryAsync(ct);
             lock (_gate)
             {
                 _lastFundsRefresh = DateTimeOffset.UtcNow;
@@ -542,6 +963,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
 
     private PaperAgentSnapshot SnapshotUnsafe()
     {
+        SyncOpenPositionsFromStoreUnsafe();
         var positions = _positions.Select(x => x.Snapshot()).ToList();
         var unrealized = positions.Sum(x => x.Pnl);
         var indexes = _latestContext.Where(x => x.InstrumentType == "INDEX").ToList();
@@ -576,11 +998,50 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 _closedTrades == 0 ? 0 : decimal.Round((decimal)_winningTrades / _closedTrades * 100m, 2),
                 _realizedPnl,
                 unrealized,
-                _positions.Sum(x => x.MaxRisk)),
-            _latestContext);
+                _positions.Sum(x => x.MaxRisk),
+                _targetHits,
+                _stopLossHits,
+                _trailingStopHits,
+                _breakevenTrades),
+            null);
+    }
+
+    private void SyncOpenPositionsFromStoreUnsafe()
+    {
+        foreach (var trade in _history.RecoverOpenTrades())
+        {
+            if (_positions.Any(p => p.Id.Equals(trade.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            _positions.Add(Position.FromRecovered(trade));
+            _log.LogInformation(
+                "Re-synced open paper position {TradeId} {Underlying} from durable store.",
+                trade.Id,
+                trade.Underlying);
+        }
     }
 
     private decimal UnrealizedPnlUnsafe() => _positions.Sum(PositionPnl);
+
+    private static bool IsZoneBoardStrategy(string strategy) =>
+        strategy is ZoneBoardPattern.B1BreakLong
+            or ZoneBoardPattern.S1BreakShort
+            or ZoneBoardPattern.S2BounceLong;
+
+    private static decimal? ZoneBoardMarkPrice(Position position, IReadOnlyList<MarketContextSnapshot> context)
+    {
+        if (position.Legs.All(leg => leg.OptionRight is null))
+        {
+            return null;
+        }
+
+        var underlying = context.FirstOrDefault(x =>
+            x.Symbol.Equals(position.Underlying, StringComparison.OrdinalIgnoreCase));
+        return underlying is { Last: > 0 } ? underlying.Last : null;
+    }
+
     private static bool IsIndexUnderlying(string value) =>
         value is "NIFTY" or "BANKNIFTY" or "FINNIFTY" or "SENSEX";
 
@@ -652,10 +1113,11 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         public required string Direction { get; init; }
         public required string TriggerReason { get; init; }
         public required List<Leg> Legs { get; init; }
-        public decimal StopLoss { get; init; }
+        public decimal StopLoss { get; set; }
         public decimal Target { get; init; }
         public decimal MaxRisk { get; init; }
         public decimal MaxReward { get; init; }
+        public decimal CapitalRequired { get; init; }
         public decimal PeakPnl { get; set; }
         public string OpeningRegime { get; init; } = "UNKNOWN";
         public DateTimeOffset OpenedAt { get; init; }
@@ -680,6 +1142,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 Target = proposal.Target,
                 MaxRisk = proposal.MaxRisk,
                 MaxReward = proposal.MaxReward,
+                CapitalRequired = proposal.CapitalRequired,
                 OpeningRegime = openingRegime,
                 OpenedAt = at,
                 ExitDeadline = at.AddMinutes(90),
@@ -703,6 +1166,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 Target = trade.Target,
                 MaxRisk = trade.MaxRisk,
                 MaxReward = trade.MaxReward,
+                CapitalRequired = trade.CapitalRequired,
                 OpenedAt = trade.OpenedAt,
                 ExitDeadline = trade.OpenedAt.AddMinutes(90),
             };
@@ -728,6 +1192,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 Strategy,
                 Underlying,
                 MaxRisk,
+                CapitalRequired,
                 LegSnapshots(),
                 ExitDeadline);
         }

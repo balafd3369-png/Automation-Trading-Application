@@ -25,6 +25,10 @@ public sealed class LiveAgentController : ControllerBase
     [HttpPost("disarm")]
     public IActionResult Disarm() => Ok(_live.Disarm());
 
+    [HttpPost("arm-zone-auto")]
+    public IActionResult ArmZoneAuto([FromBody] ArmZoneLiveRequest request) =>
+        Ok(_live.ArmZoneAutoLive(request.Acknowledgement, request.Product));
+
     [HttpPost("confirm")]
     public async Task<IActionResult> Confirm(
         [FromBody] ConfirmLiveTradeRequest request,

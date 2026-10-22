@@ -8,6 +8,8 @@ public sealed record BoardResponse(
 
 public sealed record BoardCounts(int Buying, int Selling, int RangeBound);
 
+public sealed record SymbolSearchHit(string Name, string CompanyName, string Exchange);
+
 public sealed record SymbolSnapshot(
     string Name,
     decimal Last,

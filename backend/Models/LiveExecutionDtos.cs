@@ -14,6 +14,7 @@ public sealed class LiveExecutionOptions
 }
 
 public sealed record ArmLiveRequest(string Acknowledgement);
+public sealed record ArmZoneLiveRequest(string Acknowledgement, string Product = "MIS");
 public sealed record ConfirmLiveTradeRequest(string ProposalId, string Product = "MIS");
 public sealed record LiveTradeActionRequest(string TradeId);
 public sealed record LiveEodActionRequest(string TradeId, string Action);
@@ -66,16 +67,26 @@ public sealed record MarketSessionSnapshot(
     string Message,
     DateTimeOffset? NextEventAt);
 
+public sealed record LiveBrokerPnlSnapshot(
+    decimal TotalPnl,
+    decimal RealisedPnl,
+    decimal UnrealisedPnl,
+    decimal? UnrealisedPercent);
+
 public sealed record LiveExecutionSnapshot(
     bool FeatureEnabled,
     bool BrokerConnected,
     MarketSessionSnapshot MarketSession,
     bool Armed,
     DateTimeOffset? ArmedUntil,
+    bool ZoneAutoLiveArmed,
+    string ZoneAutoLiveProduct,
     string State,
     PaperTradeProposal? PendingProposal,
     IReadOnlyList<LiveTradeSnapshot> Trades,
     IReadOnlyList<BrokerPosition> BrokerPositions,
+    IReadOnlyList<BrokerOrder> BrokerOrders,
+    LiveBrokerPnlSnapshot? BrokerPnl,
     IReadOnlyList<LiveExecutionEvent> Events,
     IReadOnlyList<LiveEodPrompt> EodPrompts,
     string ReconciliationStatus,

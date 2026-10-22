@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using TradeWithBeast.Broker;
+using TradeWithBeast.Services;
 
 namespace TradeWithBeast.Controllers;
 
@@ -7,22 +8,71 @@ namespace TradeWithBeast.Controllers;
 [Route("api/broker")]
 public sealed class BrokerAuthController : ControllerBase
 {
-    private readonly MStockAuthClient _auth;
+    private readonly BrokerConnectionManager _brokers;
+    private readonly MStockAuthClient _mstock;
+    private readonly MockMarketService _market;
 
-    public BrokerAuthController(MStockAuthClient auth)
+    public BrokerAuthController(
+        BrokerConnectionManager brokers,
+        MStockAuthClient mstock,
+        MockMarketService market)
     {
-        _auth = auth;
+        _brokers = brokers;
+        _mstock = mstock;
+        _market = market;
     }
 
     public sealed record OtpBody(string Otp);
 
+    [HttpGet("capabilities")]
+    public IActionResult Capabilities() =>
+        Ok(new
+        {
+            version = 2,
+            mstockOtp = true,
+        });
+
+    [HttpGet("providers")]
+    public IActionResult Providers() =>
+        Ok(_brokers.Providers.Select(provider => new
+        {
+            id = provider.Id,
+            displayName = provider.DisplayName,
+            authKind = provider.AuthKind.ToString(),
+            exchanges = provider.SupportedExchanges,
+        }));
+
     [HttpPost("otp/send")]
     public async Task<IActionResult> SendOtp(CancellationToken ct)
     {
-        var result = await _auth.SendOtpAsync(ct);
-        var ok = result.TryGetProperty("status", out var status) && status.GetString() == "success";
-        var message = result.TryGetProperty("message", out var msg) ? msg.GetString() : null;
-        return Ok(new { status = ok ? "success" : "error", message });
+        _brokers.SetActiveProvider(BrokerIds.MStock);
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(28));
+            var result = await _mstock.SendOtpAsync(deadline.Token);
+            var ok = MStockJson.IsOtpSendAcknowledged(result);
+            var message = result.TryGetProperty("message", out var msg) ? msg.GetString() : null;
+            return Ok(new { status = ok ? "success" : "error", message, provider = BrokerIds.MStock });
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return Ok(new
+            {
+                status = "success",
+                message = "OTP request is taking longer than usual. If SMS arrived on your phone, enter it below.",
+                provider = BrokerIds.MStock,
+            });
+        }
+        catch (HttpRequestException ex)
+        {
+            return Ok(new
+            {
+                status = "error",
+                message = ex.Message,
+                provider = BrokerIds.MStock,
+            });
+        }
     }
 
     [HttpPost("otp/verify")]
@@ -33,24 +83,88 @@ public sealed class BrokerAuthController : ControllerBase
             return BadRequest(new { status = "error", message = "OTP is required." });
         }
 
-        var result = await _auth.VerifyOtpAsync(body.Otp, ct);
-        if (result.TryGetProperty("status", out var status) && status.GetString() == "success")
+        _brokers.SetActiveProvider(BrokerIds.MStock);
+        try
         {
-            return Ok(new { status = "success", connected = true, message = "m.Stock session is active until midnight." });
-        }
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(28));
+            var result = await _mstock.VerifyOtpAsync(body.Otp, deadline.Token);
+            if (_brokers.HasSession)
+            {
+                _brokers.OnMStockSessionEstablished();
+                _ = Task.Run(() => _market.NotifyBrokerSessionEstablished());
+                return Ok(new
+                {
+                    status = "success",
+                    connected = true,
+                    provider = BrokerIds.MStock,
+                    displayName = _mstock.DisplayName,
+                    message = "m.Stock session is active until midnight.",
+                });
+            }
 
-        var message = result.TryGetProperty("message", out var msg) ? msg.GetString() : "OTP verify failed.";
-        return Ok(new { status = "error", connected = false, message });
+            var message = MStockJson.ReadMessage(result)
+                ?? "OTP verify failed. Click Request OTP again and use only the latest SMS code.";
+            return Ok(new { status = "error", connected = false, provider = BrokerIds.MStock, message });
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return Ok(new
+            {
+                status = "error",
+                connected = _brokers.HasSession,
+                provider = BrokerIds.MStock,
+                message = "OTP verify timed out. If the board shows live prices, you are connected; otherwise request a fresh OTP.",
+            });
+        }
+        catch (HttpRequestException ex)
+        {
+            return Ok(new
+            {
+                status = "error",
+                connected = _brokers.HasSession,
+                provider = BrokerIds.MStock,
+                message = ex.Message,
+            });
+        }
     }
 
     [HttpGet("session")]
-    public IActionResult Session()
-        => Ok(new { connected = _auth.HasSession, broker = "m.Stock Type A" });
+    public async Task<IActionResult> Session(CancellationToken ct)
+    {
+        var market = _brokers.Market;
+        var connected = market.HasSession;
+        decimal? availableFunds = null;
+        decimal? utilizedFunds = null;
+        if (connected)
+        {
+            var funds = await market.GetFundSummaryAsync(ct);
+            if (funds is not null)
+            {
+                availableFunds = funds.AvailableBalance;
+                utilizedFunds = funds.AmountUtilized;
+            }
+        }
+
+        return Ok(new
+        {
+            connected,
+            provider = connected ? BrokerIds.MStock : null,
+            displayName = connected ? market.DisplayName : null,
+            availableFunds,
+            utilizedFunds,
+        });
+    }
 
     [HttpPost("session/clear")]
     public IActionResult ClearSession()
     {
-        _auth.ClearSession();
-        return Ok(new { status = "success", connected = false, message = "m.Stock session cleared. Request a new OTP." });
+        _brokers.ClearActiveSession();
+        return Ok(new
+        {
+            status = "success",
+            connected = false,
+            message = "Broker session cleared. Connect again to resume live data and trading.",
+        });
     }
 }

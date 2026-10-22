@@ -59,6 +59,10 @@ public sealed class BoardApiTests : IClassFixture<TestWebApplicationFactory>
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.False(doc.RootElement.GetProperty("connected").GetBoolean());
         Assert.Equal("m.Stock Type A", doc.RootElement.GetProperty("broker").GetString());
+        Assert.True(doc.RootElement.TryGetProperty("availableFunds", out var available));
+        Assert.Equal(JsonValueKind.Null, available.ValueKind);
+        Assert.True(doc.RootElement.TryGetProperty("utilizedFunds", out var utilized));
+        Assert.Equal(JsonValueKind.Null, utilized.ValueKind);
     }
 
     [Fact]

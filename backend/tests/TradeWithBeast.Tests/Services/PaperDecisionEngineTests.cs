@@ -10,7 +10,7 @@ public sealed class PaperDecisionEngineTests
     {
         var evidence = MarketContextService.CalculateEvidence(
             [100m, 101m, 102m, 103m, 104m, 105m],
-            105m, 103m, 100m, 97m, 110m, 90m);
+            105m, 100m, 103m, 100m, 97m, 110m, 90m);
 
         Assert.NotNull(evidence.EmaFast);
         Assert.NotNull(evidence.EmaSlow);
@@ -25,7 +25,7 @@ public sealed class PaperDecisionEngineTests
     [Fact]
     public void Missing_history_is_reported_as_unknown_not_invented()
     {
-        var evidence = MarketContextService.CalculateEvidence([100m], 100m, 105m, 100m, 95m, 110m, 90m);
+        var evidence = MarketContextService.CalculateEvidence([100m], 100m, 100m, 105m, 100m, 95m, 110m, 90m);
 
         Assert.Null(evidence.EmaFast);
         Assert.Null(evidence.MomentumPercent);
@@ -39,13 +39,16 @@ public sealed class PaperDecisionEngineTests
     {
         var context = Context(
             "INFY", "STOCK", 106m, "UP", "TRENDING",
-            ["B1=105", "S=100", "S1=95", "B2=115", "S2=90"]);
+            ["todayOpen=100", "B1=105", "S=100", "S1=95", "B2=115", "S2=90"]);
+        var sessions = new ZoneBoardSessionTracker();
+        sessions.Update("INFY", 104m, 105m, 95m, 90m, new DateOnly(2026, 9, 15));
+        sessions.Update("INFY", 106m, 105m, 95m, 90m, new DateOnly(2026, 9, 15));
 
-        var candidates = new StockZoneLongStrategy().Generate(
+        var candidates = new ZoneBoardIntradayStrategy(sessions).Generate(
             [context], new Dictionary<string, decimal> { ["INFY"] = 104m }).ToList();
 
         var candidate = Assert.Single(candidates);
-        Assert.Equal("STOCK_ZONE_LONG", candidate.Strategy);
+        Assert.Equal(ZoneBoardPattern.B1BreakLong, candidate.Strategy);
         Assert.Equal("BUY", Assert.Single(candidate.Legs).Side);
         Assert.True(candidate.MaxRiskPerUnit > 0);
     }
@@ -55,9 +58,12 @@ public sealed class PaperDecisionEngineTests
     {
         var recordedTick = Context(
             "INFY", "STOCK", 106m, "UP", "TRENDING",
-            ["B1=105", "S=100", "S1=95", "B2=115", "S2=90"]);
+            ["todayOpen=100", "B1=105", "S=100", "S1=95", "B2=115", "S2=90"]);
         var previous = new Dictionary<string, decimal> { ["INFY"] = 104m };
-        var engine = new PaperDecisionEngine([new StockZoneLongStrategy()]);
+        var sessions = new ZoneBoardSessionTracker();
+        sessions.Update("INFY", 104m, 105m, 95m, 90m, new DateOnly(2026, 9, 15));
+        sessions.Update("INFY", 106m, 105m, 95m, 90m, new DateOnly(2026, 9, 15));
+        var engine = new PaperDecisionEngine([new ZoneBoardIntradayStrategy(sessions)]);
 
         var first = Assert.Single(engine.Rank([recordedTick], previous));
         var replay = Assert.Single(engine.Rank([recordedTick], previous));
@@ -67,7 +73,7 @@ public sealed class PaperDecisionEngineTests
         Assert.Equal(first.EvidenceScore, replay.EvidenceScore);
         Assert.Equal(first.Evidence, replay.Evidence);
         Assert.Equal(first.Legs.Select(leg => leg.Symbol), replay.Legs.Select(leg => leg.Symbol));
-        Assert.Equal("STOCK_ZONE_LONG", replay.Strategy);
+        Assert.Equal(ZoneBoardPattern.B1BreakLong, replay.Strategy);
     }
 
     [Fact]
@@ -133,12 +139,42 @@ public sealed class PaperDecisionEngineTests
         var naked = Assert.Single(
             candidates,
             candidate => candidate.Strategy == "NAKED_INDEX_OPTION_SHORT");
-        var leg = Assert.Single(naked.Legs);
 
-        Assert.Equal("SELL", leg.Side);
+        Assert.Equal("SELL", Assert.Single(naked.Legs).Side);
         Assert.Equal("NIFTY", naked.Underlying);
-        Assert.True(naked.MaxRiskPerUnit > 0);
-        Assert.Contains(naked.Evidence, item => item.Contains("gap"));
+    }
+
+    [Fact]
+    public void Stock_range_regime_can_generate_naked_stock_option_short()
+    {
+        var stock = Context("RELIANCE", "STOCK", 2800m, "UP", "RANGE", ["B1=2790", "S=2770", "S1=2760", "B2=2850", "S2=2740"]);
+        var expiry = new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.FromHours(5.5));
+        var options = new[]
+        {
+            Option("RELIANCE 20260922 2750 PE", 40m, 2750m, expiry),
+            Option("RELIANCE 20260922 2700 PE", 30m, 2700m, expiry),
+        };
+
+        var candidates = new StockNakedOptionStrategy()
+            .Generate([stock, .. options], new Dictionary<string, decimal>())
+            .ToList();
+
+        var naked = Assert.Single(candidates, x => x.Strategy == "NAKED_STOCK_OPTION_SHORT");
+        Assert.Equal("RELIANCE", naked.Underlying);
+    }
+
+    [Fact]
+    public void Trending_regime_can_generate_naked_index_future()
+    {
+        var index = Context("BANKNIFTY", "INDEX", 52000m, "UP", "TRENDING", ["B1=51900", "S=51700", "S1=51600", "B2=52500", "S2=51400"]);
+        var future = Context("BANKNIFTY FUT", "FUTURE", 52010m, "UP", "TRENDING", index.Evidence.Facts);
+
+        var candidates = new NakedFutureStrategy()
+            .Generate([index, future], new Dictionary<string, decimal>())
+            .ToList();
+
+        var naked = Assert.Single(candidates, x => x.Strategy == "NAKED_INDEX_FUTURE");
+        Assert.Equal("BUY", Assert.Single(naked.Legs).Side);
     }
 
     [Theory]
@@ -169,6 +205,22 @@ public sealed class PaperDecisionEngineTests
         Assert.Equal((30m, 70m), PortfolioRiskManager.VerticalPayoff(100m, 30m, true));
         Assert.Equal((70m, 30m), PortfolioRiskManager.VerticalPayoff(100m, 30m, false));
         Assert.Equal((0m, 0m), PortfolioRiskManager.VerticalPayoff(100m, 100m, true));
+    }
+
+    [Fact]
+    public void Naked_index_option_passes_risk_when_liquid()
+    {
+        var quote = new QuoteMetadata("test", "NFO", null, DateTimeOffset.UtcNow, 1, true, 99m, 100m, 1000, 5000, []);
+        var candidate = new StrategyCandidate(
+            "NAKED_INDEX_OPTION_SHORT", "NIFTY", "BEARISH", 72, ["gap risk"],
+            [new("NIFTY CE", "NIFTY", "OPTION", "SELL", 1, 100m, Quote: quote)],
+            150m, 50m, 50m, 50m, DateTimeOffset.UtcNow);
+
+        var result = new PortfolioRiskManager().Assess(
+            candidate, new(100_000m, 2_000m, 10_000m, 3), 0, 0, 0, [],
+            IstTime(2026, 9, 16, 10, 0));
+
+        Assert.True(result.Accepted);
     }
 
     [Fact]

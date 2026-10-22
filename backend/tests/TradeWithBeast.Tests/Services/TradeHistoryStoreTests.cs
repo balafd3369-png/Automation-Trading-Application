@@ -76,7 +76,7 @@ public sealed class TradeHistoryStoreTests : IDisposable
         var proposal = new PaperTradeProposal(
             "spread-1", "MULTI_LEG", "NIFTY", "BULLISH", 65, 40m, 20m, 80m,
             "defined risk debit spread", DateTimeOffset.UtcNow.AddMinutes(1),
-            "VERTICAL_DEBIT_SPREAD", "NIFTY", 75m, 2_600m, 3_900m, 1.5m,
+            "VERTICAL_DEBIT_SPREAD", "NIFTY", 75m, 2_600m, 3_900m, 50_000m, 1.5m,
             ["trend=UP", "defined risk"],
             [
                 new("spread-1-1", "NIFTY 25000 CE", "NIFTY", "OPTION", "BUY", 1, 65, 100m, 25000m, "CE", expiry),
@@ -107,7 +107,7 @@ public sealed class TradeHistoryStoreTests : IDisposable
         var proposal = new PaperTradeProposal(
             "close-1", "OPTION", "NIFTY", "BULLISH", 65, 100m, 70m, 160m,
             "option long", DateTimeOffset.UtcNow.AddMinutes(1),
-            "INDEX_OPTION_LONG", "NIFTY", 60m, 6_500m, 3_900m, 0.6m, ["trend=UP"],
+            "INDEX_OPTION_LONG", "NIFTY", 60m, 6_500m, 3_900m, 6_500m, 0.6m, ["trend=UP"],
             [new("close-1-1", "NIFTY 25000 CE", "NIFTY", "OPTION", "BUY", 1, 65, 100m, 25000m, "CE")]);
         store.SaveMultiProposal(proposal);
         var open = new[]
@@ -135,7 +135,7 @@ public sealed class TradeHistoryStoreTests : IDisposable
         var proposal = new PaperTradeProposal(
             "live-1", "OPTION", "NIFTY", "BEARISH", 65, -100m, 150m, 50m,
             "range naked call", DateTimeOffset.UtcNow.AddMinutes(1),
-            "NAKED_INDEX_OPTION_SHORT", "NIFTY", 72m, 3_250m, 3_250m, 1m,
+            "NAKED_INDEX_OPTION_SHORT", "NIFTY", 72m, 3_250m, 3_250m, 80_000m, 1m,
             ["gap risk"],
             [new("live-1-1", "NIFTY 25000 CE", "NIFTY", "OPTION", "SELL", 1, 65, 100m, 25000m, "CE")]);
         store.SaveLiveTrade(proposal, "MIS");

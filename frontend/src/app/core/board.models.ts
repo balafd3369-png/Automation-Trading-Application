@@ -6,6 +6,12 @@ export interface BoardCounts {
   rangeBound: number;
 }
 
+export interface SymbolSearchHit {
+  name: string;
+  companyName: string;
+  exchange: string;
+}
+
 export interface SymbolSnapshot {
   name: string;
   last: number;
@@ -68,6 +74,7 @@ export interface PaperAgentConfig {
   profitTarget: number;
   maxDailyLoss: number;
   maxOpenPositions: number;
+  autoAdmitTrades?: boolean;
 }
 
 export interface PaperPosition {
@@ -86,6 +93,7 @@ export interface PaperPosition {
   strategy?: string;
   underlying?: string;
   maxRisk?: number;
+  capitalRequired?: number;
   legs?: PaperPositionLeg[];
   exitDeadline?: string | null;
 }
@@ -112,6 +120,7 @@ export interface PaperTradeProposal {
   evidenceScore?: number;
   maxRisk?: number;
   maxReward?: number;
+  capitalRequired?: number;
   rewardRisk?: number;
   evidence?: string[];
   legs?: PaperTradeLeg[];
@@ -233,6 +242,10 @@ export interface PaperPerformance {
   realizedPnl: number;
   unrealizedPnl: number;
   grossRiskOpen: number;
+  targetHits: number;
+  stopLossHits: number;
+  trailingStopHits: number;
+  breakevenTrades: number;
 }
 
 export interface MarketRegime {
@@ -242,7 +255,7 @@ export interface MarketRegime {
   evidence: string[];
 }
 
-export type TradeHistoryRange = 'today' | '1m' | '3m' | 'all';
+export type TradeHistoryRange = 'today' | '1w' | '1m';
 
 export interface TradeHistoryItem {
   id: string;
@@ -276,6 +289,10 @@ export interface TradeHistoryResponse {
     losingTrades: number;
     openTrades: number;
     realizedPnl: number;
+    targetHits: number;
+    stopLossHits: number;
+    trailingStopHits: number;
+    breakevenTrades: number;
   };
   trades: TradeHistoryItem[];
 }
@@ -302,10 +319,14 @@ export interface PaperTradeHistoryItem {
   strategy: string;
   underlying: string;
   direction: string;
+  stopLoss?: number;
+  target?: number;
   maxRisk: number;
   maxReward: number;
+  capitalRequired?: number;
   pnl: number | null;
   exitReason: string | null;
+  entryReason?: string | null;
   createdAt: string;
   openedAt: string | null;
   closedAt: string | null;
@@ -360,6 +381,33 @@ export interface BrokerPosition {
   pnl: number;
 }
 
+export interface BrokerOrder {
+  orderId: string;
+  exchangeOrderId: string;
+  exchange: string;
+  tradingSymbol: string;
+  transactionType: string;
+  product: string;
+  orderType: string;
+  status: string;
+  statusMessage: string;
+  quantity: number;
+  filledQuantity: number;
+  pendingQuantity: number;
+  price: number;
+  triggerPrice: number;
+  averagePrice: number;
+  tag: string;
+  updatedAt: string | null;
+}
+
+export interface LiveBrokerPnl {
+  totalPnl: number;
+  realisedPnl: number;
+  unrealisedPnl: number;
+  unrealisedPercent: number | null;
+}
+
 export interface LiveEodPrompt {
   tradeId: string;
   underlying: string;
@@ -389,12 +437,36 @@ export interface LiveExecutionSnapshot {
   marketSession: MarketSession;
   armed: boolean;
   armedUntil: string | null;
+  zoneAutoLiveArmed: boolean;
+  zoneAutoLiveProduct: string;
   state: string;
   pendingProposal: PaperTradeProposal | null;
   trades: LiveTrade[];
   brokerPositions: BrokerPosition[];
+  brokerOrders: BrokerOrder[];
+  brokerPnl: LiveBrokerPnl | null;
   events: LiveExecutionEvent[];
   eodPrompts: LiveEodPrompt[];
   reconciliationStatus: string;
   updatedAt: string;
+}
+
+export const STOCK_B1_REJECTION_STRATEGY = 'STOCK_B1_REJECTION_TO_S2';
+
+export interface ZoneRejectionBacktestResult {
+  symbol: string;
+  pattern: string;
+  samples: number;
+  wins: number;
+  losses: number;
+  winRatePercent: number;
+  avgRewardPoints: number;
+  avgRiskPoints: number;
+}
+
+export interface ZoneRejectionBacktestResponse {
+  result: ZoneRejectionBacktestResult;
+  qualifies: boolean;
+  minWinRate: number;
+  minSamples: number;
 }

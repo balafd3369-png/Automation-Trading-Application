@@ -55,17 +55,73 @@ public static class IndexUniverse
 
     public static Dictionary<string, string[]> QuoteKeys { get; } = BuildQuoteKeys();
 
+    private static readonly object QuoteKeyGate = new();
+
     public static bool IsIndex(string name) =>
         IndexNames.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Registers NSE/BSE quote aliases for equities not in the default board universe.</summary>
+    public static bool TryRegisterEquity(string symbol, out string[] quoteKeys)
+    {
+        var name = symbol.Trim().ToUpperInvariant();
+        if (IsIndex(name))
+        {
+            quoteKeys = QuoteKeys[name];
+            return true;
+        }
+
+        lock (QuoteKeyGate)
+        {
+            if (QuoteKeys.TryGetValue(name, out quoteKeys!))
+            {
+                return true;
+            }
+
+            quoteKeys = [$"NSE:{name}-EQ", $"BSE:{name}"];
+            QuoteKeys[name] = quoteKeys;
+            return true;
+        }
+    }
+
+    /// <summary>m.Stock / NSE-BSE instrument tokens mapped to board symbols.</summary>
+    public static bool TryResolveBoardByInstrumentToken(int instrumentToken, string? exchange, out string boardName)
+    {
+        var ex = (exchange ?? "NSE").Trim().ToUpperInvariant();
+        if (ex is "NSE" or "NFO" && NseInstrumentTokens.TryGetValue(instrumentToken, out boardName!))
+        {
+            return true;
+        }
+
+        if (ex is "BSE" or "BFO" && BseInstrumentTokens.TryGetValue(instrumentToken, out boardName!))
+        {
+            return true;
+        }
+
+        boardName = "";
+        return false;
+    }
+
+    private static readonly Dictionary<int, string> NseInstrumentTokens = new()
+    {
+        [26000] = "NIFTY",
+        [26009] = "BANKNIFTY",
+        [26037] = "FINNIFTY",
+    };
+
+    private static readonly Dictionary<int, string> BseInstrumentTokens = new()
+    {
+        [1] = "SENSEX",
+        [999901] = "SENSEX",
+    };
 
     private static Dictionary<string, string[]> BuildQuoteKeys()
     {
         var map = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
             ["NIFTY"] = ["NSE:NIFTY 50"],
-            ["SENSEX"] = ["BSE:SENSEX"],
-            ["BANKNIFTY"] = ["NSE:NIFTY BANK"],
-            ["FINNIFTY"] = ["NSE:NIFTY FIN SERVICE"],
+            ["SENSEX"] = ["BSE:SENSEX", "BSE:SENSEX 50"],
+            ["BANKNIFTY"] = ["NSE:NIFTY BANK", "NSE:NIFTY BANK INDEX"],
+            ["FINNIFTY"] = ["NSE:NIFTY FIN SERVICE", "NSE:FINNIFTY"],
         };
 
         foreach (var equity in Equities)

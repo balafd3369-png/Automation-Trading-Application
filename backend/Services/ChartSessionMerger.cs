@@ -11,6 +11,30 @@ public static class ChartSessionMerger
     public static DateTime IstToday()
         => TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Ist).Date;
 
+    public static DateTimeOffset IstNow()
+        => TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Ist);
+
+    /// <summary>NSE/BSE cash session 09:15–15:30 IST (exclusive end).</summary>
+    public static bool IsCashSessionOpen(DateTimeOffset timeIst)
+    {
+        var minutes = timeIst.Hour * 60 + timeIst.Minute;
+        var open = 9 * 60 + 15;
+        var close = 15 * 60 + 30;
+        return minutes >= open && minutes < close;
+    }
+
+    public static DateTimeOffset SessionEndIst(DateTime istDate)
+    {
+        var local = istDate.AddHours(15).AddMinutes(30);
+        return new DateTimeOffset(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), Ist.GetUtcOffset(local));
+    }
+
+    public static DateTimeOffset SessionStartIst(DateTime istDate)
+    {
+        var local = istDate.AddHours(9).AddMinutes(15);
+        return new DateTimeOffset(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), Ist.GetUtcOffset(local));
+    }
+
     public static DateTimeOffset ParseIst(string raw)
     {
         var text = raw.Trim();
@@ -91,6 +115,27 @@ public static class ChartSessionMerger
             .ToList();
     }
 
+    /// <summary>Completed + forming intraday buckets from 09:15 IST through <paramref name="nowIst"/>.</summary>
+    public static int MinExpectedTodayBars(DateTimeOffset nowIst, string interval)
+    {
+        var sessionStart = SessionStartIst(nowIst.Date);
+        if (nowIst < sessionStart)
+        {
+            return 0;
+        }
+
+        var sessionEnd = SessionEndIst(nowIst.Date);
+        var effective = nowIst < sessionEnd ? nowIst : sessionEnd;
+        var step = StepMinutes(interval);
+        var minutes = (int)(effective - sessionStart).TotalMinutes;
+        if (minutes < 0)
+        {
+            return 0;
+        }
+
+        return (minutes / step) + 1;
+    }
+
     public static List<ChartBar> MergeHistoricalWithToday(IReadOnlyList<ChartBar> historical, IReadOnlyList<ChartBar> todayBars)
     {
         var today = IstToday();
@@ -101,6 +146,29 @@ public static class ChartSessionMerger
         return merged.OrderBy(b => b.Time).ToList();
     }
 
+    /// <summary>
+    /// Before 09:15 IST, drop same-calendar-day intraday bars (avoids phantom "today" candles after midnight).
+    /// </summary>
+    public static List<ChartBar> TrimIntradayBarsBeforeSessionOpen(IReadOnlyList<ChartBar> bars)
+    {
+        if (bars.Count == 0)
+        {
+            return [];
+        }
+
+        var nowIst = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Ist);
+        var sessionStart = nowIst.Date.AddHours(9).AddMinutes(15);
+        if (nowIst >= sessionStart)
+        {
+            return bars.ToList();
+        }
+
+        var today = nowIst.Date;
+        return bars
+            .Where(b => TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(b.Time), Ist).Date < today)
+            .ToList();
+    }
+
     public static List<ChartBar> BuildCurrentBar(SymbolSnapshot snap, string interval, decimal liveLast)
     {
         if (liveLast <= 0)
@@ -108,9 +176,8 @@ public static class ChartSessionMerger
             return [];
         }
 
-        var nowIst = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Ist);
-        var sessionStart = nowIst.Date.AddHours(9).AddMinutes(15);
-        if (nowIst < sessionStart)
+        var nowIst = IstNow();
+        if (!IsCashSessionOpen(nowIst))
         {
             return [];
         }

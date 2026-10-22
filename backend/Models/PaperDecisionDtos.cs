@@ -86,7 +86,11 @@ public sealed record PaperPerformanceMetrics(
     decimal WinRatePercent,
     decimal RealizedPnl,
     decimal UnrealizedPnl,
-    decimal GrossRiskOpen);
+    decimal GrossRiskOpen,
+    int TargetHits,
+    int StopLossHits,
+    int TrailingStopHits,
+    int BreakevenTrades);
 
 public sealed record MarketRegimeSnapshot(
     string Regime,
@@ -115,10 +119,14 @@ public sealed record PaperTradeHistorySnapshot(
     string Strategy,
     string Underlying,
     string Direction,
+    decimal StopLoss,
+    decimal Target,
     decimal MaxRisk,
     decimal MaxReward,
+    decimal CapitalRequired,
     decimal? Pnl,
     string? ExitReason,
+    string? EntryReason,
     DateTimeOffset CreatedAt,
     DateTimeOffset? OpenedAt,
     DateTimeOffset? ClosedAt,

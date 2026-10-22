@@ -1,46 +1,261 @@
 <div class="ide">
-  <header class="titlebar">
-    <div class="dots" aria-hidden="true">
-      <span class="dot red"></span>
-      <span class="dot yellow"></span>
-      <span class="dot green"></span>
-    </div>
-    <div class="title">Trade with Beast — {{ brokerConnected ? 'pressure-board.live' : 'pressure-board.offline' }}</div>
-    <div class="title-actions">
-      <button type="button" class="open-btn" (click)="openPicker()">Open</button>
-      <span class="title-meta">{{ clock | date: 'HH:mm:ss' }}</span>
-    </div>
-  </header>
-
-  <div class="workbench">
-    <nav class="activity" aria-label="Activity bar">
-      <button class="act" [class.active]="marketKind === 'stocks'" title="Stocks" type="button" (click)="setMarketKind('stocks')">
-        <svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor"><path d="M2 2h5v5H2V2zm7 0h5v5H9V2zM2 9h5v5H2V9zm7 0h5v5H9V9z"/></svg>
+  <header class="titlebar" [class.titlebar-trades]="centerView === 'trades'">
+    <div class="titlebar-main">
+    <div class="title-brand">Trade with Beast</div>
+    <nav class="top-nav" aria-label="Main navigation">
+      <button
+        type="button"
+        class="top-nav-btn top-nav-btn-dash"
+        [class.active]="centerView === 'market' && marketNavTab === 'dashboard'"
+        (click)="showDashboard()"
+      >
+        DASHBOARD
       </button>
-      <button class="act" [class.active]="marketKind === 'options'" title="Options" type="button" (click)="setMarketKind('options')">
-        <svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor"><path d="M3 3h4v10H3V3zm6 4h4v6H9V7z"/></svg>
+      <button
+        type="button"
+        class="top-nav-btn top-nav-btn-si"
+        [class.active]="centerView === 'intelligence'"
+        (click)="showSuperIntelligence()"
+      >
+        SUPER INTELLIGENCE
       </button>
-      <button class="act" title="Open symbol" type="button" (click)="openPicker()">
-        <svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor"><path d="M2 3h5l1 2h6v8H2V3zm8 5H6v1h4V8z"/></svg>
+      <button
+        type="button"
+        class="top-nav-btn top-nav-btn-options"
+        [class.active]="centerView === 'market' && marketNavTab === 'options'"
+        (click)="showOptions()"
+      >
+        OPTIONS
       </button>
-      <div class="act-spacer"></div>
-      <button class="act muted" title="No broker" type="button">
-        <svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor"><path d="M8 1a4 4 0 0 0-4 4v2H3v8h10V7h-1V5a4 4 0 0 0-4-4zm-2 6V5a2 2 0 1 1 4 0v2H6z"/></svg>
+      <button
+        type="button"
+        class="top-nav-btn top-nav-btn-strategies"
+        [class.active]="centerView === 'strategies'"
+        (click)="showStrategies()"
+      >
+        STRATEGIES
+      </button>
+      <button
+        type="button"
+        class="top-nav-btn top-nav-btn-trades"
+        [class.active]="centerView === 'trades'"
+        (click)="showTradeDetails()"
+      >
+        TRADE DETAILS
       </button>
     </nav>
+    <div class="title-actions">
+      <details class="broker-hub" #brokerHub>
+        <summary class="broker-hub-trigger" title="Connect or switch broker">
+          <span class="broker-hub-dot" [class]="brokerHubStatusClass()" aria-hidden="true"></span>
+          <span class="broker-hub-label">{{ brokerHubTriggerLabel() }}</span>
+          <span class="broker-hub-caret" aria-hidden="true">▾</span>
+        </summary>
+        <div class="broker-hub-panel" role="dialog" aria-label="Broker connections">
+          <p class="broker-hub-title">Connect broker</p>
+          <p class="broker-hub-sub">Live quotes and orders use the account you connect. Only one broker at a time.</p>
+          @for (choice of brokerChoices; track choice.id) {
+            <article
+              class="broker-card"
+              [class.active]="isBrokerChoiceActive(choice.id)"
+              [class.connected]="isBrokerChoiceConnected(choice.id)"
+            >
+              <button
+                type="button"
+                class="broker-card-head"
+                [disabled]="brokerConnected || brokerBusy"
+                (click)="chooseBroker(choice.id)"
+              >
+                <span class="broker-card-mark">{{ choice.mark }}</span>
+                <span class="broker-card-text">
+                  <strong>{{ choice.name }}</strong>
+                  <small>{{ choice.authLabel }} · NSE &amp; BSE data</small>
+                </span>
+                <span
+                  class="broker-card-status"
+                  [class.on]="isBrokerChoiceConnected(choice.id)"
+                  [class.pick]="isBrokerChoiceActive(choice.id) && !brokerConnected"
+                >
+                  @if (isBrokerChoiceConnected(choice.id)) {
+                    Connected
+                  } @else if (isBrokerChoiceActive(choice.id)) {
+                    Selected
+                  } @else {
+                    —
+                  }
+                </span>
+              </button>
+              @if (isBrokerChoiceActive(choice.id) && !brokerConnected) {
+                <div class="broker-card-body">
+                  <p class="broker-card-hint">{{ choice.description }}</p>
+                  <div class="broker-card-actions">
+                    <button type="button" class="broker-primary" [disabled]="brokerBusy" (click)="requestBrokerOtp()">
+                      Request OTP
+                    </button>
+                    <input
+                      class="broker-otp-input"
+                      [(ngModel)]="otp"
+                      name="otpHeader"
+                      maxlength="8"
+                      inputmode="numeric"
+                      autocomplete="one-time-code"
+                      placeholder="OTP"
+                      [disabled]="!otpRequested || brokerBusy"
+                      (keyup.enter)="submitBrokerOtp()"
+                    />
+                    <button
+                      type="button"
+                      [disabled]="!otpRequested || brokerBusy || !otp.trim()"
+                      (click)="submitBrokerOtp()"
+                    >
+                      Submit
+                    </button>
+                  </div>
+                  @if (brokerMessage) {
+                    <p
+                      class="broker-card-msg"
+                      [class.ok]="brokerConnected"
+                      [class.warn]="!brokerConnected && otpRequested && !brokerBusy"
+                      [class.err]="!brokerConnected && !otpRequested && brokerMessage.includes('outdated')"
+                    >{{ brokerMessage }}</p>
+                  }
+                </div>
+              }
+            </article>
+          }
+          @if (brokerConnected) {
+            <div class="broker-hub-footer">
+              @if (displayAvailableFunds() != null) {
+                <span class="broker-hub-funds">₹{{ displayAvailableFunds() | number: '1.0-0' }} available</span>
+              }
+              <button type="button" class="broker-disconnect" [disabled]="brokerBusy" (click)="disconnectBroker()">
+                Disconnect {{ brokerDisplayName }}
+              </button>
+            </div>
+          }
+        </div>
+      </details>
+      <details class="theme-picker">
+        <summary class="theme-picker-trigger" title="Change application background">
+          <span class="theme-swatch" [style.background]="themePreviewColor()" aria-hidden="true"></span>
+          <span class="theme-picker-label" title="Background theme">Theme</span>
+        </summary>
+        <div class="theme-menu" role="dialog" aria-label="Background color">
+          <p class="theme-menu-title">Background theme</p>
+          <div class="theme-presets" role="list">
+            @for (preset of themePresets; track preset.id) {
+              <button
+                type="button"
+                class="theme-preset-btn"
+                role="listitem"
+                [class.active]="isThemePresetActive(preset.id)"
+                [attr.aria-label]="preset.label"
+                [title]="preset.label"
+                (click)="selectThemePreset(preset.id)"
+              >
+                <span class="theme-preset-swatch" [style.background]="preset.preview"></span>
+              </button>
+            }
+          </div>
+          <label class="theme-custom">
+            <span>Custom color</span>
+            <input
+              type="color"
+              [value]="themeCustomColorValue()"
+              (input)="onCustomThemeColor($any($event.target).value)"
+              aria-label="Pick custom background color"
+            />
+          </label>
+        </div>
+      </details>
+      @if (brokerConnected && displayAvailableFunds() != null) {
+        <span class="title-funds">₹{{ displayAvailableFunds() | number: '1.0-0' }} available</span>
+      }
+      <span class="title-status" [class.live]="brokerConnected" [class.off]="!brokerConnected">
+        {{ brokerConnected ? 'LIVE' : 'OFF' }}
+      </span>
+      <app-live-clock />
+    </div>
+    </div>
+    @if (centerView === 'trades') {
+      <div class="titlebar-trade-row">
+        <span class="titlebar-trade-label">Trade views</span>
+        <div class="trade-panel-nav trade-panel-nav-header" role="tablist" aria-label="Trade details views">
+          <button
+            type="button"
+            class="trade-tab-btn trade-tab-paper"
+            role="tab"
+            [class.active]="tradePanelTab === 'paper'"
+            [attr.aria-selected]="tradePanelTab === 'paper'"
+            (click)="setTradePanelTab('paper')"
+          >
+            Paper Trading
+          </button>
+          <button
+            type="button"
+            class="trade-tab-btn trade-tab-live"
+            role="tab"
+            [class.active]="tradePanelTab === 'live'"
+            [attr.aria-selected]="tradePanelTab === 'live'"
+            (click)="setTradePanelTab('live')"
+          >
+            LIVE TRADING
+          </button>
+          <button
+            type="button"
+            class="trade-tab-btn trade-tab-history"
+            role="tab"
+            [class.active]="tradePanelTab === 'history'"
+            [attr.aria-selected]="tradePanelTab === 'history'"
+            (click)="setTradePanelTab('history')"
+          >
+            TRADE HISTORY
+          </button>
+          <button
+            type="button"
+            class="trade-tab-btn trade-tab-agent"
+            role="tab"
+            [class.active]="tradePanelTab === 'agent'"
+            [attr.aria-selected]="tradePanelTab === 'agent'"
+            (click)="setTradePanelTab('agent')"
+          >
+            AGENT
+          </button>
+        </div>
+      </div>
+    }
+    <div class="titlebar-spectrum" aria-hidden="true"></div>
+  </header>
 
+  @if (centerView === 'strategies') {
+    <app-strategies-page class="strategies-shell" />
+  } @else if (centerView === 'intelligence') {
+    <app-super-intelligence-page class="strategies-shell" />
+  } @else {
+  <div
+    class="workbench"
+    [class.trades-focus]="centerView === 'trades'"
+    [class.options-mode]="centerView === 'market' && marketKind === 'options'"
+  >
+    @if (centerView === 'market') {
     <aside class="rail left-rail">
       @if (marketKind === 'options') {
-        <div class="rail-head">
+        <div class="rail-head rail-head-ce">
           <span class="rail-label">CALLS CE</span>
-          <span class="count buy">{{ ceContracts().length }}</span>
+          <span class="count buy count-pill">{{ ceContracts().length }}</span>
         </div>
-        <ul class="tree">
+        <ul class="tree option-chain-tree option-chain-ce">
           @for (row of ceContracts(); track row.label) {
             <li>
-              <button type="button" class="tree-item" [class.selected]="optionSelected(row)" (click)="openOption(row)">
-                <span class="chev">▾</span>
-                <span class="file">{{ row.strike }} CE</span>
+              <button
+                type="button"
+                class="tree-item option-chain-item"
+                [class.selected]="optionSelected(row)"
+                [class.atm]="optionIsAtm(row)"
+                (click)="openOption(row)"
+              >
+                <span class="chev" aria-hidden="true">▸</span>
+                <span class="file option-strike">{{ row.strike }}<small>CE</small></span>
                 <span class="option-market" [class.up]="optionTone(row) === 'up'" [class.down]="optionTone(row) === 'down'">
                   <strong>{{ row.last != null ? (row.last | number: '1.2-2') : '—' }}</strong>
                   <small>
@@ -57,9 +272,9 @@
           }
         </ul>
       } @else {
-        <div class="rail-head">
+        <div class="rail-head rail-head-sell">
           <span class="rail-label">SELLING PRESSURE</span>
-          <span class="count sell">{{ boardData?.counts?.selling ?? 0 }}</span>
+          <span class="count sell count-pill">{{ boardData?.counts?.selling ?? 0 }}</span>
         </div>
         @if (state === 'loading') {
           <div class="skel"></div>
@@ -84,37 +299,136 @@
         }
       }
     </aside>
+    }
 
-    <main class="editor">
+    <main
+      class="editor"
+      [class.trades-mode]="centerView === 'trades'"
+      [class.options-market]="centerView === 'market' && marketKind === 'options'"
+      [class.broker-bar-visible]="showBrokerConnectionBar()"
+    >
+      @if (centerView === 'market' && !brokerConnected) {
+        <p class="broker-dashboard-hint">
+          Connect <strong>m.Stock</strong> from the
+          <strong>Broker</strong> menu in the top bar (status dot next to Theme).
+          <button type="button" class="si-dash-link" (click)="showSuperIntelligence()">Super Intelligence</button>
+          — October 360° strategy journal.
+        </p>
+      }
+      @if (centerView === 'market') {
       <div class="editor-head">
-      <div class="tabs">
+      <div class="symbol-search-bar">
+        <div class="symbol-search" #symbolSearchRoot [class.is-open]="pickerOpen">
+          <span class="symbol-search-icon" aria-hidden="true">⌕</span>
+          <input
+            #symbolSearchInput
+            id="symbolSearchInput"
+            class="symbol-search-field"
+            [(ngModel)]="pickerQuery"
+            name="symbolSearch"
+            type="search"
+            autocomplete="off"
+            placeholder="Search stocks and options"
+            aria-label="Search stocks and options"
+            [attr.aria-expanded]="pickerOpen"
+            aria-controls="symbolSearchPanel"
+            (focus)="onSymbolSearchFocus()"
+            (input)="onSymbolSearchInput()"
+          />
+          @if (pickerOpen) {
+            <div
+              id="symbolSearchPanel"
+              class="symbol-search-panel picker picker-compact"
+              role="dialog"
+              aria-label="Search results"
+              (click)="$event.stopPropagation()"
+            >
+              <div class="picker-kind picker-kind-segment">
+                <button type="button" [class.active]="pickerKind === 'stocks'" (click)="setPickerKind('stocks')">Stocks</button>
+                <button type="button" [class.active]="pickerKind === 'options'" (click)="setPickerKind('options')">Options</button>
+              </div>
+              @if (pickerKind === 'options') {
+                <div class="picker-filters picker-filters-compact">
+                  @for (name of indexTabs; track name) {
+                    <button type="button" [class.active]="optionUnderlying === name" (click)="pickPickerUnderlying(name)">{{ name }}</button>
+                  }
+                  @for (exp of expiries(); track exp.id) {
+                    <button type="button" [class.active]="optionExpiry === exp.id" (click)="optionExpiry = exp.id">{{ exp.label }}</button>
+                  }
+                </div>
+              }
+              <div class="picker-body">
+                @if (pickerKind === 'options') {
+                  @if (!pickerQueryActive()) {
+                    <p class="picker-empty-hint">Pick index &amp; expiry, then type strike or CE/PE.</p>
+                  } @else if (pickerOptions().length === 0) {
+                    <p class="picker-empty-hint">No contracts match “{{ pickerQuery.trim() }}”.</p>
+                  } @else {
+                    <ul class="picker-list">
+                      @for (row of pickerOptions(); track row.label + row.side) {
+                        <li>
+                          <button type="button" class="picker-result" (click)="openOption(row)">
+                            <span class="picker-result-name">{{ row.label }}</span>
+                            <span class="picker-meta">
+                              @if (row.last != null) {
+                                {{ row.last | number: '1.2-2' }}
+                              } @else {
+                                —
+                              }
+                            </span>
+                          </button>
+                        </li>
+                      }
+                    </ul>
+                  }
+                } @else {
+                  @if (!pickerQueryActive()) {
+                    <p class="picker-empty-hint">Quick picks — or type any stock or index.</p>
+                  }
+                  <ul class="picker-list">
+                    @for (row of pickerStockRows(); track row.name) {
+                      <li>
+                        <button type="button" class="picker-result" (click)="openStock(row)">
+                          <span class="picker-result-main">
+                            <span class="picker-result-name">{{ row.name }}</span>
+                            @if (row.subtitle) {
+                              <span class="picker-result-sub">{{ row.subtitle }}</span>
+                            }
+                          </span>
+                          <span class="picker-meta">
+                            @if (row.last != null) {
+                              {{ row.last | number: '1.2-2' }}
+                            }
+                          </span>
+                        </button>
+                      </li>
+                    }
+                  </ul>
+                  @if (pickerQueryActive() && pickerStockRows().length === 0) {
+                    <p class="picker-empty-hint">No symbols match “{{ pickerQuery.trim() }}”.</p>
+                  }
+                }
+              </div>
+              <p class="picker-hint">Stock → Dashboard chart · Option → Options chart · Esc to close</p>
+            </div>
+          }
+        </div>
+      </div>
+      <div class="tabs index-tabs">
         @for (name of indexTabs; track name) {
           <button
             type="button"
             class="tab"
+            [ngClass]="'tab-index-' + name"
             [class.active]="centerView === 'market' && selectedName === name"
             [class.up]="tone(indexRow(name)) === 'up'"
             [class.down]="tone(indexRow(name)) === 'down'"
-            (click)="marketKind === 'options' ? setOptionUnderlying(name) : selectIndex(name)"
+            (click)="selectIndexTab(name)"
           >
-            <span class="tab-dot"></span>
+            <span class="tab-dot" aria-hidden="true"></span>
             {{ name }}
           </button>
         }
-        <button
-          type="button"
-          class="tab trade-tab"
-          [class.active]="centerView === 'trades'"
-          (click)="showTradeDetails()"
-        >
-          <span class="tab-dot"></span>
-          Trade Details
-          @if (paperAgent?.pendingTrade) {
-            <span class="tab-alert">1</span>
-          } @else if (paperAgent?.positions?.length) {
-            <span class="tab-count">{{ paperAgent?.positions?.length }}</span>
-          }
-        </button>
         @if (selected && !isIndex(selected.name) && marketKind === 'stocks') {
           <div class="tab" [class.active]="centerView === 'market'" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">
             <span class="tab-dot"></span>
@@ -129,17 +443,42 @@
         }
       </div>
       @if (marketKind === 'options' && centerView === 'market') {
-        <div class="kind-bar">
-          <span>Options</span>
-          @for (exp of expiries(); track exp.id) {
-            <button type="button" [class.active]="optionExpiry === exp.id" (click)="setOptionExpiry(exp.id)">{{ exp.label }}</button>
-          }
-          <span class="tv-sep"></span>
-          <button type="button" [class.active]="optionSide === 'CE'" (click)="setOptionSide('CE')">CE</button>
-          <button type="button" [class.active]="optionSide === 'PE'" (click)="setOptionSide('PE')">PE</button>
+        <div class="kind-bar options-toolbar">
+          <span class="options-toolbar-label">Expiry</span>
+          <div class="options-expiry-group">
+            @for (exp of expiries(); track exp.id) {
+              <button
+                type="button"
+                class="options-expiry-btn"
+                [class.active]="optionExpiry === exp.id"
+                (click)="setOptionExpiry(exp.id)"
+              >
+                {{ exp.label }}
+              </button>
+            }
+          </div>
+          <div class="options-side-toggle" role="group" aria-label="Option side">
+            <button
+              type="button"
+              class="options-side-btn options-side-ce"
+              [class.active]="optionSide === 'CE'"
+              (click)="setOptionSide('CE')"
+            >
+              Calls CE
+            </button>
+            <button
+              type="button"
+              class="options-side-btn options-side-pe"
+              [class.active]="optionSide === 'PE'"
+              (click)="setOptionSide('PE')"
+            >
+              Puts PE
+            </button>
+          </div>
         </div>
       }
       </div>
+      }
 
       @if (centerView === 'market') {
       @if (state === 'loading') {
@@ -158,15 +497,18 @@
           <p>Pick a name from the selling or buying rail.</p>
         </div>
       } @else {
-        <div class="pane chart-pane">
+        <div class="pane chart-pane" [class.options-chart-pane]="marketKind === 'options'">
           <div class="crumb">
             {{ marketKind }} / {{ selected.name }}
             @if (openedOption) {
               / {{ openedOption.label }}
             }
           </div>
-          <div class="headline">
+          <div class="headline" [class.options-headline]="marketKind === 'options'">
             <div>
+              @if (marketKind === 'options' && openedOption) {
+                <span class="options-premium-tag">Option premium</span>
+              }
               <div class="symbol" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">{{ openedOption?.label || selected.name }}</div>
               <div class="last" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">{{ displayLast() | number: '1.2-2' }}</div>
               <div class="vs">{{ lastVs(selected) }} · open {{ displayOpen() | number: '1.2-2' }}</div>
@@ -243,13 +585,6 @@
                   <span>Move the crosshair over a candle for date, time and OHLC</span>
                 }
               </div>
-              <div class="zone-legend" aria-label="Pressure levels">
-                <span class="b2">B2 <b>{{ selected.b2 | number: '1.2-2' }}</b></span>
-                <span class="b1">B1 <b>{{ selected.b1 | number: '1.2-2' }}</b></span>
-                <span class="s">S <b>{{ selected.s | number: '1.2-2' }}</b></span>
-                <span class="s1">S1 <b>{{ selected.s1 | number: '1.2-2' }}</b></span>
-                <span class="s2">S2 <b>{{ selected.s2 | number: '1.2-2' }}</b></span>
-              </div>
               <div #chartHost class="tv-chart"></div>
             </div>
           </div>
@@ -272,118 +607,365 @@
       }
       }
 
+      @if (showBrokerConnectionBar()) {
       <div class="broker-bar">
         <span class="broker-label">m.Stock</span>
+        @if (!brokerConnected) {
         <button type="button" class="broker-primary" [disabled]="brokerBusy" (click)="requestBrokerOtp()">
-          {{ brokerConnected ? 'New OTP' : 'Request OTP' }}
+          Request OTP
         </button>
         <input
+          class="broker-otp-input"
           [(ngModel)]="otp"
           name="otp"
           maxlength="8"
+          inputmode="numeric"
+          autocomplete="one-time-code"
           placeholder="Enter OTP"
           [disabled]="!otpRequested || brokerBusy"
           (keyup.enter)="submitBrokerOtp()"
         />
         <button type="button" [disabled]="!otpRequested || brokerBusy || !otp.trim()" (click)="submitBrokerOtp()">Submit OTP</button>
+        } @else {
+        <span class="broker-label">{{ brokerDisplayName }}</span>
+        <span class="broker-connected-pill">Connected</span>
+        @if (displayAvailableFunds() != null) {
+          <span class="broker-funds">
+            ₹{{ displayAvailableFunds() | number: '1.0-0' }} available
+            @if (displayUtilizedFunds() != null) {
+              · ₹{{ displayUtilizedFunds() | number: '1.0-0' }} utilized
+            }
+          </span>
+        }
+        }
         <span class="broker-msg" [class.ok]="brokerConnected">{{ brokerMessage }}</span>
       </div>
+      }
       @if (centerView === 'trades') {
-      <section class="agent-panel" aria-label="Trading agent">
+      <section class="agent-panel" [class.agent-panel-live]="tradePanelTab === 'live'" aria-label="Trading agent">
         <div class="agent-head">
-          <strong>Strategy Agent</strong>
-          <div class="execution-toggle" aria-label="Execution mode">
-            <button type="button" [class.active]="executionMode === 'paper'" (click)="setExecutionMode('paper')">Paper</button>
-            <button type="button" [class.active]="executionMode === 'live'" (click)="setExecutionMode('live')">Live</button>
-          </div>
-          <span class="agent-state" [class.running]="executionMode === 'live' ? liveAgent?.armed : paperAgent?.running">
-            {{ executionMode === 'live' ? (liveAgent?.state || 'CONNECTING') : (paperAgent?.state || 'CONNECTING') }}
-          </span>
+          <strong>{{ tradeDetailsPanelTitle() }}</strong>
+          @if (tradePanelTab === 'paper') {
+            <span class="agent-state" [class.running]="paperAgent?.running">
+              @if (tradeHistory) {
+                {{ paperTodayDateLabel() }} · {{ tradeHistory.summary.closedTrades }} closed · net ₹{{ paperTodayPnlSummary().net | number: '1.0-0' }}
+              } @else {
+                {{ paperAgent?.state || 'CONNECTING' }}
+              }
+            </span>
+          } @else if (tradePanelTab === 'live' && brokerConnected && displayAvailableFunds() != null) {
+            <span class="agent-state live-funds">
+              ₹{{ displayAvailableFunds() | number: '1.0-0' }} available
+            </span>
+          } @else if (tradePanelTab === 'history' && tradeHistory) {
+            <span class="agent-state">
+              {{ tradeHistory.summary.closedTrades }} closed · ₹{{ tradeHistory.summary.realizedPnl | number: '1.0-0' }} realized
+            </span>
+          }
         </div>
-        <div class="agent-metrics">
-          <span>Available funds <b>{{ paperAgent?.brokerAvailableFunds != null ? (paperAgent?.brokerAvailableFunds | number: '1.0-0') : '—' }}</b></span>
-          <span>Allocated <b>{{ paperAgent?.config?.allocatedCapital != null ? (paperAgent?.config?.allocatedCapital | number: '1.0-0') : '—' }}</b></span>
-          <span>Profit target <b>{{ paperAgent?.config?.profitTarget != null ? (paperAgent?.config?.profitTarget | number: '1.0-0') : '—' }}</b></span>
-          <span>Loss limit <b class="down">{{ paperAgent?.config?.maxDailyLoss != null ? (paperAgent?.config?.maxDailyLoss | number: '1.0-0') : '—' }}</b></span>
-          <span>Total P&amp;L <b [class.up]="(paperAgent?.totalPnl || 0) >= 0" [class.down]="(paperAgent?.totalPnl || 0) < 0">{{ paperAgent?.totalPnl | number: '1.2-2' }}</b></span>
-        </div>
-        <div class="decision-overview">
-          <div class="regime-card" [class.stale]="paperAgent?.marketRegime && !paperAgent?.marketRegime?.isFresh">
-            <small>Market regime</small>
-            <strong>{{ paperAgent?.marketRegime?.regime || 'WAITING FOR DATA' }}</strong>
-            <span>{{ paperAgent?.marketRegime?.isFresh ? 'Fresh market evidence' : 'Stale or incomplete evidence' }}</span>
-          </div>
-          <div class="performance-strip">
-            <span>Win rate <b>{{ paperAgent?.performance?.winRatePercent || 0 | number: '1.1-1' }}%</b></span>
-            <span>Closed <b>{{ paperAgent?.performance?.closedTrades || 0 }}</b></span>
-            <span>Open risk <b>₹{{ paperAgent?.performance?.grossRiskOpen || 0 | number: '1.0-0' }}</b></span>
-            <span>Unrealized <b [class.up]="(paperAgent?.performance?.unrealizedPnl || 0) >= 0" [class.down]="(paperAgent?.performance?.unrealizedPnl || 0) < 0">₹{{ paperAgent?.performance?.unrealizedPnl || 0 | number: '1.2-2' }}</b></span>
-          </div>
-        </div>
-        @if (executionMode === 'live') {
-          <section class="live-console" aria-label="Live broker execution">
-            <div class="live-status" [class.open]="liveAgent?.marketSession?.isOpen" [class.closed]="!liveAgent?.marketSession?.isOpen">
-              <strong>{{ liveAgent?.state || 'CONNECTING' }}</strong>
-              <span>{{ liveStatusMessage() }}</span>
+        @if (tradePanelTab === 'live') {
+          <section class="live-zone-auto-panel" aria-label="Zone CSV go live">
+            <div class="live-zone-auto-head">
+              <strong>Go live — zone CSV (NIFTY · BANKNIFTY · FINNIFTY · SENSEX)</strong>
+              <span class="live-zone-auto-state" [class.on]="liveAgent?.zoneAutoLiveArmed">
+                {{ liveAgent?.zoneAutoLiveArmed ? ('ZONE AUTO LIVE · ' + (liveAgent?.zoneAutoLiveProduct || liveProduct)) : (liveAgent?.state || 'CHECKING') }}
+              </span>
             </div>
-            @if (!liveAgent?.featureEnabled) {
-              <div class="live-warning">Live trading is disabled in backend configuration. Set LiveTrading:Enabled to true and restart the backend.</div>
-            } @else if (!brokerConnected || !liveAgent?.brokerConnected) {
-              <div class="live-warning">Connect m.Stock OTP above before arming or confirming live trades.</div>
-            } @else if (!liveAgent?.marketSession?.isOpen) {
-              <div class="live-warning market-closed">
-                {{ liveAgent?.marketSession?.message }}
-                @if (liveAgent?.marketSession?.nextEventAt) {
-                  · Next session {{ liveAgent?.marketSession?.nextEventAt | date: 'EEE, HH:mm':'+0530' }} IST
-                }
-              </div>
-            } @else if (!liveAgent?.armed) {
-              <div class="live-arm">
-                <strong>Arm real-money execution</strong>
-                <small>Type exactly: I UNDERSTAND LIVE ORDERS USE REAL MONEY</small>
-                <input [(ngModel)]="liveAcknowledgement" name="liveAcknowledgement" autocomplete="off" />
-                <button type="button" [disabled]="liveBusy" (click)="armLive()">Arm LIVE</button>
+            <p class="live-zone-auto-copy">
+              When armed, B1/S1/S2 zone signals auto-send ITM+OTM option legs to your broker (no per-trade confirm).
+              Preflight checks broker session, funds, and one open live trade per index. Disarm stops new entries.
+            </p>
+            @if (liveAgent?.zoneAutoLiveArmed) {
+              <div class="live-zone-auto-actions">
+                <button type="button" class="reject" [disabled]="liveBusy" (click)="disarmLive()">Disarm zone live</button>
+                <span class="live-zone-auto-hint">{{ liveStatusMessage() }}</span>
               </div>
             } @else {
-              <div class="live-health">
-                <strong>LIVE ARMED until {{ liveAgent?.armedUntil | date: 'HH:mm:ss':'+0530' }} IST</strong>
-                <span>Broker reconciliation: {{ liveAgent?.reconciliationStatus }}</span>
-                <button type="button" [disabled]="liveBusy" (click)="disarmLive()">Disarm</button>
+              <div class="live-zone-auto-arm">
+                <select [(ngModel)]="liveProduct" name="zoneLiveProduct" [disabled]="liveBusy">
+                  <option value="MIS">MIS</option>
+                  <option value="NRML">NRML</option>
+                </select>
+                <input
+                  type="text"
+                  [(ngModel)]="zoneAutoLiveAcknowledgement"
+                  name="zoneAutoLiveAck"
+                  [placeholder]="zoneAutoLivePhrase"
+                  [disabled]="liveBusy"
+                  autocomplete="off"
+                />
+                <button type="button" class="approve live-confirm" [disabled]="!canArmZoneAutoLive()" (click)="armZoneAutoLive()">
+                  Go live
+                </button>
               </div>
-            }
-            @for (prompt of liveAgent?.eodPrompts || []; track prompt.tradeId) {
-              <div class="eod-prompt">
-                <strong>3:00 PM decision · {{ prompt.underlying }}</strong>
-                <span>{{ prompt.message }}</span>
-                <button type="button" [disabled]="liveBusy" (click)="handleLiveEod(prompt.tradeId, 'HOLD')">Hold / convert to NRML</button>
-                <button type="button" [disabled]="liveBusy" (click)="handleLiveEod(prompt.tradeId, 'EXIT')">Exit now</button>
-              </div>
-            }
-            @for (trade of liveAgent?.trades || []; track trade.id) {
-              <article class="live-trade">
-                <div><strong>{{ trade.strategy }} · {{ trade.underlying }}</strong><b>{{ trade.product }} · {{ trade.status }}</b></div>
-                @if (trade.failureReason) { <small class="down">{{ trade.failureReason }}</small> }
-                @for (order of trade.orders; track order.id) {
-                  <span>
-                    {{ order.purpose }} · {{ order.transactionType }} {{ order.symbol }}
-                    · {{ order.filledQuantity }}/{{ order.quantity }} · {{ order.status }}
-                    @if (order.averagePrice > 0) { &#64; ₹{{ order.averagePrice | number: '1.2-2' }} }
-                    @if (order.brokerMessage) { · {{ order.brokerMessage }} }
-                  </span>
-                }
-                @if (trade.status === 'OPEN' || trade.status === 'OPEN_NRML' || trade.status === 'EXIT_FAILED') {
-                  <button type="button" class="danger" [disabled]="liveBusy" (click)="exitLive(trade.id)">Emergency exit</button>
-                }
-              </article>
             }
           </section>
+          <section class="live-book live-book-primary" aria-label="Live broker book">
+            <div class="live-book-nav" role="tablist" aria-label="Live trading views">
+              <button
+                type="button"
+                role="tab"
+                class="live-book-nav-btn"
+                [class.active]="liveBookView === 'positions'"
+                [attr.aria-selected]="liveBookView === 'positions'"
+                (click)="setLiveBookView('positions')"
+              >
+                Live Positions (P&amp;L)
+                <small>({{ liveOpenPositionCount() }})</small>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                class="live-book-nav-btn"
+                [class.active]="liveBookView === 'orders'"
+                [attr.aria-selected]="liveBookView === 'orders'"
+                (click)="setLiveBookView('orders')"
+              >
+                Orders
+                <small>({{ liveAllOrderRows().length }})</small>
+              </button>
+            </div>
+            @if (!brokerConnected || !liveAgent?.brokerConnected) {
+              <p class="live-book-empty">Connect m.Stock on the Dashboard to load live positions and executed orders.</p>
+            } @else if (liveBookView === 'positions') {
+              @if (liveAgent?.brokerPnl; as pnl) {
+                <div class="live-pnl-bar">
+                  <span>
+                    Total P/L (₹)
+                    <b [class.up]="pnl.totalPnl >= 0" [class.down]="pnl.totalPnl < 0">{{ pnl.totalPnl | number: '1.2-2' }}</b>
+                  </span>
+                  <span>
+                    Realised P/L (₹)
+                    <b [class.up]="pnl.realisedPnl >= 0" [class.down]="pnl.realisedPnl < 0">{{ pnl.realisedPnl | number: '1.2-2' }}</b>
+                  </span>
+                  <span>
+                    Unrealised P/L (₹)
+                    <b [class.up]="pnl.unrealisedPnl >= 0" [class.down]="pnl.unrealisedPnl < 0">
+                      {{ pnl.unrealisedPnl | number: '1.2-2' }}
+                      @if (pnl.unrealisedPercent != null) {
+                        ({{ pnl.unrealisedPercent | number: '1.2-2' }}%)
+                      }
+                    </b>
+                  </span>
+                </div>
+              }
+              @if (livePositionRows().length === 0) {
+                <p class="live-book-empty">No broker positions returned yet.</p>
+              } @else {
+                <div class="live-book-table-wrap">
+                  <table class="live-book-table live-book-table-positions">
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>LTP (₹)</th>
+                        <th>Qty / Lots</th>
+                        <th>Net Avg Price (₹)</th>
+                        <th>Net P/L (₹)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (row of livePositionRows(); track row.tradingSymbol + row.product + row.quantity) {
+                        <tr [class.closed]="row.quantity === 0">
+                          <td class="live-symbol-cell">
+                            @if (row.quantity !== 0) {
+                              <span class="live-side" [class.buy]="row.quantity > 0" [class.sell]="row.quantity < 0">
+                                {{ row.quantity > 0 ? 'B' : 'S' }}
+                              </span>
+                            }
+                            <div>
+                              <strong>{{ formatLiveSymbol(row.tradingSymbol).title }}</strong>
+                              @if (formatLiveSymbol(row.tradingSymbol).subtitle) {
+                                <span>{{ formatLiveSymbol(row.tradingSymbol).subtitle }} {{ formatLiveSymbol(row.tradingSymbol).right }}</span>
+                              } @else {
+                                <span>{{ row.tradingSymbol }}</span>
+                              }
+                              <small class="live-product-tag">{{ row.product }}</small>
+                            </div>
+                          </td>
+                          <td>
+                            @if (livePositionLtp(row); as ltp) {
+                              <strong [class.up]="(livePositionLtpChange(row)?.points || 0) >= 0" [class.down]="(livePositionLtpChange(row)?.points || 0) < 0">
+                                {{ ltp | number: '1.2-2' }}
+                              </strong>
+                              @if (livePositionLtpChange(row); as change) {
+                                <small class="live-ltp-change" [class.up]="change.points >= 0" [class.down]="change.points < 0">
+                                  {{ change.points >= 0 ? '+' : '' }}{{ change.points | number: '1.2-2' }}
+                                  ({{ change.percent >= 0 ? '+' : '' }}{{ change.percent | number: '1.2-2' }}%)
+                                </small>
+                              }
+                            } @else {
+                              —
+                            }
+                          </td>
+                          <td>{{ row.quantity }}</td>
+                          <td>{{ row.averagePrice | number: '1.2-2' }}</td>
+                          <td [class.up]="row.pnl >= 0" [class.down]="row.pnl < 0">
+                            {{ row.pnl >= 0 ? '+' : '' }}{{ row.pnl | number: '1.2-2' }}
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              }
+            } @else {
+              <div class="live-order-tabs" role="tablist" aria-label="Order status filters">
+                <button type="button" [class.active]="liveOrderFilter === 'pending'" (click)="setLiveOrderFilter('pending')">
+                  Pending ({{ livePendingOrderCount() }})
+                </button>
+                <button type="button" [class.active]="liveOrderFilter === 'executed'" (click)="setLiveOrderFilter('executed')">
+                  Executed ({{ liveExecutedOrderCount() }})
+                </button>
+                <button type="button" [class.active]="liveOrderFilter === 'trigger'" (click)="setLiveOrderFilter('trigger')">
+                  Trigger ({{ liveTriggerOrderCount() }})
+                </button>
+              </div>
+              @if (liveFilteredOrders().length === 0) {
+                <p class="live-book-empty">No {{ liveOrderFilter }} orders returned from m.Stock.</p>
+              } @else {
+                <div class="live-book-table-wrap">
+                  <table class="live-book-table live-book-table-orders">
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Qty / Lots</th>
+                        <th>LTP (₹)</th>
+                        <th>Traded Price (₹)</th>
+                        <th>Trigger Price (₹)</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (row of liveFilteredOrders(); track row.orderId) {
+                        <tr>
+                          <td class="live-symbol-cell">
+                            <span class="live-side" [class.buy]="row.transactionType === 'BUY'" [class.sell]="row.transactionType === 'SELL'">
+                              {{ row.transactionType === 'BUY' ? 'B' : 'S' }}
+                            </span>
+                            <div>
+                              <strong>{{ formatLiveSymbol(row.tradingSymbol).title }}</strong>
+                              @if (formatLiveSymbol(row.tradingSymbol).subtitle) {
+                                <span>{{ formatLiveSymbol(row.tradingSymbol).subtitle }} {{ formatLiveSymbol(row.tradingSymbol).right }}</span>
+                              } @else {
+                                <span>{{ row.tradingSymbol }}</span>
+                              }
+                              <small>{{ row.product }} | {{ row.orderType }}</small>
+                            </div>
+                          </td>
+                          <td>{{ row.filledQuantity }} / {{ row.quantity }}</td>
+                          <td>
+                            @if (liveOrderLtp(row.tradingSymbol); as ltp) {
+                              <strong>{{ ltp | number: '1.2-2' }}</strong>
+                              @if (liveOrderLtpChange(row.tradingSymbol, row.averagePrice > 0 ? row.averagePrice : row.price); as change) {
+                                <small class="live-ltp-change" [class.up]="change.points >= 0" [class.down]="change.points < 0">
+                                  {{ change.points >= 0 ? '+' : '' }}{{ change.points | number: '1.2-2' }}
+                                  ({{ change.percent >= 0 ? '+' : '' }}{{ change.percent | number: '1.2-2' }}%)
+                                </small>
+                              }
+                            } @else {
+                              —
+                            }
+                          </td>
+                          <td>{{ (row.averagePrice > 0 ? row.averagePrice : row.price) | number: '1.2-2' }}</td>
+                          <td>{{ row.triggerPrice > 0 ? (row.triggerPrice | number: '1.2-2') : '0' }}</td>
+                          <td>
+                            <span class="live-status-pill" [class.executed]="isExecutedOrder(row)" [class.pending]="isPendingOrder(row)">
+                              {{ liveOrderStatusLabel(row.status) }}
+                            </span>
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              }
+            }
+          </section>
+          @if (paperAgent?.pendingTrade; as trade) {
+            @if (!liveAgent?.zoneAutoLiveArmed) {
+            <div class="trade-approval live-trade-approval">
+              <div class="approval-body">
+                <strong>Confirm live trade · {{ trade.strategy || trade.instrumentType }}</strong>
+                <span>{{ trade.underlying || trade.symbol }} · {{ trade.quantity }} units</span>
+              </div>
+              <div class="approval-actions">
+                <select [(ngModel)]="liveProduct" name="liveProduct" [disabled]="liveBusy">
+                  <option value="MIS">MIS</option>
+                  <option value="NRML">NRML</option>
+                </select>
+                <button type="button" class="approve live-confirm" [disabled]="!canConfirmLive() || liveBusy" (click)="confirmPendingTrade(trade.id)">
+                  Confirm {{ liveProduct }}
+                </button>
+                <button type="button" class="reject" [disabled]="liveBusy" (click)="sendAgentCommand('reject')">Reject</button>
+              </div>
+            </div>
+            } @else {
+              <p class="live-zone-auto-pending">Zone auto-live is submitting {{ trade.underlying }} · {{ trade.strategy }} to the broker…</p>
+            }
+          }
+          @if (liveError) {
+            <div class="agent-error">{{ liveError }}</div>
+          }
+        }
+        @if (tradePanelTab === 'paper') {
+        <div class="agent-panel-tab-body paper-tab-body">
+        @if (!paperAgent && !paperDisplayPositions().length) {
+          <p class="live-book-empty">Loading strategy agent… Check that the backend is running on port 45211.</p>
+        }
+        @if (agentError) {
+          <p class="agent-error">{{ agentError }}</p>
+        }
+        <header class="paper-hero" aria-label="Paper session summary">
+          <div class="paper-hero-card" [class.up]="paperTodayPnlSummary().net >= 0" [class.down]="paperTodayPnlSummary().net < 0">
+            <small>Today net · {{ paperTodayDateLabel() }}</small>
+            <strong>₹{{ paperTodayPnlSummary().net | number: '1.2-2' }}</strong>
+            <span class="paper-hero-sub">
+              +₹{{ paperTodayPnlSummary().profit | number: '1.2-2' }} /
+              ₹{{ paperTodayPnlSummary().loss | number: '1.2-2' }}
+            </span>
+          </div>
+          <div class="paper-hero-card" [class.up]="displayPaperTotalPnl() >= 0" [class.down]="displayPaperTotalPnl() < 0">
+            <small>Total P&amp;L</small>
+            <strong>₹{{ displayPaperTotalPnl() | number: '1.2-2' }}</strong>
+            <span class="paper-hero-sub">Open + closed session</span>
+          </div>
+          <div class="paper-hero-card" [class.up]="paperDisplayUnrealizedPnl() >= 0" [class.down]="paperDisplayUnrealizedPnl() < 0">
+            <small>Unrealized</small>
+            <strong>₹{{ paperDisplayUnrealizedPnl() | number: '1.2-2' }}</strong>
+            <span class="paper-hero-sub">{{ paperDisplayPositions().length }} open position{{ paperDisplayPositions().length === 1 ? '' : 's' }}</span>
+          </div>
+          <div class="paper-hero-card" [class.up]="displayPaperRealizedPnl() >= 0" [class.down]="displayPaperRealizedPnl() < 0">
+            <small>Realized today</small>
+            <strong>₹{{ displayPaperRealizedPnl() | number: '1.2-2' }}</strong>
+            <span class="paper-hero-sub">
+              {{ paperAgent?.performance?.closedTrades ?? tradeHistory?.summary?.closedTrades ?? 0 }} closed
+              · SL {{ paperAgent?.performance?.stopLossHits || 0 }}
+              · TP {{ paperAgent?.performance?.targetHits || 0 }}
+            </span>
+          </div>
+        </header>
+        <div class="paper-capital-strip" aria-label="Capital and limits">
+          <span>Broker <b>@if (displayAvailableFunds() != null) { ₹{{ displayAvailableFunds() | number: '1.0-0' }} } @else { — }</b></span>
+          <span>Utilized <b>@if (displayUtilizedFunds() != null) { ₹{{ displayUtilizedFunds() | number: '1.0-0' }} } @else { — }</b></span>
+          <span>Allocated <b>@if (paperAgent?.config?.allocatedCapital != null) { ₹{{ paperAgent?.config?.allocatedCapital | number: '1.0-0' }} } @else { — }</b></span>
+          <span>Target <b class="up">@if (paperAgent?.config?.profitTarget != null) { ₹{{ paperAgent?.config?.profitTarget | number: '1.0-0' }} } @else { — }</b> <small class="paper-metric-hint">(tracking)</small></span>
+          <span>Daily loss cap <b class="down">@if (paperAgent?.config?.maxDailyLoss != null) { ₹{{ paperAgent?.config?.maxDailyLoss | number: '1.0-0' }} } @else { — }</b> <small class="paper-metric-hint">(tracking)</small></span>
+          <span>Win rate <b>{{ paperAgent?.performance?.winRatePercent || 0 | number: '1.1-1' }}%</b></span>
+          @if (paperTodayExitCapitalUsed() > 0) {
+            <span>Today’s exit capital <b>₹{{ paperTodayExitCapitalUsed() | number: '1.0-0' }}</b> <small class="paper-metric-hint">(sum per trade below)</small></span>
+          }
+        </div>
+        @if (paperAgent?.config?.autoAdmitTrades !== false) {
+          <p class="paper-auto-admit paper-auto-admit-compact">Auto-admit ON · zone CSV setups (B1/S1 on NIFTY, BANKNIFTY, FINNIFTY, SENSEX) buy CE/PE ITM+OTM with no confirmation.</p>
         }
         @if (paperAgent?.pendingTrade; as trade) {
+          @if (paperAgent?.config?.autoAdmitTrades === false) {
           <div class="trade-approval">
             <div class="approval-body">
               <strong>Approval required · {{ trade.strategy || trade.instrumentType }}</strong>
               <span>{{ trade.underlying || trade.symbol }} · {{ trade.direction }} · {{ trade.quantity }} units</span>
               <div class="risk-line">
+                <span>Capital used <b>₹{{ paperProposalCapital(trade) | number: '1.0-0' }}</b></span>
                 <span>Max risk <b class="down">₹{{ trade.maxRisk || 0 | number: '1.2-2' }}</b></span>
                 <span>Max reward <b class="up">₹{{ trade.maxReward || 0 | number: '1.2-2' }}</b></span>
                 <span>R:R <b>{{ trade.rewardRisk || 0 | number: '1.2-2' }}</b></span>
@@ -399,135 +981,663 @@
               </div>
             </div>
             <div class="approval-actions">
-              @if (executionMode === 'live') {
-                <select [(ngModel)]="liveProduct" name="liveProduct" [disabled]="liveBusy">
-                  <option value="MIS">MIS · intraday</option>
-                  <option value="NRML">NRML · overnight</option>
-                </select>
-              }
-              <button
-                type="button"
-                class="approve"
-                [class.live-confirm]="executionMode === 'live'"
-                [disabled]="executionMode === 'paper' ? agentBusy : !canConfirmLive()"
-                (click)="confirmPendingTrade(trade.id)"
-              >
-                @if (executionMode === 'paper') {
-                  Confirm paper trade
-                } @else {
-                  Confirm live {{ liveProduct }} trade
-                }
+              <button type="button" class="approve" [disabled]="agentBusy" (click)="confirmPendingTrade(trade.id)">
+                Confirm paper trade
               </button>
-              <button type="button" class="reject" [disabled]="agentBusy || liveBusy" (click)="sendAgentCommand('reject')">Reject</button>
+              <button type="button" class="reject" [disabled]="agentBusy" (click)="sendAgentCommand('reject')">Reject</button>
             </div>
           </div>
+          }
         }
-        @if (paperAgent?.positions?.length) {
-          <div class="paper-positions">
-            @for (position of paperAgent!.positions; track position.id) {
-              <article class="position-card">
-                <div class="position-head">
-                  <b>{{ position.strategy || position.instrumentType }} · {{ position.underlying || position.symbol }}</b>
-                  <strong [class.up]="position.direction === 'LONG'" [class.down]="position.direction === 'SHORT'">
-                    {{ position.direction }} × {{ position.quantity }}
-                  </strong>
+        <div class="paper-scroll-main">
+          <div class="paper-main-grid">
+            <section class="paper-open-section" aria-label="Open paper positions">
+              <div class="paper-section-head">
+                <h2>Open positions</h2>
+                <span>{{ paperDisplayPositions().length }} active</span>
+              </div>
+              @if (paperDisplayPositions().length) {
+                <div class="paper-positions paper-positions-cards">
+                  @for (position of paperDisplayPositions(); track position.id) {
+                    <article class="history-card history-card-open paper-position-card">
+                      <header class="history-card-head">
+                        <div class="history-card-identity">
+                          <span class="history-card-symbol">{{ position.underlying || position.symbol }}</span>
+                          <span class="history-card-strategy">{{ position.strategy || position.instrumentType }}</span>
+                          <span
+                            class="history-card-direction"
+                            [class.up]="paperDirectionIsUp(position.direction)"
+                            [class.down]="paperDirectionIsDown(position.direction)"
+                          >
+                            {{ position.direction }}
+                          </span>
+                        </div>
+                        <div class="paper-card-head-actions">
+                          <span
+                            class="history-metric-value history-metric-pnl paper-live-pnl"
+                            [class.up]="position.pnl >= 0"
+                            [class.down]="position.pnl < 0"
+                          >
+                            ₹{{ position.pnl | number: '1.2-2' }}
+                          </span>
+                          <span class="history-status open">OPEN</span>
+                        </div>
+                      </header>
+                      <p class="history-card-when">
+                        Opened {{ position.openedAt | date: 'dd MMM yyyy, HH:mm':'+0530' }} IST
+                        · {{ position.quantity }} qty
+                        @if (position.maxRisk) {
+                          · max risk ₹{{ position.maxRisk | number: '1.2-2' }}
+                        }
+                      </p>
+                      <div class="history-card-metrics">
+                        <div class="history-metric-cell">
+                          <span class="history-metric-label">Capital used</span>
+                          <span class="history-metric-value">₹{{ paperPositionCapital(position) | number: '1.0-0' }}</span>
+                        </div>
+                        <div class="history-metric-cell">
+                          <span class="history-metric-label">Entry</span>
+                          <span class="history-metric-value">₹{{ position.entryPrice | number: '1.2-2' }}</span>
+                        </div>
+                        <div class="history-metric-cell">
+                          <span class="history-metric-label">LTP</span>
+                          <span class="history-metric-value">₹{{ position.currentPrice | number: '1.2-2' }}</span>
+                        </div>
+                        <div class="history-metric-cell">
+                          <span class="history-metric-label">Stop</span>
+                          <span class="history-metric-value down">@if (position.stopLoss > 0) { ₹{{ position.stopLoss | number: '1.2-2' }} } @else { — }</span>
+                        </div>
+                        <div class="history-metric-cell">
+                          <span class="history-metric-label">Target</span>
+                          <span class="history-metric-value up">@if (position.target > 0) { ₹{{ position.target | number: '1.2-2' }} } @else { — }</span>
+                        </div>
+                        <div class="history-metric-cell history-metric-cell-pnl">
+                          <span class="history-metric-label">Unrealized</span>
+                          <span
+                            class="history-metric-value history-metric-pnl"
+                            [class.up]="position.pnl >= 0"
+                            [class.down]="position.pnl < 0"
+                          >
+                            ₹{{ position.pnl | number: '1.2-2' }}
+                          </span>
+                        </div>
+                      </div>
+                      @if (position.triggerReason) {
+                        <div class="history-why-box">
+                          <span class="history-why-label">Why in trade</span>
+                          <p class="history-why-text">{{ position.triggerReason }}</p>
+                        </div>
+                      }
+                      @if (position.legs?.length) {
+                        <div class="history-legs-strip">
+                          @for (leg of position.legs || []; track leg.id) {
+                            <span class="history-leg-chip" [class.buy]="leg.side === 'BUY'" [class.sell]="leg.side === 'SELL'">
+                              <b>{{ leg.side }}</b> {{ leg.symbol }} × {{ leg.quantity }}
+                              · ₹{{ leg.entryPrice | number: '1.2-2' }} → ₹{{ leg.currentPrice | number: '1.2-2' }}
+                              · <span [class.up]="leg.pnl >= 0" [class.down]="leg.pnl < 0">₹{{ leg.pnl | number: '1.2-2' }}</span>
+                            </span>
+                          }
+                        </div>
+                      }
+                    </article>
+                  }
                 </div>
-                <div class="position-trigger">
-                  Triggered {{ position.openedAt | date: 'dd MMM, HH:mm:ss':'+0530' }} IST · {{ position.triggerReason }}
+              } @else {
+                <p class="paper-empty-positions">No open paper positions. Setups will appear here when the agent admits trades.</p>
+              }
+            </section>
+            <aside class="paper-aside" aria-label="Session context and exits">
+              <div class="regime-card paper-regime" [class.stale]="paperAgent?.marketRegime && !paperAgent?.marketRegime?.isFresh">
+                <small>Market regime</small>
+                <strong>{{ paperAgent?.marketRegime?.regime || 'WAITING FOR DATA' }}</strong>
+                <span>{{ paperAgent?.marketRegime?.isFresh ? 'Fresh market evidence' : 'Stale or incomplete evidence' }}</span>
+              </div>
+              <div class="paper-stats-mini">
+                <span>Wins <b class="up">{{ paperAgent?.performance?.winningTrades || 0 }}</b></span>
+                <span>Closed <b>{{ paperAgent?.performance?.closedTrades ?? tradeHistory?.summary?.closedTrades ?? 0 }}</b></span>
+                <span>Stop loss <b class="down">{{ paperAgent?.performance?.stopLossHits || 0 }}</b></span>
+                <span>Target hit <b class="up">{{ paperAgent?.performance?.targetHits || 0 }}</b></span>
+              </div>
+              @if (paperTodayCatalogExits().length) {
+                <div class="paper-exits-panel">
+                  <h3>Today’s exits · {{ paperTodayDateLabel() }}</h3>
+                  <table class="paper-exits-table paper-exits-table-why">
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Closed (IST)</th>
+                        <th>P&amp;L</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (trade of paperTodayCatalogExits(); track trade.id) {
+                        <tr>
+                          <td class="paper-exit-symbol-cell">
+                            <b>{{ trade.underlying }}</b>
+                            <small>{{ trade.strategy }}</small>
+                            @if (trade.entryReason) {
+                              <div class="history-why-box history-why-box-compact">
+                                <span class="history-why-label">Why executed</span>
+                                <p class="history-why-text">{{ trade.entryReason }}</p>
+                              </div>
+                            }
+                          </td>
+                          <td>
+                            @if (paperTradeExitAt(trade); as exitAt) {
+                              {{ exitAt | date: 'dd MMM, HH:mm':'+0530' }}
+                            } @else {
+                              —
+                            }
+                            @if (trade.exitReason) {
+                              <small>{{ trade.exitReason }}</small>
+                            }
+                          </td>
+                          <td class="num" [class.up]="(trade.pnl ?? 0) >= 0" [class.down]="(trade.pnl ?? 0) < 0">
+                            ₹{{ trade.pnl | number: '1.2-2' }}
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
                 </div>
-                <div class="position-levels">
-                  <span>Entry <b>₹{{ position.entryPrice | number: '1.2-2' }}</b></span>
-                  <span>Current <b>₹{{ position.currentPrice | number: '1.2-2' }}</b></span>
-                  <span>Stop-loss <b class="down">₹{{ position.stopLoss | number: '1.2-2' }}</b></span>
-                  <span>Target <b class="up">₹{{ position.target | number: '1.2-2' }}</b></span>
-                  <span>P&amp;L <b [class.up]="position.pnl >= 0" [class.down]="position.pnl < 0">₹{{ position.pnl | number: '1.2-2' }}</b></span>
-                </div>
-                <div class="position-legs">
-                  @for (leg of position.legs || []; track leg.id) {
-                    <span>
-                      <b [class.up]="leg.side === 'BUY'" [class.down]="leg.side === 'SELL'">{{ leg.side }}</b>
-                      {{ leg.symbol }} × {{ leg.quantity }}
-                      · ₹{{ leg.entryPrice | number: '1.2-2' }} → ₹{{ leg.currentPrice | number: '1.2-2' }}
-                      · <b [class.up]="leg.pnl >= 0" [class.down]="leg.pnl < 0">₹{{ leg.pnl | number: '1.2-2' }}</b>
+              } @else {
+                <p class="paper-no-exits">No catalog-strategy exits yet today.</p>
+              }
+            </aside>
+          </div>
+          @if (zoneBacktestTargetSymbol(); as zoneSym) {
+            <details class="paper-collapsible">
+              <summary>B1 → S2 backtest · {{ zoneSym }}</summary>
+              <section
+                class="zone-backtest-card"
+                [class.qualifies]="zoneBacktest?.qualifies"
+                [class.disqualified]="zoneBacktest && !zoneBacktest.qualifies"
+                aria-label="B1 rejection backtest"
+              >
+                <div class="zone-backtest-head">
+                  @if (zoneBacktestLoading) {
+                    <span class="zone-backtest-status">Loading…</span>
+                  } @else if (zoneBacktest) {
+                    <span class="zone-backtest-status" [class.up]="zoneBacktest.qualifies" [class.down]="!zoneBacktest.qualifies">
+                      {{ zoneBacktest.qualifies ? 'Qualifies for agent' : 'Below threshold' }}
                     </span>
                   }
                 </div>
-              </article>
-            }
-          </div>
+                @if (zoneBacktestError) {
+                  <p class="zone-backtest-error">{{ zoneBacktestError }}</p>
+                } @else if (zoneBacktest) {
+                  <div class="zone-backtest-metrics">
+                    <span>Win rate <b [class.up]="zoneBacktest.qualifies">{{ zoneBacktest.result.winRatePercent | number: '1.1-1' }}%</b></span>
+                    <span>Samples <b>{{ zoneBacktest.result.samples }}</b> (min {{ zoneBacktest.minSamples }})</span>
+                    <span>W / L <b>{{ zoneBacktest.result.wins }} / {{ zoneBacktest.result.losses }}</b></span>
+                    <span>Avg reward <b class="up">{{ zoneBacktest.result.avgRewardPoints | number: '1.2-2' }} pts</b></span>
+                    <span>Avg risk <b class="down">{{ zoneBacktest.result.avgRiskPoints | number: '1.2-2' }} pts</b></span>
+                    <span>Need ≥ {{ zoneBacktest.minWinRate | number: '1.0-0' }}% win</span>
+                  </div>
+                  <small>15m history · pattern {{ zoneBacktest.result.pattern }}. Agent only proposes {{ b1RejectionStrategy }} when this qualifies.</small>
+                } @else if (!zoneBacktestLoading) {
+                  <small>No backtest data yet for {{ zoneSym }}.</small>
+                }
+              </section>
+            </details>
+          }
+          @if (paperAgent?.recentDecisions?.length) {
+            <details class="paper-collapsible">
+              <summary>Recent agent decisions ({{ paperAgent?.recentDecisions?.length }})</summary>
+              <section class="decision-board decision-board-paper">
+                @for (decision of paperAgent?.recentDecisions || []; track decision.id) {
+                  <article
+                    [class.rejected]="!decision.accepted"
+                    [class.b1-rejection]="isB1RejectionStrategy(decision.strategy)"
+                    [class.b1-qualified]="isB1RejectionStrategy(decision.strategy) && decision.accepted"
+                  >
+                    <div>
+                      <b>{{ decision.strategy }} · {{ decision.underlying }}</b>
+                      <small>{{ decision.evaluatedAt | date: 'HH:mm:ss':'+0530' }} IST · score {{ decision.evidenceScore | number: '1.0-0' }}/100</small>
+                    </div>
+                    <span>{{ decision.accepted ? 'ELIGIBLE' : 'REJECTED' }}</span>
+                    <small>{{ (decision.rejections.length ? decision.rejections : decision.evidence).join(' · ') }}</small>
+                  </article>
+                }
+              </section>
+            </details>
+          }
+        </div>
+        </div>
         }
-        @if (paperAgent?.recentDecisions?.length) {
-          <section class="decision-board">
-            <strong>Recent decisions</strong>
-            @for (decision of paperAgent?.recentDecisions?.slice(0, 6) || []; track decision.id) {
-              <article [class.rejected]="!decision.accepted">
-                <div>
-                  <b>{{ decision.strategy }} · {{ decision.underlying }}</b>
-                  <small>{{ decision.evaluatedAt | date: 'HH:mm:ss':'+0530' }} IST · score {{ decision.evidenceScore | number: '1.0-0' }}/100 (rule evidence)</small>
-                </div>
-                <span>{{ decision.accepted ? 'ELIGIBLE' : 'REJECTED' }}</span>
-                <small>{{ (decision.rejections.length ? decision.rejections : decision.evidence).join(' · ') }}</small>
-              </article>
-            }
-          </section>
-        }
-        <section class="history-panel" aria-label="Trade history">
-          <div class="history-head">
-            <strong>Trade History</strong>
-            <div class="history-filters">
-              <button type="button" [class.active]="historyRange === 'today'" (click)="setHistoryRange('today')">Today</button>
-              <button type="button" [class.active]="historyRange === '1m'" (click)="setHistoryRange('1m')">1 Month</button>
-              <button type="button" [class.active]="historyRange === '3m'" (click)="setHistoryRange('3m')">3 Months</button>
-              <button type="button" [class.active]="historyRange === 'all'" (click)="setHistoryRange('all')">12 Months</button>
+        @if (tradePanelTab === 'history') {
+        <section class="history-panel history-panel-full" aria-label="Trade history">
+          <div class="history-head history-head-stack">
+            <div class="history-head-row">
+              <strong class="history-period-label">TIME RANGE</strong>
+              <div class="history-filters">
+                <button type="button" [class.active]="historyRange === 'today' && !historyDateFilterActive()" (click)="setHistoryRange('today')">1 Day</button>
+                <button type="button" [class.active]="historyRange === '1w' && !historyDateFilterActive()" (click)="setHistoryRange('1w')">1 Week</button>
+                <button type="button" [class.active]="historyRange === '1m' && !historyDateFilterActive()" (click)="setHistoryRange('1m')">1 Month</button>
+                <button
+                  type="button"
+                  class="history-filter-custom"
+                  [class.active]="historyCustomDateOpen || historyDateFilterActive()"
+                  (click)="openHistoryCustomDate()"
+                >
+                  Custom date
+                </button>
+              </div>
             </div>
+            @if (historyCustomDateOpen) {
+              <div class="history-head-row history-date-bar">
+                <label class="history-date-field">
+                  <span>From (IST)</span>
+                  <input
+                    type="date"
+                    class="history-date-input"
+                    data-history-from="1"
+                    [ngModel]="historyDateFrom"
+                    (ngModelChange)="onHistoryDateFromChange($event)"
+                    [max]="historyTodayIstYmd()"
+                    aria-label="Select start date"
+                  />
+                </label>
+                <label class="history-date-field">
+                  <span>To (optional)</span>
+                  <input
+                    type="date"
+                    class="history-date-input"
+                    [ngModel]="historyDateTo"
+                    (ngModelChange)="onHistoryDateToChange($event)"
+                    [min]="historyDateFrom || ''"
+                    [max]="historyTodayIstYmd()"
+                    aria-label="Select end date"
+                  />
+                </label>
+                @if (historyDateFilterActive()) {
+                  <span class="history-date-active">{{ historyDateFilterLabel() }}</span>
+                } @else {
+                  <span class="history-date-prompt">Choose a date in the calendar to load trades.</span>
+                }
+                <button type="button" class="history-date-clear" (click)="clearHistoryDateFilter()">Cancel</button>
+              </div>
+            }
           </div>
           @if (tradeHistory; as history) {
             <div class="history-summary">
-              <span>Realized P&amp;L <b [class.up]="history.summary.realizedPnl >= 0" [class.down]="history.summary.realizedPnl < 0">₹{{ history.summary.realizedPnl | number: '1.2-2' }}</b></span>
-              <span>Closed <b>{{ history.summary.closedTrades }}</b></span>
-              <span>Wins <b class="up">{{ history.summary.winningTrades }}</b></span>
-              <span>Losses <b class="down">{{ history.summary.losingTrades }}</b></span>
-              <span>Open <b>{{ history.summary.openTrades }}</b></span>
+              <span class="history-metric history-metric-pnl">
+                Realized P&amp;L
+                @if (historyDateFilterActive()) {
+                  <small class="history-metric-sub">{{ historyDateFilterLabel() }}</small>
+                }
+                <b
+                  [class.up]="historyCatalogSummary().realizedPnl >= 0"
+                  [class.down]="historyCatalogSummary().realizedPnl < 0"
+                >
+                  ₹{{ historyCatalogSummary().realizedPnl | number: '1.2-2' }}
+                </b>
+              </span>
+              <span class="history-metric">
+                Closed
+                <b>{{ historyCatalogSummary().closedTrades }}</b>
+              </span>
+              <button
+                type="button"
+                class="history-metric history-metric-win history-metric-filter"
+                [class.active]="historyPnlFilter === 'positive'"
+                (click)="setHistoryPnlFilter('positive')"
+              >
+                Positive
+                @if (historyPnlFilter === 'positive') {
+                  <b class="up">₹{{ historyCatalogPositivePnlSum() | number: '1.2-2' }}</b>
+                  <small class="history-metric-sub">{{ historyCatalogClosedWinners().length }} trades</small>
+                } @else {
+                  <b class="up">{{ historyCatalogClosedWinners().length }}</b>
+                }
+              </button>
+              <button
+                type="button"
+                class="history-metric history-metric-loss history-metric-filter"
+                [class.active]="historyPnlFilter === 'negative'"
+                (click)="setHistoryPnlFilter('negative')"
+              >
+                Losses
+                @if (historyPnlFilter === 'negative') {
+                  <b class="down">₹{{ historyCatalogNegativePnlSum() | number: '1.2-2' }}</b>
+                  <small class="history-metric-sub">{{ historyCatalogClosedLosers().length }} trades</small>
+                } @else {
+                  <b class="down">{{ historyCatalogClosedLosers().length }}</b>
+                }
+              </button>
+              <span class="history-metric">
+                Open
+                <b>{{ historyCatalogSummary().openTrades }}</b>
+              </span>
             </div>
-            <div class="history-ledger">
-              @for (trade of history.trades; track trade.id) {
-                <article class="history-row">
-                  <div>
-                    <strong>{{ trade.strategy }} · {{ trade.underlying }} · {{ trade.direction }}</strong>
-                    <small>{{ trade.createdAt | date: 'dd MMM yyyy, HH:mm':'+0530' }} IST · {{ trade.legs.length }} leg(s)</small>
-                  </div>
-                  <span class="history-status"
-                    [class.closed]="trade.status === 'CLOSED'"
-                    [class.rejected]="trade.status === 'REJECTED' || trade.status === 'CANCELLED' || trade.status === 'EXPIRED' || trade.status === 'INTERRUPTED'">
-                    {{ trade.status }}
-                  </span>
-                  <span>Max risk <b class="down">₹{{ trade.maxRisk | number: '1.2-2' }}</b></span>
-                  <span>Max reward <b class="up">₹{{ trade.maxReward | number: '1.2-2' }}</b></span>
-                  <span>P&amp;L <b [class.up]="(trade.pnl || 0) > 0" [class.down]="(trade.pnl || 0) < 0">@if (trade.pnl != null) { ₹{{ trade.pnl | number: '1.2-2' }} } @else { — }</b></span>
-                  <span>Result <b>{{ trade.exitReason || '—' }}</b></span>
-                  <div class="history-legs">
-                    @for (leg of trade.legs; track leg.id) {
-                      <small>{{ leg.side }} {{ leg.symbol }} × {{ leg.quantity }} · entry {{ leg.entryPrice | number: '1.2-2' }} · exit {{ leg.exitPrice | number: '1.2-2' }}</small>
-                    }
-                  </div>
-                </article>
-              } @empty {
-                <div class="history-empty">No trades recorded for this period.</div>
+            <div class="history-pnl-filters" role="group" aria-label="Filter by P&amp;L">
+              <button type="button" [class.active]="historyPnlFilter === 'all'" (click)="setHistoryPnlFilter('all')">All trades</button>
+              <button type="button" [class.active]="historyPnlFilter === 'positive'" (click)="setHistoryPnlFilter('positive')">Positive only</button>
+              <button type="button" [class.active]="historyPnlFilter === 'negative'" (click)="setHistoryPnlFilter('negative')">Losses only</button>
+              @if (historyPnlFilter === 'positive') {
+                <span class="history-pnl-filter-sum up" aria-live="polite">
+                  @if (historyDateFilterActive()) {
+                    Wins on {{ historyDateFilterLabel() }}
+                  } @else {
+                    Total wins
+                  }
+                  <strong>₹{{ historyCatalogPositivePnlSum() | number: '1.2-2' }}</strong>
+                </span>
+              }
+              @if (historyPnlFilter === 'negative') {
+                <span class="history-pnl-filter-sum down" aria-live="polite">
+                  @if (historyDateFilterActive()) {
+                    Losses on {{ historyDateFilterLabel() }}
+                  } @else {
+                    Total losses
+                  }
+                  <strong>₹{{ historyCatalogNegativePnlSum() | number: '1.2-2' }}</strong>
+                </span>
               }
             </div>
+            <div class="history-col-head">
+              <span>
+                Catalog strategies · {{ historyCatalogTradesFiltered().length }} shown
+                @if (historyDateFilterActive()) {
+                  · {{ historyDateFilterLabel() }} (IST)
+                }
+                @if (historyPnlFilter !== 'all') {
+                  (of {{ historyCatalogTrades().length }})
+                  · Filtered P&amp;L
+                  <strong
+                    [class.up]="historyCatalogFilteredPnlSum() > 0"
+                    [class.down]="historyCatalogFilteredPnlSum() < 0"
+                  >
+                    ₹{{ historyCatalogFilteredPnlSum() | number: '1.2-2' }}
+                  </strong>
+                }
+              </span>
+              @if (historyCatalogTradesFiltered().length > historyPageSize) {
+                <nav class="history-pagination history-pagination-inline" aria-label="Trade history pages">
+                  <button type="button" class="history-page-btn" [disabled]="historyPage <= 1" (click)="setHistoryPage(historyPage - 1)">Prev</button>
+                  <span class="history-page-label">Page {{ historyPage }} / {{ historyCatalogPageCount() }}</span>
+                  <button
+                    type="button"
+                    class="history-page-btn"
+                    [disabled]="historyPage >= historyCatalogPageCount()"
+                    (click)="setHistoryPage(historyPage + 1)"
+                  >
+                    Next
+                  </button>
+                </nav>
+              }
+            </div>
+            <p class="history-table-hint" aria-hidden="true">Scroll horizontally on smaller screens · tap <strong>Details</strong> for full fills and reasons</p>
+            <div class="history-table-wrap" tabindex="0" role="region" aria-label="Trade history table, scrollable">
+              <table class="history-table history-table-dense" aria-label="Trade history list">
+                <colgroup>
+                  <col class="history-col-symbol" />
+                  <col class="history-col-dir" />
+                  <col class="history-col-qty" />
+                  <col class="history-col-status" />
+                  <col class="history-col-pnl" />
+                  <col class="history-col-time" />
+                  <col class="history-col-time" />
+                  <col class="history-col-capital" />
+                  <col class="history-col-strategy" />
+                  <col class="history-col-outcome" />
+                  <col class="history-col-details" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th scope="col" class="history-th-sticky">Symbol</th>
+                    <th scope="col" class="history-th-center">Dir</th>
+                    <th scope="col" class="num">Qty</th>
+                    <th scope="col" class="history-th-center">Status</th>
+                    <th scope="col" class="num">P&amp;L (₹)</th>
+                    <th scope="col">Executed (IST)</th>
+                    <th scope="col">Closed (IST)</th>
+                    <th scope="col" class="num">Capital (₹)</th>
+                    <th scope="col">Strategy</th>
+                    <th scope="col">Outcome</th>
+                    <th scope="col" class="history-th-details">Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (trade of historyCatalogTradesPage(); track trade.id) {
+                    <tr
+                      class="history-table-row"
+                      [class.history-row-win]="trade.status === 'CLOSED' && (trade.pnl ?? 0) > 0"
+                      [class.history-row-loss]="trade.status === 'CLOSED' && (trade.pnl ?? 0) < 0"
+                      [class.history-row-open]="trade.status === 'OPEN'"
+                      [class.history-row-rejected]="trade.status === 'REJECTED' || trade.status === 'CANCELLED' || trade.status === 'EXPIRED' || trade.status === 'INTERRUPTED'"
+                    >
+                      <td class="history-td-symbol history-td-sticky" data-label="Symbol">{{ trade.underlying }}</td>
+                      <td
+                        class="history-td-dir history-td-center"
+                        data-label="Dir"
+                        [class.up]="trade.direction === 'BULLISH' || trade.direction === 'LONG'"
+                        [class.down]="trade.direction === 'BEARISH' || trade.direction === 'SHORT'"
+                      >
+                        {{ historyDirectionShort(trade.direction) }}
+                      </td>
+                      <td class="num history-td-qty" data-label="Qty" [title]="historyTradeQuantityTitle(trade)">
+                        {{ historyTradeQuantityLabel(trade) }}
+                      </td>
+                      <td class="history-td-center" data-label="Status">
+                        <span
+                          class="history-status history-status-pill"
+                          [class.open]="trade.status === 'OPEN'"
+                          [class.closed]="trade.status === 'CLOSED'"
+                          [class.rejected]="trade.status === 'REJECTED' || trade.status === 'CANCELLED' || trade.status === 'EXPIRED' || trade.status === 'INTERRUPTED'"
+                        >
+                          {{ trade.status }}
+                        </span>
+                      </td>
+                      <td
+                        class="num history-td-pnl"
+                        data-label="P&amp;L"
+                        [class.up]="(trade.pnl ?? 0) > 0"
+                        [class.down]="(trade.pnl ?? 0) < 0"
+                      >
+                        @if (trade.pnl != null) {
+                          {{ trade.pnl | number: '1.2-2' }}
+                        } @else {
+                          —
+                        }
+                      </td>
+                      <td class="history-td-time" data-label="Executed" [title]="historyTradeExecutedAt(trade) || ''">
+                        @if (historyTradeExecutedAt(trade); as executedAt) {
+                          {{ executedAt | date: 'dd MMM yy, HH:mm':'+0530' }}
+                        } @else {
+                          —
+                        }
+                      </td>
+                      <td class="history-td-time" data-label="Closed" [title]="historyTradeClosedAt(trade) || ''">
+                        @if (historyTradeClosedAt(trade); as closedAt) {
+                          {{ closedAt | date: 'dd MMM yy, HH:mm':'+0530' }}
+                        } @else {
+                          —
+                        }
+                      </td>
+                      <td class="num history-td-capital" data-label="Capital">
+                        @if (historyTradeCapital(trade) > 0) {
+                          {{ historyTradeCapital(trade) | number: '1.0-0' }}
+                        } @else {
+                          —
+                        }
+                      </td>
+                      <td class="history-td-strategy history-td-wrap" data-label="Strategy" [title]="trade.strategy">{{ historyTradeStrategyLabel(trade) }}</td>
+                      <td class="history-td-result history-td-wrap" data-label="Outcome" [title]="trade.exitReason || ''">{{ trade.exitReason || '—' }}</td>
+                      <td class="history-td-details" data-label="Details">
+                        @if (historyTradeHasDetails(trade)) {
+                          <button
+                            type="button"
+                            class="history-why-btn"
+                            [class.active]="historyDetailOpen(trade.id)"
+                            [attr.aria-expanded]="historyDetailOpen(trade.id)"
+                            (click)="toggleHistoryDetail(trade.id)"
+                          >
+                            {{ historyDetailOpen(trade.id) ? 'Hide' : 'Details' }}
+                          </button>
+                        } @else {
+                          —
+                        }
+                      </td>
+                    </tr>
+                    @if (historyDetailOpen(trade.id)) {
+                      <tr class="history-detail-row">
+                        <td colspan="11" class="history-detail-cell">
+                          <div class="history-detail-panel">
+                            <div class="history-detail-sections">
+                              <section class="history-detail-section" aria-label="Position">
+                                <h4 class="history-detail-section-title">Position</h4>
+                                <dl class="history-detail-dl">
+                                  <div>
+                                    <dt>Symbol</dt>
+                                    <dd>{{ trade.underlying }} · {{ historyDirectionShort(trade.direction) }}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Strategy</dt>
+                                    <dd>{{ trade.strategy }}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Legs</dt>
+                                    <dd>{{ trade.legs.length }}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Quantity</dt>
+                                    @if (historyTradeQuantityTotal(trade) > 0) {
+                                      <dd>{{ historyTradeQuantityTitle(trade) }}</dd>
+                                    } @else {
+                                      <dd class="muted">—</dd>
+                                    }
+                                  </div>
+                                  <div>
+                                    <dt>Capital used</dt>
+                                    @if (historyTradeCapital(trade) > 0) {
+                                      <dd>₹{{ historyTradeCapital(trade) | number: '1.0-0' }}</dd>
+                                    } @else {
+                                      <dd class="muted">—</dd>
+                                    }
+                                  </div>
+                                  <div>
+                                    <dt>Status</dt>
+                                    <dd>{{ trade.status }}</dd>
+                                  </div>
+                                </dl>
+                              </section>
+                              <section class="history-detail-section" aria-label="Timeline">
+                                <h4 class="history-detail-section-title">Timeline (IST)</h4>
+                                <dl class="history-detail-dl">
+                                  <div>
+                                    <dt>Executed</dt>
+                                    @if (historyTradeExecutedAt(trade); as executedAt) {
+                                      <dd>{{ executedAt | date: 'dd MMM yyyy, HH:mm:ss':'+0530' }}</dd>
+                                    } @else {
+                                      <dd class="muted">Not filled</dd>
+                                    }
+                                  </div>
+                                  @if (!historyTradeExecutedAt(trade) && trade.createdAt) {
+                                    <div>
+                                      <dt>Proposed</dt>
+                                      <dd>{{ trade.createdAt | date: 'dd MMM yyyy, HH:mm:ss':'+0530' }}</dd>
+                                    </div>
+                                  }
+                                  <div>
+                                    <dt>Closed</dt>
+                                    @if (historyTradeClosedAt(trade); as closedAt) {
+                                      <dd>{{ closedAt | date: 'dd MMM yyyy, HH:mm:ss':'+0530' }}</dd>
+                                    } @else {
+                                      <dd class="muted">—</dd>
+                                    }
+                                  </div>
+                                  @if (historyTradeDurationLabel(trade); as duration) {
+                                    <div>
+                                      <dt>In trade</dt>
+                                      <dd>{{ duration }}</dd>
+                                    </div>
+                                  }
+                                  @if (trade.pnl != null) {
+                                    <div>
+                                      <dt>Realized P&amp;L</dt>
+                                      <dd [class.up]="trade.pnl > 0" [class.down]="trade.pnl < 0">₹{{ trade.pnl | number: '1.2-2' }}</dd>
+                                    </div>
+                                  }
+                                  @if (trade.exitReason) {
+                                    <div class="history-detail-dl-wide">
+                                      <dt>Outcome</dt>
+                                      <dd>{{ trade.exitReason }}</dd>
+                                    </div>
+                                  }
+                                </dl>
+                              </section>
+                              @if (historyTradeEntryFills(trade) || historyTradeExitFills(trade)) {
+                                <section class="history-detail-section history-detail-section-fills" aria-label="Fills">
+                                  <h4 class="history-detail-section-title">Fills</h4>
+                                  <div class="history-fill-grid">
+                                    @if (historyTradeEntryFills(trade)) {
+                                      <div class="history-detail-fill-line">
+                                        <span class="history-detail-fill-tag">Entry</span>
+                                        <span class="history-detail-fill-value">{{ historyTradeEntryFills(trade) }}</span>
+                                      </div>
+                                    }
+                                    @if (historyTradeExitFills(trade)) {
+                                      <div class="history-detail-fill-line">
+                                        <span class="history-detail-fill-tag">Exit</span>
+                                        <span class="history-detail-fill-value">{{ historyTradeExitFills(trade) }}</span>
+                                      </div>
+                                    }
+                                  </div>
+                                </section>
+                              }
+                            </div>
+                            @if (trade.entryReason) {
+                              <section class="history-detail-section history-detail-section-why" aria-label="Why executed">
+                                <h4 class="history-detail-section-title">Why executed</h4>
+                                <p class="history-detail-text">{{ trade.entryReason }}</p>
+                              </section>
+                            }
+                          </div>
+                        </td>
+                      </tr>
+                    }
+                  } @empty {
+                    <tr>
+                      <td class="history-empty" colspan="11">No trades recorded for this period.</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+            @if (historyCatalogTradesFiltered().length > historyPageSize) {
+              <nav class="history-pagination" aria-label="Trade history pages">
+                <button type="button" class="history-page-btn" [disabled]="historyPage <= 1" (click)="setHistoryPage(historyPage - 1)">Previous</button>
+                <span class="history-page-label">
+                  Showing {{ (historyPage - 1) * historyPageSize + 1 }}–{{ (historyPage - 1) * historyPageSize + historyCatalogTradesPage().length }}
+                  of {{ historyCatalogTradesFiltered().length }}
+                </span>
+                <button
+                  type="button"
+                  class="history-page-btn"
+                  [disabled]="historyPage >= historyCatalogPageCount()"
+                  (click)="setHistoryPage(historyPage + 1)"
+                >
+                  Next
+                </button>
+              </nav>
+            }
           }
           @if (historyError) {
             <div class="agent-error">{{ historyError }}</div>
           }
         </section>
+        }
+        @if (tradePanelTab === 'agent') {
+        <div class="agent-tab-pane">
         @if (paperAgent?.recentEvents?.length) {
           <div class="event-strip">
-            @for (event of paperAgent?.recentEvents?.slice(0, 5) || []; track event.id) {
+            @for (event of paperAgent?.recentEvents?.slice(0, 8) || []; track event.id) {
               <span><b>{{ event.type }}</b> · {{ event.reason }} · {{ event.at | date: 'dd MMM HH:mm':'+0530' }}</span>
             }
           </div>
         }
-        <div class="agent-chat" aria-live="polite">
+        <div class="agent-chat agent-chat-scroll" aria-live="polite">
           @for (message of paperAgent?.messages || []; track message.at) {
             <div class="agent-message" [class.user]="message.role === 'user'">
               <b>{{ message.role === 'user' ? 'You' : 'Agent' }}</b>
@@ -538,37 +1648,43 @@
         @if (agentError) {
           <div class="agent-error">{{ agentError }}</div>
         }
-        @if (liveError) {
-          <div class="agent-error">{{ liveError }}</div>
-        }
         <form class="composer" aria-label="Chat composer" (ngSubmit)="sendAgentCommand()">
           <div class="composer-label">Agent</div>
           <textarea
             [(ngModel)]="agentCommand"
             name="agentCommand"
-            rows="2"
+            rows="3"
             placeholder="Example: use ₹50,000, target ₹5,000, max loss ₹1,500"
             [disabled]="agentBusy"
             (keydown.control.enter)="sendAgentCommand()"
           ></textarea>
           <button type="submit" [disabled]="agentBusy">{{ agentBusy ? 'Sending…' : 'Send' }}</button>
         </form>
+        </div>
+        }
       </section>
       }
     </main>
 
+    @if (centerView === 'market') {
     <aside class="rail right-rail">
       @if (marketKind === 'options') {
-        <div class="rail-head">
+        <div class="rail-head rail-head-pe">
           <span class="rail-label">PUTS PE</span>
-          <span class="count sell">{{ peContracts().length }}</span>
+          <span class="count sell count-pill">{{ peContracts().length }}</span>
         </div>
-        <ul class="tree">
+        <ul class="tree option-chain-tree option-chain-pe">
           @for (row of peContracts(); track row.label) {
             <li>
-              <button type="button" class="tree-item" [class.selected]="optionSelected(row)" (click)="openOption(row)">
-                <span class="chev">▾</span>
-                <span class="file">{{ row.strike }} PE</span>
+              <button
+                type="button"
+                class="tree-item option-chain-item"
+                [class.selected]="optionSelected(row)"
+                [class.atm]="optionIsAtm(row)"
+                (click)="openOption(row)"
+              >
+                <span class="chev" aria-hidden="true">▸</span>
+                <span class="file option-strike">{{ row.strike }}<small>PE</small></span>
                 <span class="option-market" [class.up]="optionTone(row) === 'up'" [class.down]="optionTone(row) === 'down'">
                   <strong>{{ row.last != null ? (row.last | number: '1.2-2') : '—' }}</strong>
                   <small>
@@ -585,9 +1701,9 @@
           }
         </ul>
       } @else {
-        <div class="rail-head">
+        <div class="rail-head rail-head-buy">
           <span class="rail-label">BUYING PRESSURE</span>
-          <span class="count buy">{{ boardData?.counts?.buying ?? 0 }}</span>
+          <span class="count buy count-pill">{{ boardData?.counts?.buying ?? 0 }}</span>
         </div>
         @if (state === 'loading') {
           <div class="skel"></div>
@@ -609,7 +1725,7 @@
             }
           </ul>
         }
-        <div class="rail-sub">RANGE BOUND</div>
+        <div class="rail-sub rail-sub-range">RANGE BOUND</div>
         @if (state === 'ready' && ranged().length === 0) {
           <p class="rail-empty">None in range</p>
         }
@@ -626,67 +1742,35 @@
         </ul>
       }
     </aside>
+    }
   </div>
+  }
 
-  <footer class="statusbar">
-    <span class="sb-chunk accent">{{ marketKind === 'options' ? 'OPTIONS' : 'STOCKS' }}</span>
-    <span class="sb-chunk">{{ boardData?.feed || 'awaiting m.Stock OTP' }}</span>
-    <span class="sb-chunk">{{ brokerConnected ? 'LIVE' : 'OFFLINE' }}</span>
-    <span class="sb-chunk buy">{{ boardData?.counts?.buying ?? 0 }} BUYING</span>
-    <span class="sb-chunk sell">{{ boardData?.counts?.selling ?? 0 }} SELLING</span>
-    <span class="sb-chunk range">{{ boardData?.counts?.rangeBound ?? 0 }} RANGE</span>
+  <footer class="statusbar" role="status" aria-label="Market session status">
+    <span class="sb-chunk sb-chunk-accent">{{ marketKind === 'options' ? 'OPTIONS' : 'STOCKS' }}</span>
+    <span class="sb-chunk sb-feed">{{ boardData?.feed || 'awaiting broker login' }}</span>
+    <span class="sb-pill" [class.live]="brokerConnected" [class.off]="!brokerConnected">
+      {{ brokerConnected ? 'LIVE' : 'OFF' }}
+    </span>
+    <span class="sb-metric sb-funds" [class.dim]="displayAvailableFunds() == null">
+      @if (displayAvailableFunds() != null) {
+        ₹{{ displayAvailableFunds() | number: '1.0-0' }} avail
+      } @else {
+        ₹— avail
+      }
+    </span>
+    <span class="sb-metric buy">
+      <strong>{{ boardData?.counts?.buying ?? 0 }}</strong> BUYING
+    </span>
+    <span class="sb-metric sell">
+      <strong>{{ boardData?.counts?.selling ?? 0 }}</strong> SELLING
+    </span>
+    <span class="sb-metric range">
+      <strong>{{ boardData?.counts?.rangeBound ?? 0 }}</strong> RANGE
+    </span>
     <span class="sb-spacer"></span>
-    <span class="sb-chunk">{{ boardData?.updatedAt | date: 'HH:mm:ss' }}</span>
-    <span class="sb-chunk">UTF-8</span>
-    <span class="sb-chunk">Ln 12, Col 1</span>
+    <span class="sb-chunk sb-clock">Board {{ boardData?.updatedAt | date: 'HH:mm:ss' }}</span>
   </footer>
 
-  @if (pickerOpen) {
-    <div class="picker-backdrop" (click)="closePicker()">
-      <div class="picker" (click)="$event.stopPropagation()" role="dialog" aria-label="Open symbol">
-        <div class="picker-kind">
-          <button type="button" [class.active]="pickerKind === 'stocks'" (click)="setPickerKind('stocks')">Stocks</button>
-          <button type="button" [class.active]="pickerKind === 'options'" (click)="setPickerKind('options')">Options</button>
-        </div>
-        <input
-          class="picker-input"
-          [(ngModel)]="pickerQuery"
-          name="pickerQuery"
-          [placeholder]="pickerKind === 'options' ? 'Strike, CE, PE, NIFTY…' : 'Search stock or index…'"
-          autofocus
-        />
-        @if (pickerKind === 'options') {
-          <div class="picker-filters">
-            @for (name of indexTabs; track name) {
-              <button type="button" [class.active]="optionUnderlying === name" (click)="pickPickerUnderlying(name)">{{ name }}</button>
-            }
-            @for (exp of expiries(); track exp.id) {
-              <button type="button" [class.active]="optionExpiry === exp.id" (click)="optionExpiry = exp.id">{{ exp.label }}</button>
-            }
-          </div>
-          <ul class="picker-list">
-            @for (row of pickerOptions(); track row.label + row.side) {
-              <li>
-                <button type="button" (click)="openOption(row)">
-                  <span>{{ row.label }}</span>
-                </button>
-              </li>
-            }
-          </ul>
-        } @else {
-          <ul class="picker-list">
-            @for (row of pickerStocks(); track row.name) {
-              <li>
-                <button type="button" (click)="openStock(row)">
-                  <span>{{ row.name }}</span>
-                  <span class="picker-meta">{{ row.last | number: '1.2-2' }}</span>
-                </button>
-              </li>
-            }
-          </ul>
-        }
-        <p class="picker-hint">Ctrl+P · selection only · no orders</p>
-      </div>
-    </div>
-  }
+  <router-outlet class="twb-route-outlet" aria-hidden="true" />
 </div>

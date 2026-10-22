@@ -8,9 +8,10 @@ The board remains read-only with respect to the broker. A separate **paper-only 
 simulate confirmed stock and option positions; it has no live broker order method.
 
 Index option hedging has an additional conservative policy: at least ₹1,00,000 must be allocated,
-only one protected index spread may be open, and stock-option selling is disabled. Naked index-option
-selling is available in paper mode with explicit approval, liquidity checks, stop-based sizing and a
-warning that price gaps can exceed the modeled stop loss.
+only one protected index spread may be open. Naked index and stock options plus naked
+index and stock futures are allowed with liquidity checks, margin checks on short options,
+stop-based sizing, user confirmation, and chat notifications across NIFTY, SENSEX,
+BANKNIFTY, FINNIFTY, and listed F&O names.
 
 ---
 

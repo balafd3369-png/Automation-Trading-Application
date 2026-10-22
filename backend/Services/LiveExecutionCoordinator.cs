@@ -3,35 +3,39 @@ using TradeWithBeast.Models;
 
 namespace TradeWithBeast.Services;
 
-public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
+public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZoneLiveAutoGateway
 {
     public const string ArmAcknowledgement = "I UNDERSTAND LIVE ORDERS USE REAL MONEY";
+    public const string ZoneAutoLiveAcknowledgement = "GO LIVE ZONE CSV ON REAL MONEY";
     private static readonly TimeZoneInfo Ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
     private readonly object _gate = new();
-    private readonly IMStockOrderClient _broker;
-    private readonly MStockAuthClient _auth;
+    private readonly BrokerConnectionManager _brokers;
+    private IBrokerOrderClient BrokerOrders => _brokers.Orders;
     private readonly IPaperProposalSource _paper;
     private readonly TradeHistoryStore _history;
     private readonly LiveExecutionOptions _options;
     private readonly ILogger<LiveExecutionCoordinator> _log;
     private Timer? _timer;
     private DateTimeOffset? _armedUntil;
+    private bool _zoneAutoLive;
+    private string _zoneAutoLiveProduct = "MIS";
+    private int _zoneLiveBusy;
     private IReadOnlyList<BrokerPosition> _positions = [];
+    private IReadOnlyList<BrokerOrder> _orders = [];
+    private LiveBrokerPnlSnapshot? _brokerPnl;
     private IReadOnlyList<LiveEodPrompt> _eodPrompts = [];
     private string _reconciliation = "NOT RUN";
     private DateTimeOffset _updatedAt = DateTimeOffset.UtcNow;
     private int _busy;
 
     public LiveExecutionCoordinator(
-        IMStockOrderClient broker,
-        MStockAuthClient auth,
+        BrokerConnectionManager brokers,
         IPaperProposalSource paper,
         TradeHistoryStore history,
         LiveExecutionOptions options,
         ILogger<LiveExecutionCoordinator> log)
     {
-        _broker = broker;
-        _auth = auth;
+        _brokers = brokers;
         _paper = paper;
         _history = history;
         _options = options;
@@ -71,9 +75,9 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
                 _reconciliation = session.Message;
                 return SnapshotUnsafe();
             }
-            if (!_auth.HasSession)
+            if (!_brokers.HasSession)
             {
-                _reconciliation = "Connect m.Stock OTP before arming live trading.";
+                _reconciliation = "Connect m.Stock before arming live trading.";
                 return SnapshotUnsafe();
             }
             if (!string.Equals(acknowledgement.Trim(), ArmAcknowledgement, StringComparison.Ordinal))
@@ -82,7 +86,52 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
                 return SnapshotUnsafe();
             }
             _armedUntil = DateTimeOffset.UtcNow.AddMinutes(Math.Clamp(_options.ArmMinutes, 1, 120));
+            _zoneAutoLive = false;
+            _paper.SetAutoAdmitTrades(false);
             _reconciliation = "ARMED; awaiting separately confirmed proposal";
+            _updatedAt = DateTimeOffset.UtcNow;
+            return SnapshotUnsafe();
+        }
+    }
+
+    public LiveExecutionSnapshot ArmZoneAutoLive(string acknowledgement, string product)
+    {
+        lock (_gate)
+        {
+            if (!_options.Enabled)
+            {
+                _reconciliation = "Live trading is disabled in backend configuration.";
+                return SnapshotUnsafe();
+            }
+            var session = CurrentSessionUnsafe();
+            if (!session.IsOpen)
+            {
+                _reconciliation = session.Message;
+                return SnapshotUnsafe();
+            }
+            if (!_brokers.HasSession)
+            {
+                _reconciliation = "Connect m.Stock before going live.";
+                return SnapshotUnsafe();
+            }
+            if (!string.Equals(acknowledgement.Trim(), ZoneAutoLiveAcknowledgement, StringComparison.Ordinal))
+            {
+                _reconciliation = $"Type exactly: {ZoneAutoLiveAcknowledgement}";
+                return SnapshotUnsafe();
+            }
+            product = product.Trim().ToUpperInvariant();
+            if (product is not ("MIS" or "NRML"))
+            {
+                _reconciliation = "Product must be MIS or NRML.";
+                return SnapshotUnsafe();
+            }
+            _armedUntil = DateTimeOffset.UtcNow.AddMinutes(Math.Clamp(_options.ArmMinutes, 1, 120));
+            _zoneAutoLive = true;
+            _zoneAutoLiveProduct = product;
+            _paper.SetAutoAdmitTrades(true);
+            _reconciliation =
+                $"ZONE AUTO LIVE ({product}): B1/S1/S2 zone signals on {string.Join(", ", ZoneBoardLiveScope.Indices)} "
+                + "submit to the broker without per-trade confirm. Use Disarm to stop.";
             _updatedAt = DateTimeOffset.UtcNow;
             return SnapshotUnsafe();
         }
@@ -93,9 +142,53 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
         lock (_gate)
         {
             _armedUntil = null;
+            _zoneAutoLive = false;
+            _paper.SetAutoAdmitTrades(true);
             _reconciliation = "DISARMED";
             _updatedAt = DateTimeOffset.UtcNow;
             return SnapshotUnsafe();
+        }
+    }
+
+    public bool IsZoneAutoLiveActive()
+    {
+        lock (_gate) return IsZoneAutoLiveActiveUnsafe();
+    }
+
+    public bool ShouldAutoExecuteZoneLive(string strategy, string underlying)
+    {
+        lock (_gate)
+        {
+            if (!IsZoneAutoLiveActiveUnsafe()) return false;
+            return ZoneBoardLiveScope.Qualifies(strategy, underlying);
+        }
+    }
+
+    public async Task ExecuteZoneProposalAsync(string proposalId, CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.Exchange(ref _zoneLiveBusy, 1) == 1) return;
+        try
+        {
+            string product;
+            lock (_gate)
+            {
+                if (!IsZoneAutoLiveActiveUnsafe())
+                {
+                    return;
+                }
+                product = _zoneAutoLiveProduct;
+            }
+
+            var snapshot = await ConfirmAsync(proposalId, product, cancellationToken);
+            if (snapshot.PendingProposal is not null
+                && snapshot.PendingProposal.Id.Equals(proposalId, StringComparison.Ordinal))
+            {
+                _paper.ReleasePendingProposal(proposalId, "Zone live submission did not complete.");
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _zoneLiveBusy, 0);
         }
     }
 
@@ -109,7 +202,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
         {
             if (!_options.Enabled) return WithStatusUnsafe("Live execution is disabled by configuration.");
             if (!CurrentSessionUnsafe().IsOpen) return WithStatusUnsafe(CurrentSessionUnsafe().Message);
-            if (!_auth.HasSession) return WithStatusUnsafe("Connect m.Stock OTP before confirming a live trade.");
+            if (!_brokers.HasSession) return WithStatusUnsafe("Connect your broker before confirming a live trade.");
             if (!IsArmedUnsafe()) return WithStatusUnsafe("Live execution is not armed.");
             proposal = _paper.Snapshot().PendingTrade;
             if (proposal is null || !proposal.Id.Equals(proposalId, StringComparison.Ordinal))
@@ -128,12 +221,17 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
             lock (_gate) return WithStatusUnsafe("The proposal expired before live submission.");
         }
 
+        if (!ValidateZoneLivePreflight(proposal, out var preflightReason))
+        {
+            lock (_gate) return WithStatusUnsafe(preflightReason);
+        }
+
         _history.SaveLiveTrade(proposal, product);
         _history.SetLiveTradeStatus(proposal.Id, "SUBMITTING");
         var legs = (proposal.Legs ?? []).OrderBy(leg => leg.Side == "BUY" ? 0 : 1).ToList();
         var completed = new List<(PaperTradeLegProposal Leg, LiveOrderSnapshot Order)>();
 
-        if (proposal.Strategy == "NAKED_INDEX_OPTION_SHORT")
+        if (proposal.Strategy is "NAKED_INDEX_OPTION_SHORT" or "NAKED_STOCK_OPTION_SHORT")
         {
             var naked = legs.SingleOrDefault();
             if (naked is null || naked.Side != "SELL" || naked.InstrumentType != "OPTION")
@@ -141,7 +239,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
                 return Fail(proposal.Id, "Invalid naked option proposal.");
             }
             var marginOrder = BuildOrder(proposal.Id, naked, product, "ENTRY");
-            var margin = await _broker.CalculateMarginAsync(marginOrder, ct);
+            var margin = await BrokerOrders.CalculateMarginAsync(marginOrder, ct);
             if (!margin.Success)
             {
                 return Fail(proposal.Id, $"Margin check rejected: {margin.Message}");
@@ -158,7 +256,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
         foreach (var leg in legs)
         {
             var request = BuildOrder(proposal.Id, leg, product, "ENTRY");
-            var placed = await _broker.PlaceOrderAsync(request, ct);
+            var placed = await BrokerOrders.PlaceOrderAsync(request, ct);
             var localId = $"{proposal.Id}:{leg.Id}:ENTRY";
             if (!placed.Success || string.IsNullOrWhiteSpace(placed.Data))
             {
@@ -172,7 +270,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
             var settled = await WaitForTerminalAsync(submitted, ct);
             if (settled.Status != "COMPLETE" || settled.FilledQuantity != settled.Quantity)
             {
-                if (settled.PendingQuantity() > 0) await _broker.CancelOrderAsync(settled.BrokerOrderId, ct);
+                if (settled.PendingQuantity() > 0) await BrokerOrders.CancelOrderAsync(settled.BrokerOrderId, ct);
                 if (settled.FilledQuantity > 0) completed.Add((leg with { Quantity = settled.FilledQuantity }, settled));
                 await CompensateAsync(proposal.Id, completed, product, ct);
                 return Fail(
@@ -219,7 +317,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
                          && position.Quantity != 0))
             {
                 var side = position.Quantity > 0 ? "BUY" : "SELL";
-                var result = await _broker.ConvertPositionAsync(
+                var result = await BrokerOrders.ConvertPositionAsync(
                     position.TradingSymbol, position.Exchange, side, Math.Abs(position.Quantity), "MIS", "NRML", ct);
                 if (!result.Success)
                 {
@@ -228,7 +326,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
                     break;
                 }
             }
-            await ReconcileBrokerOnlyAsync(ct);
+            await RefreshBrokerBookAsync(ct);
             var symbols = trade.Proposal.Legs?.Select(leg => leg.Symbol).ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
             converted = converted && _positions.Where(position => symbols.Contains(position.TradingSymbol) && position.Quantity != 0)
                 .All(position => position.Product == "NRML");
@@ -254,15 +352,27 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
         if (Interlocked.Exchange(ref _busy, 1) == 1) return;
         try
         {
-            if (!_options.Enabled) return;
-            await ReconcileBrokerOnlyAsync(ct);
-            var ordersResult = await _broker.GetOrdersAsync(ct);
-            if (!ordersResult.Success)
+            if (_brokers.HasSession)
             {
-                lock (_gate) _reconciliation = Exact("ORDER RECONCILIATION FAILED", ordersResult.Message);
-                return;
+                await RefreshBrokerBookAsync(ct);
             }
-            var byId = (ordersResult.Data ?? []).ToDictionary(order => order.OrderId, StringComparer.OrdinalIgnoreCase);
+
+            if (!_options.Enabled) return;
+            if (!_brokers.HasSession) return;
+            IReadOnlyList<BrokerOrder> orders;
+            lock (_gate) orders = _orders;
+            if (orders.Count == 0)
+            {
+                var ordersResult = await BrokerOrders.GetOrdersAsync(ct);
+                if (!ordersResult.Success)
+                {
+                    lock (_gate) _reconciliation = Exact("ORDER RECONCILIATION FAILED", ordersResult.Message);
+                    return;
+                }
+                orders = ordersResult.Data ?? [];
+            }
+
+            var byId = orders.ToDictionary(order => order.OrderId, StringComparer.OrdinalIgnoreCase);
             foreach (var trade in _history.ReadLiveTrades(true))
             {
                 foreach (var local in trade.Orders.Where(order => !string.IsNullOrWhiteSpace(order.BrokerOrderId)))
@@ -291,15 +401,63 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
         }
     }
 
-    private async Task ReconcileBrokerOnlyAsync(CancellationToken ct)
+    private async Task RefreshBrokerBookAsync(CancellationToken ct)
     {
-        var result = await _broker.GetPositionsAsync(ct);
-        if (!result.Success) throw new InvalidOperationException(Exact("position reconciliation failed", result.Message));
+        var positionsResult = await BrokerOrders.GetPositionsAsync(ct);
+        var ordersResult = await BrokerOrders.GetOrdersAsync(ct);
         lock (_gate)
         {
-            _positions = result.Data ?? [];
+            if (positionsResult.Success)
+            {
+                _positions = positionsResult.Data ?? [];
+                _brokerPnl = ComputeBrokerPnl(_positions);
+            }
+
+            if (ordersResult.Success)
+            {
+                _orders = ordersResult.Data ?? [];
+            }
+
+            if (positionsResult.Success && ordersResult.Success && !_options.Enabled)
+            {
+                _reconciliation = "BROKER BOOK SYNCED";
+            }
+            else if (!positionsResult.Success)
+            {
+                _reconciliation = Exact("POSITION SYNC FAILED", positionsResult.Message);
+            }
+            else if (!ordersResult.Success)
+            {
+                _reconciliation = Exact("ORDER SYNC FAILED", ordersResult.Message);
+            }
+
             _updatedAt = DateTimeOffset.UtcNow;
         }
+    }
+
+    internal static LiveBrokerPnlSnapshot ComputeBrokerPnl(IReadOnlyList<BrokerPosition> positions)
+    {
+        decimal unrealised = 0;
+        decimal realised = 0;
+        decimal openCost = 0;
+        foreach (var position in positions)
+        {
+            if (position.Quantity != 0)
+            {
+                unrealised += position.Pnl;
+                openCost += Math.Abs(position.AveragePrice * position.Quantity);
+            }
+            else
+            {
+                realised += position.Pnl;
+            }
+        }
+
+        var total = unrealised + realised;
+        decimal? unrealisedPercent = openCost > 0
+            ? decimal.Round(unrealised / openCost * 100m, 2)
+            : null;
+        return new(total, realised, unrealised, unrealisedPercent);
     }
 
     private async Task ApplyEodPolicyAsync(CancellationToken ct)
@@ -333,7 +491,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
             var leg = trade.Proposal.Legs?.FirstOrDefault(item => item.Id == entry.LegId);
             if (leg is null) continue;
             var request = BuildOrder(trade.Id, leg with { Side = side, Quantity = entry.FilledQuantity }, entry.Product, "EXIT");
-            var placed = await _broker.PlaceOrderAsync(request, ct);
+            var placed = await BrokerOrders.PlaceOrderAsync(request, ct);
             var snapshot = new LiveOrderSnapshot(
                 $"{trade.Id}:{entry.LegId}:EXIT", trade.Id, entry.LegId, placed.Data ?? "",
                 request.Exchange, entry.Symbol, side, entry.Product, "EXIT",
@@ -366,7 +524,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
             var side = item.Leg.Side == "BUY" ? "SELL" : "BUY";
             var leg = item.Leg with { Side = side, Quantity = item.Order.FilledQuantity };
             var request = BuildOrder(tradeId, leg, product, "COMPENSATION");
-            var placed = await _broker.PlaceOrderAsync(request, ct);
+            var placed = await BrokerOrders.PlaceOrderAsync(request, ct);
             _history.UpsertLiveOrder(new(
                 $"{tradeId}:{leg.Id}:COMPENSATION", tradeId, leg.Id, placed.Data ?? "", request.Exchange,
                 leg.Symbol, side, product, "COMPENSATION", placed.Success ? "SUBMITTED" : "REJECTED",
@@ -381,7 +539,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
         while (DateTimeOffset.UtcNow < deadline)
         {
             await Task.Delay(500, ct);
-            var result = await _broker.GetOrdersAsync(ct);
+            var result = await BrokerOrders.GetOrdersAsync(ct);
             var order = result.Data?.FirstOrDefault(item => item.OrderId == submitted.BrokerOrderId);
             if (order is null) continue;
             latest = FromBroker(submitted, order);
@@ -405,12 +563,31 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
         var exchange = leg.Quote?.Exchange;
         if (string.IsNullOrWhiteSpace(exchange))
         {
-            exchange = leg.InstrumentType == "OPTION"
-                ? leg.Underlying == "SENSEX" ? "BFO" : "NFO"
-                : "NSE";
+            exchange = leg.InstrumentType switch
+            {
+                "OPTION" => leg.Underlying == "SENSEX" ? "BFO" : "NFO",
+                "FUTURE" => leg.Underlying == "SENSEX" ? "BFO" : "NFO",
+                _ => "NSE",
+            };
         }
         var tag = $"TWB-{tradeId[..Math.Min(8, tradeId.Length)]}-{purpose[..Math.Min(3, purpose.Length)]}-{leg.Id[^Math.Min(3, leg.Id.Length)..]}";
-        return new(exchange, leg.Symbol, leg.Side, leg.Quantity, product, "LIMIT", price, 0, "DAY", "regular", tag);
+        return new(
+            exchange,
+            leg.Symbol,
+            leg.Side,
+            leg.Quantity,
+            product,
+            "LIMIT",
+            price,
+            0,
+            "DAY",
+            "regular",
+            tag,
+            leg.Underlying,
+            leg.Expiry?.UtcDateTime,
+            leg.Strike,
+            leg.OptionRight,
+            leg.InstrumentType);
     }
 
     private static LiveOrderSnapshot FromBroker(LiveOrderSnapshot local, BrokerOrder order) =>
@@ -443,19 +620,24 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
             trade.Id, trade.Proposal.Strategy, trade.Proposal.Underlying, trade.Product, trade.Status,
             trade.FailureReason, trade.CreatedAt, trade.Orders)).ToList();
         var armed = IsArmedUnsafe();
+        var zoneAuto = IsZoneAutoLiveActiveUnsafe();
         var session = CurrentSessionUnsafe();
-        var brokerConnected = _auth.HasSession;
-        var state = ResolveState(session, brokerConnected, armed);
+        var brokerConnected = _brokers.HasSession;
+        var state = ResolveState(session, brokerConnected, armed, zoneAuto);
         return new(
             _options.Enabled,
             brokerConnected,
             session,
             armed,
             armed ? _armedUntil : null,
+            zoneAuto,
+            _zoneAutoLiveProduct,
             state,
             armed ? _paper.Snapshot().PendingTrade : null,
             trades,
             _positions,
+            _orders,
+            _brokerPnl,
             _history.RecentLiveEvents(),
             _eodPrompts,
             _reconciliation,
@@ -467,7 +649,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
             ? new("OPEN", true, "Market is open for live entries until 15:10 IST.", null)
             : MarketSession.Evaluate(DateTimeOffset.UtcNow);
 
-    private string ResolveState(MarketSessionSnapshot session, bool brokerConnected, bool armed)
+    private string ResolveState(MarketSessionSnapshot session, bool brokerConnected, bool armed, bool zoneAuto)
     {
         if (!_options.Enabled) return "DISABLED";
         if (!brokerConnected) return "BROKER OFFLINE";
@@ -479,10 +661,51 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable
             "SQUARE_OFF" => "SQUARE-OFF",
             _ => "MARKET CLOSED",
         };
+        if (zoneAuto) return "ZONE AUTO LIVE";
         return armed ? "ARMED" : "DISARMED";
     }
 
     private bool IsArmedUnsafe() => _armedUntil is not null && _armedUntil > DateTimeOffset.UtcNow;
+    private bool IsZoneAutoLiveActiveUnsafe() => _zoneAutoLive && IsArmedUnsafe();
+
+    private bool ValidateZoneLivePreflight(PaperTradeProposal proposal, out string reason)
+    {
+        reason = "";
+        if (!ZoneBoardLiveScope.Qualifies(proposal.Strategy, proposal.Underlying))
+        {
+            return true;
+        }
+
+        var openOnUnderlying = _history.ReadLiveTrades(true)
+            .Count(trade => trade.Status is "OPEN" or "OPEN_NRML" or "SUBMITTING"
+                && trade.Proposal.Underlying.Equals(proposal.Underlying, StringComparison.OrdinalIgnoreCase));
+        if (openOnUnderlying >= 1)
+        {
+            reason = $"Zone live already has an open broker trade on {proposal.Underlying}.";
+            return false;
+        }
+
+        var legs = proposal.Legs ?? [];
+        var estimatedDebit = legs
+            .Where(leg => leg.Side == "BUY")
+            .Sum(leg => Math.Max(0m, leg.IndicativePrice) * leg.Quantity);
+        if (estimatedDebit <= 0)
+        {
+            reason = "Zone live entry requires positive option premium estimates.";
+            return false;
+        }
+
+        var funds = _paper.Snapshot().BrokerAvailableFunds;
+        if (funds is not null && estimatedDebit > funds)
+        {
+            reason =
+                $"Insufficient broker funds for zone live entry: need about ₹{estimatedDebit:N0}, "
+                + $"available ₹{funds:N0}.";
+            return false;
+        }
+
+        return true;
+    }
     private static bool IsTerminal(string status) =>
         NormalizeStatus(status) is "COMPLETE" or "REJECTED" or "CANCELLED";
 

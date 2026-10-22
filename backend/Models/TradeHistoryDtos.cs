@@ -25,7 +25,11 @@ public sealed record TradeHistorySummary(
     int WinningTrades,
     int LosingTrades,
     int OpenTrades,
-    decimal RealizedPnl);
+    decimal RealizedPnl,
+    int TargetHits,
+    int StopLossHits,
+    int TrailingStopHits,
+    int BreakevenTrades);
 
 public sealed record TradeHistoryResponse(
     string UserId,
