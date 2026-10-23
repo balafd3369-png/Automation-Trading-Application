@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using TradeWithBeast.Broker;
 using TradeWithBeast.Formulas;
@@ -7,7 +8,10 @@ namespace TradeWithBeast.Services;
 
 public sealed class MockMarketService : IHostedService, IDisposable
 {
-    private static readonly TimeSpan ChartRequestBudget = TimeSpan.FromSeconds(12);
+    private static readonly TimeSpan ChartRequestBudget = TimeSpan.FromSeconds(22);
+
+    private readonly ConcurrentDictionary<string, (ChartResponse Chart, DateTimeOffset SavedAt)> _chartResponseCache =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private readonly object _gate = new();
     private readonly Random _rng = new(1270);
@@ -16,12 +20,15 @@ public sealed class MockMarketService : IHostedService, IDisposable
     private readonly BrokerConnectionManager _brokers;
     private readonly EquitySymbolCatalog _catalog;
     private readonly ILogger<MockMarketService> _log;
+    private readonly ChartLiveStreamService _chartLiveStream;
     private readonly Dictionary<string, List<IntradayTickBuilder.Tick>> _intradayTicks = new(StringComparer.OrdinalIgnoreCase);
     private Timer? _timer;
     private CancellationTokenSource? _historyCts;
     private DateTimeOffset _updatedAt = DateTimeOffset.UtcNow;
     private string _feed = "awaiting broker login";
     private int _busy;
+    private int _missingQuoteCursor;
+    private int _chartWarmupScheduled;
     private bool _demoZoneSeedsApplied;
 
     private IBrokerMarketClient Broker => _brokers.Market;
@@ -30,11 +37,13 @@ public sealed class MockMarketService : IHostedService, IDisposable
         IWebHostEnvironment env,
         BrokerConnectionManager brokers,
         EquitySymbolCatalog catalog,
+        ChartLiveStreamService chartLiveStream,
         ILogger<MockMarketService> log)
     {
         _store = new SeedStore(Path.Combine(env.ContentRootPath, "data", "mock-board.json"));
         _brokers = brokers;
         _catalog = catalog;
+        _chartLiveStream = chartLiveStream;
         _log = log;
     }
 
@@ -108,6 +117,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
 
         _ = Task.Run(() => PrimeBrokerZoneHistoryAsync(CancellationToken.None));
+        _ = Task.Run(() => PrimeAllBoardQuotesAsync(CancellationToken.None));
     }
 
     public BoardResponse Snapshot()
@@ -117,9 +127,9 @@ public sealed class MockMarketService : IHostedService, IDisposable
             var rows = _symbols.Select(ToSnapshot).ToList();
             return new BoardResponse(
                 new BoardCounts(
-                    rows.Count(r => r.Mark == NiftyZoneFormula.Buying),
-                    rows.Count(r => r.Mark == NiftyZoneFormula.Selling),
-                    rows.Count(r => r.Mark == NiftyZoneFormula.RangeBound)),
+                    rows.Count(r => r.QuoteVerified && r.Mark == NiftyZoneFormula.Buying),
+                    rows.Count(r => r.QuoteVerified && r.Mark == NiftyZoneFormula.Selling),
+                    rows.Count(r => r.QuoteVerified && r.Mark == NiftyZoneFormula.RangeBound)),
                 rows,
                 _updatedAt,
                 _feed);
@@ -209,7 +219,11 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
     }
 
-    public async Task<ChartResponse?> ChartAsync(string name, string interval, CancellationToken ct)
+    public async Task<ChartResponse?> ChartAsync(
+        string name,
+        string interval,
+        CancellationToken ct,
+        ChartLoadDepth depth = ChartLoadDepth.Full)
     {
         LiveSymbol? symbol;
         lock (_gate)
@@ -235,17 +249,6 @@ public sealed class MockMarketService : IHostedService, IDisposable
             return null;
         }
 
-        await TryLoadZoneHistoryAsync(symbol, ct);
-        lock (_gate)
-        {
-            symbol = _symbols.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        }
-
-        if (symbol is null)
-        {
-            return null;
-        }
-
         var mapped = interval switch
         {
             "1m" or "minute" => "minute",
@@ -255,20 +258,61 @@ public sealed class MockMarketService : IHostedService, IDisposable
             _ => "5minute",
         };
 
+        if (depth == ChartLoadDepth.Full
+            && _chartResponseCache.TryGetValue(ChartCacheKey(name, mapped), out var warm)
+            && warm.Chart.Candles.Count >= 8
+            && (DateTimeOffset.UtcNow - warm.SavedAt).TotalMinutes < 3)
+        {
+            lock (_gate)
+            {
+                var snap = ToSnapshot(symbol);
+                return new ChartResponse(
+                    snap.Name,
+                    warm.Chart.Candles,
+                    snap.Last,
+                    snap.B2,
+                    snap.B1,
+                    snap.S,
+                    snap.S1,
+                    snap.S2);
+            }
+        }
+
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        budget.CancelAfter(ChartRequestBudget);
+        budget.CancelAfter(depth == ChartLoadDepth.Fast ? TimeSpan.FromSeconds(10) : ChartRequestBudget);
         try
         {
-            return await ChartAsyncCore(symbol, name, mapped, budget.Token);
+            return await ChartAsyncCore(symbol, name, mapped, depth, budget.Token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            var cacheKey = ChartCacheKey(name, mapped);
+            if (_chartResponseCache.TryGetValue(cacheKey, out var cached) && cached.Chart.Candles.Count >= 8)
+            {
+                _log.LogWarning(
+                    "Chart {Name} {Interval} timed out after {Seconds}s; serving {Bars} cached bars ({Age:F0}s old).",
+                    name,
+                    mapped,
+                    ChartRequestBudget.TotalSeconds,
+                    cached.Chart.Candles.Count,
+                    (DateTimeOffset.UtcNow - cached.SavedAt).TotalSeconds);
+                return cached.Chart;
+            }
+
             _log.LogWarning("Chart {Name} {Interval} timed out after {Seconds}s; using fallback bars.", name, mapped, ChartRequestBudget.TotalSeconds);
             return BuildChartFallback(symbol, mapped);
         }
     }
 
-    private async Task<ChartResponse> ChartAsyncCore(LiveSymbol symbol, string name, string mapped, CancellationToken ct)
+    private static string ChartCacheKey(string name, string mapped) =>
+        $"{name.ToUpperInvariant()}|{mapped}";
+
+    private async Task<ChartResponse> ChartAsyncCore(
+        LiveSymbol symbol,
+        string name,
+        string mapped,
+        ChartLoadDepth depth,
+        CancellationToken ct)
     {
         IReadOnlyList<DayCandle> live = [];
         var token = symbol.InstrumentToken;
@@ -293,7 +337,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
                 exchanges.Insert(0, "BSE");
             }
 
-            var loaded = await LoadBrokerIntradayCandlesAsync(symbol.Name, mapped, exchanges, token, ct);
+            var loaded = await LoadBrokerIntradayCandlesAsync(symbol.Name, mapped, exchanges, token, depth, ct);
             live = loaded.Candles;
             if (live.Count > 0)
             {
@@ -402,7 +446,13 @@ public sealed class MockMarketService : IHostedService, IDisposable
         lock (_gate)
         {
             snap = ToSnapshot(symbol);
-            return new ChartResponse(snap.Name, bars, snap.Last, snap.B2, snap.B1, snap.S, snap.S1, snap.S2);
+            var response = new ChartResponse(snap.Name, bars, snap.Last, snap.B2, snap.B1, snap.S, snap.S1, snap.S2);
+            if (bars.Count >= 8)
+            {
+                _chartResponseCache[ChartCacheKey(name, mapped)] = (response, DateTimeOffset.UtcNow);
+            }
+
+            return response;
         }
     }
 
@@ -1128,6 +1178,51 @@ public sealed class MockMarketService : IHostedService, IDisposable
             .ToList();
     }
 
+    private async Task PublishChartLiveAsync(string name)
+    {
+        LiveSymbol symbol;
+        List<IntradayTickBuilder.Tick> ticks;
+        lock (_gate)
+        {
+            symbol = _symbols.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase))!;
+            if (symbol is null || !_intradayTicks.TryGetValue(name, out ticks!) || ticks.Count == 0)
+            {
+                return;
+            }
+        }
+
+        var intervals = ChartLiveStreamService.WatchedIntervals(name);
+        if (intervals.Count == 0)
+        {
+            return;
+        }
+
+        var todayOpen = symbol.TodayOpen;
+        foreach (var interval in intervals)
+        {
+            var bars = IntradayTickBuilder.BuildBars(ticks, interval, todayOpen);
+            if (bars.Count == 0)
+            {
+                continue;
+            }
+
+            var bar = bars[^1];
+            var snap = ToSnapshot(symbol);
+            await _chartLiveStream.PublishAsync(
+                new ChartLiveUpdate(
+                    snap.Name,
+                    interval,
+                    bar,
+                    snap.Last,
+                    snap.B2,
+                    snap.B1,
+                    snap.S,
+                    snap.S1,
+                    snap.S2,
+                    DateTimeOffset.UtcNow));
+        }
+    }
+
     private void RecordIntradayTick(string name, decimal last, decimal todayOpen)
     {
         if (last <= 0)
@@ -1157,11 +1252,37 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
     }
 
+    private void ScheduleIndexChartWarmup()
+    {
+        if (Interlocked.CompareExchange(ref _chartWarmupScheduled, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            foreach (var indexName in new[] { "NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX" })
+            {
+                try
+                {
+                    await ChartAsync(indexName, "5minute", CancellationToken.None, ChartLoadDepth.Full);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogDebug(ex, "Chart warmup failed for {Name}", indexName);
+                }
+
+                await Task.Delay(400);
+            }
+        });
+    }
+
     private async Task<(IReadOnlyList<DayCandle> Candles, string Exchange)> LoadBrokerIntradayCandlesAsync(
         string name,
         string mapped,
         IReadOnlyList<string> exchanges,
         int token,
+        ChartLoadDepth depth,
         CancellationToken ct)
     {
         if (!Broker.HasSession || (token == 0 && !IndexUniverse.IsIndex(name)))
@@ -1182,12 +1303,12 @@ public sealed class MockMarketService : IHostedService, IDisposable
 
         var lookbackDays = mapped switch
         {
-            "minute" => 1,
-            "5minute" => 5,
-            "15minute" => 8,
-            "60minute" => 14,
-            "day" => 80,
-            _ => 5,
+            "minute" => 2,
+            "5minute" => 12,
+            "15minute" => 12,
+            "60minute" => 21,
+            "day" => 120,
+            _ => 12,
         };
         var fromLocal = nowIst.Date.AddDays(-lookbackDays).AddHours(9).AddMinutes(15);
         var fromIst = new DateTimeOffset(
@@ -1205,6 +1326,33 @@ public sealed class MockMarketService : IHostedService, IDisposable
                     if (day.Count > 0)
                     {
                         return (day, ex);
+                    }
+
+                    continue;
+                }
+
+                if (depth == ChartLoadDepth.Fast)
+                {
+                    try
+                    {
+                        var intradayFast = await Broker.GetIntradayCandlesAsync(ex, token, mapped, ct);
+                        if (intradayFast.Count >= 8)
+                        {
+                            return (intradayFast, ex);
+                        }
+                    }
+                    catch (Exception exFast)
+                    {
+                        _log.LogDebug(exFast, "Fast intraday chart failed for {Name} {Exchange} {Interval}", name, ex, mapped);
+                    }
+
+                    var todayFrom = new DateTimeOffset(
+                        DateTime.SpecifyKind(nowIst.Date.AddHours(9).AddMinutes(15), DateTimeKind.Unspecified),
+                        ist.GetUtcOffset(nowIst.Date.AddHours(9).AddMinutes(15)));
+                    var todayOnly = await Broker.GetCandlesAsync(ex, token, mapped, todayFrom, toIst, ct);
+                    if (todayOnly.Count >= 8)
+                    {
+                        return (todayOnly, ex);
                     }
 
                     continue;
@@ -1378,6 +1526,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
                 return;
             }
 
+            var ltpPushNames = new List<string>();
             lock (_gate)
             {
                 foreach (var symbol in _symbols)
@@ -1386,6 +1535,10 @@ public sealed class MockMarketService : IHostedService, IDisposable
                     {
                         symbol.Last = last;
                         RecordIntradayTick(symbol.Name, last, symbol.TodayOpen);
+                        if (_chartLiveStream.HasWatchers(symbol.Name))
+                        {
+                            ltpPushNames.Add(symbol.Name);
+                        }
                     }
                 }
 
@@ -1393,9 +1546,15 @@ public sealed class MockMarketService : IHostedService, IDisposable
                 _updatedAt = DateTimeOffset.UtcNow;
             }
 
+            foreach (var name in ltpPushNames)
+            {
+                await PublishChartLiveAsync(name);
+            }
+
             return;
         }
 
+        var livePushNames = new List<string>();
         lock (_gate)
         {
             foreach (var symbol in _symbols)
@@ -1405,39 +1564,242 @@ public sealed class MockMarketService : IHostedService, IDisposable
                     continue;
                 }
 
-                if (q.Last > 0)
+                ApplyBrokerQuote(symbol, q);
+                if (_chartLiveStream.HasWatchers(symbol.Name))
                 {
-                    symbol.Last = q.Last;
-                    RecordIntradayTick(symbol.Name, q.Last, q.Open > 0 ? q.Open : symbol.TodayOpen);
+                    livePushNames.Add(symbol.Name);
                 }
-
-                if (q.Open > 0)
-                {
-                    symbol.TodayOpen = q.Open;
-                }
-
-                if (q.Close > 0 && q.Close != q.Last)
-                {
-                    symbol.PreviousClose = q.Close;
-                }
-
-                if (q.InstrumentToken > 0)
-                {
-                    symbol.InstrumentToken = q.InstrumentToken;
-                    symbol.Exchange = string.IsNullOrWhiteSpace(q.Exchange) ? "NSE" : q.Exchange;
-                }
-                symbol.Bid = q.Bid;
-                symbol.Ask = q.Ask;
-                symbol.Volume = q.Volume;
-                symbol.OpenInterest = q.OpenInterest;
-                symbol.DataTimestamp = q.Timestamp ?? DateTimeOffset.UtcNow;
             }
 
             _feed = $"{_brokers.ActiveDisplayName} live";
             _updatedAt = DateTimeOffset.UtcNow;
         }
 
+        foreach (var name in livePushNames)
+        {
+            await PublishChartLiveAsync(name);
+        }
+
+        ScheduleIndexChartWarmup();
+        await RefreshMissingBoardQuotesAsync(quotes.Keys, refreshBudget.Token);
+        await RefreshUnpricedSeedQuotesAsync(refreshBudget.Token);
         await RefreshIndexZoneHistoryIfNeededAsync(CancellationToken.None);
+    }
+
+    private async Task RefreshMissingBoardQuotesAsync(
+        IEnumerable<string> quotedBoardNames,
+        CancellationToken ct)
+    {
+        var quoted = quotedBoardNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        List<LiveSymbol> missing;
+        lock (_gate)
+        {
+            missing = _symbols
+                .Where(s => !quoted.Contains(s.Name) || LooksLikeUnpricedSeed(s))
+                .OrderByDescending(LooksLikeUnpricedSeed)
+                .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        if (missing.Count == 0)
+        {
+            return;
+        }
+
+        const int batchSize = 12;
+        var start = _missingQuoteCursor % missing.Count;
+        _missingQuoteCursor = (start + batchSize) % Math.Max(missing.Count, 1);
+        var batch = missing.Skip(start).Take(batchSize).ToList();
+        if (batch.Count < batchSize && start > 0)
+        {
+            batch.AddRange(missing.Take(batchSize - batch.Count));
+        }
+
+        foreach (var symbol in batch)
+        {
+            try
+            {
+                var quote = await Broker.GetBoardQuoteAsync(symbol.Name, ct);
+                if (quote is null || quote.Last <= 0)
+                {
+                    continue;
+                }
+
+                lock (_gate)
+                {
+                    ApplyBrokerQuote(symbol, quote);
+                    _updatedAt = DateTimeOffset.UtcNow;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.LogDebug(ex, "Single-symbol quote failed for {Name}", symbol.Name);
+            }
+        }
+    }
+
+    private static bool LooksLikeUnpricedSeed(LiveSymbol symbol) =>
+        BoardQuoteVerification.IsDefaultDemoSeed(ToQuoteFields(symbol));
+
+    private static BoardQuoteVerification.LiveSymbolFields ToQuoteFields(LiveSymbol symbol) =>
+        new(
+            symbol.Name,
+            symbol.Last,
+            symbol.TodayOpen,
+            symbol.YesterdayHigh,
+            symbol.YesterdayLow,
+            symbol.InstrumentToken,
+            symbol.DataTimestamp);
+
+    private async Task PrimeAllBoardQuotesAsync(CancellationToken ct)
+    {
+        if (!Broker.HasSession)
+        {
+            return;
+        }
+
+        List<string> names;
+        lock (_gate)
+        {
+            names = _symbols
+                .Where(s => !IndexUniverse.IsIndex(s.Name))
+                .Select(s => s.Name)
+                .ToList();
+        }
+
+        foreach (var chunk in names.Chunk(36))
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var ltp = await Broker.GetLtpForBoardNamesAsync(chunk.ToList(), ct);
+                lock (_gate)
+                {
+                    foreach (var symbol in _symbols)
+                    {
+                        if (!ltp.TryGetValue(symbol.Name, out var last) || last <= 0)
+                        {
+                            continue;
+                        }
+
+                        symbol.Last = last;
+                        symbol.DataTimestamp = DateTimeOffset.UtcNow;
+                        RecordIntradayTick(symbol.Name, last, symbol.TodayOpen);
+                    }
+
+                    _updatedAt = DateTimeOffset.UtcNow;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.LogDebug(ex, "Prime board LTP batch failed for {Count} symbols.", chunk.Length);
+            }
+        }
+
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await RefreshUnpricedSeedQuotesAsync(budget.Token);
+    }
+
+    private async Task RefreshUnpricedSeedQuotesAsync(CancellationToken ct)
+    {
+        List<LiveSymbol> unpriced;
+        lock (_gate)
+        {
+            unpriced = _symbols.Where(LooksLikeUnpricedSeed).ToList();
+        }
+
+        if (unpriced.Count == 0)
+        {
+            return;
+        }
+
+        var names = unpriced.Select(s => s.Name).ToList();
+        IReadOnlyDictionary<string, decimal> ltp;
+        try
+        {
+            ltp = await Broker.GetLtpForBoardNamesAsync(names, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogDebug(ex, "LTP backfill failed for {Count} seed-priced symbols.", names.Count);
+            ltp = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var resolved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        lock (_gate)
+        {
+            foreach (var symbol in unpriced)
+            {
+                if (!ltp.TryGetValue(symbol.Name, out var last) || last <= 0)
+                {
+                    continue;
+                }
+
+                symbol.Last = last;
+                RecordIntradayTick(symbol.Name, last, symbol.TodayOpen);
+                resolved.Add(symbol.Name);
+            }
+
+            if (resolved.Count > 0)
+            {
+                _updatedAt = DateTimeOffset.UtcNow;
+            }
+        }
+
+        foreach (var symbol in unpriced.Where(s => !resolved.Contains(s.Name)).Take(10))
+        {
+            try
+            {
+                var quote = await Broker.GetBoardQuoteAsync(symbol.Name, ct);
+                if (quote is null || quote.Last <= 0)
+                {
+                    continue;
+                }
+
+                lock (_gate)
+                {
+                    ApplyBrokerQuote(symbol, quote);
+                    _updatedAt = DateTimeOffset.UtcNow;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.LogDebug(ex, "OHLC backfill failed for seed-priced {Name}", symbol.Name);
+            }
+        }
+    }
+
+    private void ApplyBrokerQuote(LiveSymbol symbol, QuoteSnap q)
+    {
+        if (q.Last <= 0)
+        {
+            return;
+        }
+
+        symbol.Last = q.Last;
+        if (q.Open > 0)
+        {
+            symbol.TodayOpen = q.Open;
+        }
+
+        RecordIntradayTick(symbol.Name, q.Last, q.Open > 0 ? q.Open : symbol.TodayOpen);
+
+        if (q.Close > 0)
+        {
+            symbol.PreviousClose = q.Close;
+        }
+
+        if (q.InstrumentToken > 0)
+        {
+            symbol.InstrumentToken = q.InstrumentToken;
+            symbol.Exchange = string.IsNullOrWhiteSpace(q.Exchange) ? "NSE" : q.Exchange;
+        }
+
+        symbol.Bid = q.Bid;
+        symbol.Ask = q.Ask;
+        symbol.Volume = q.Volume;
+        symbol.OpenInterest = q.OpenInterest;
+        symbol.DataTimestamp = q.Timestamp ?? DateTimeOffset.UtcNow;
     }
 
     private async Task RefreshIndexZoneHistoryIfNeededAsync(CancellationToken ct)
@@ -1847,9 +2209,16 @@ public sealed class MockMarketService : IHostedService, IDisposable
             prev = s.TodayOpen;
         }
 
+        var fields = ToQuoteFields(s);
+        var quoteVerified = BoardQuoteVerification.HasVerifiedLiveQuote(fields, Broker.HasSession);
+        var displayLast = quoteVerified ? s.Last : 0m;
+        var mark = quoteVerified
+            ? NiftyZoneFormula.Mark(s.Name, s.Last, b1, s1, s.TodayOpen)
+            : NiftyZoneFormula.RangeBound;
+
         return new SymbolSnapshot(
             s.Name,
-            NiftyZoneFormula.RoundLine(s.Last),
+            NiftyZoneFormula.RoundLine(displayLast),
             NiftyZoneFormula.RoundLine(s.TodayOpen),
             NiftyZoneFormula.RoundLine(s.YesterdayHigh),
             NiftyZoneFormula.RoundLine(s.YesterdayLow),
@@ -1860,8 +2229,8 @@ public sealed class MockMarketService : IHostedService, IDisposable
             NiftyZoneFormula.RoundLine(mid),
             NiftyZoneFormula.RoundLine(s1),
             NiftyZoneFormula.RoundLine(s2),
-            NiftyZoneFormula.Mark(s.Name, s.Last, b1, s1, s.TodayOpen),
-            NiftyZoneFormula.IsTightRange(s.Name, b1, s1, s.TodayOpen),
+            mark,
+            quoteVerified && NiftyZoneFormula.IsTightRange(s.Name, b1, s1, s.TodayOpen),
             NiftyZoneFormula.RoundLine(prev),
             s.Exchange,
             s.InstrumentToken > 0 ? s.InstrumentToken : null,
@@ -1869,7 +2238,8 @@ public sealed class MockMarketService : IHostedService, IDisposable
             s.Ask,
             s.Volume,
             s.OpenInterest,
-            s.DataTimestamp);
+            s.DataTimestamp,
+            quoteVerified);
     }
 
     private sealed class LiveSymbol

@@ -27,6 +27,16 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
 builder.WebHost.UseUrls("http://0.0.0.0:45211");
 
 builder.Services.AddControllers();
+builder.Services.AddSignalR();
+builder.Services.AddOutputCache(options =>
+{
+    options.AddPolicy(ChartOutputCachePolicy.PolicyName, policy =>
+    {
+        policy.Expire(TimeSpan.FromSeconds(40));
+        policy.SetVaryByQuery("interval", "depth");
+    });
+});
+builder.Services.AddSingleton<ChartLiveStreamService>();
 
 
 
@@ -35,6 +45,8 @@ var mstock = builder.Configuration.GetSection(MStockOptions.Section).Get<MStockO
 builder.Services.AddSingleton(mstock);
 
 builder.Services.AddSingleton<MStockSessionStore>();
+
+builder.Services.AddSingleton<MStockLoginContext>();
 
 builder.Services.AddHttpClient("mstock", client => client.Timeout = TimeSpan.FromSeconds(18));
 
@@ -124,8 +136,10 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 app.UseCors();
+app.UseOutputCache();
 
 app.MapControllers();
+app.MapHub<TradeWithBeast.Hubs.MarketChartHub>("/hubs/market-chart");
 
 app.MapGet("/", () => Results.Redirect("/api/board"));
 

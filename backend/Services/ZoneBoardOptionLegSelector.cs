@@ -24,12 +24,7 @@ public static class ZoneBoardOptionLegSelector
             index.Last,
             index.Quote.DataTimestamp == default ? DateTimeOffset.UtcNow : index.Quote.DataTimestamp);
 
-        var options = context
-            .Where(x => x.InstrumentType == "OPTION"
-                && x.Symbol.StartsWith(index.Symbol, StringComparison.OrdinalIgnoreCase)
-                && x.Symbol.EndsWith(plan.OptionRight, StringComparison.OrdinalIgnoreCase)
-                && x.Last > 0)
-            .ToList();
+        var options = OptionChain(index.Symbol, true, plan.OptionRight, context);
 
         if (options.Count == 0)
         {
@@ -55,6 +50,60 @@ public static class ZoneBoardOptionLegSelector
         legs = built;
         return true;
     }
+
+    /// <summary>One long option (CE/PE) for catalog intraday setups on indices or Nifty 50 stocks.</summary>
+    public static bool TryBuildSingleLongOptionLeg(
+        MarketContextSnapshot underlying,
+        string direction,
+        IReadOnlyList<MarketContextSnapshot> context,
+        out StrategyLeg? leg)
+    {
+        leg = null;
+        if (underlying.Last <= 0)
+        {
+            return false;
+        }
+
+        var isIndex = IndexUniverse.IsIndex(underlying.Symbol);
+        if (!isIndex
+            && !IndexUniverse.Nifty50.Contains(underlying.Symbol, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var at = underlying.Quote.DataTimestamp == default ? DateTimeOffset.UtcNow : underlying.Quote.DataTimestamp;
+        var plan = ZoneBoardOptionEstimator.PlanStrikes(underlying.Symbol, direction, underlying.Last, at);
+        var options = OptionChain(underlying.Symbol, isIndex, plan.OptionRight, context);
+        if (options.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var strike in new[] { plan.ItmStrike, plan.AtmStrike, plan.OtmStrike })
+        {
+            if (TryLeg(options, strike, underlying.Symbol, plan.OptionRight, plan.ExpiryDate, out var built))
+            {
+                leg = built;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static List<MarketContextSnapshot> OptionChain(
+        string underlying,
+        bool isIndex,
+        string right,
+        IReadOnlyList<MarketContextSnapshot> context) =>
+        context
+            .Where(x => x.InstrumentType == "OPTION"
+                && x.Last > 0
+                && x.Symbol.EndsWith(right, StringComparison.OrdinalIgnoreCase)
+                && (isIndex
+                    ? x.Symbol.StartsWith(underlying, StringComparison.OrdinalIgnoreCase)
+                    : x.Symbol.StartsWith(underlying + " ", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
 
     private static bool TryLeg(
         IReadOnlyList<MarketContextSnapshot> options,

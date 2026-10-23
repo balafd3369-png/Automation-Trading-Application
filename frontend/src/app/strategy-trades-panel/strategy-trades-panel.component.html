@@ -1,0 +1,179 @@
+<section class="strategy-trades-panel twb-glass-card" aria-label="Strategy paper trades">
+  <header class="strategy-trades-head">
+    <div class="strategy-trades-head-text">
+      <h3 class="strategy-trades-title">{{ strategyLabel }}</h3>
+      <p class="strategy-trades-sub">
+        {{ periodLabel }}
+        · {{ filteredTrades().length }} trade{{ filteredTrades().length === 1 ? '' : 's' }}
+        · {{ periodHint }}
+      </p>
+    </div>
+    <button type="button" class="strategy-pnl-clear" (click)="onClose()">Close</button>
+  </header>
+
+  <div class="strategy-trades-summary" role="group" aria-label="Strategy period totals">
+    <div class="strategy-trades-stat strategy-trades-stat-primary">
+      <span class="strategy-trades-stat-label">Realized P&amp;L</span>
+      <span
+        class="strategy-trades-stat-value"
+        [class.up]="summary().realizedPnl > 0"
+        [class.down]="summary().realizedPnl < 0"
+      >₹{{ summary().realizedPnl | number: '1.2-2' }}</span>
+    </div>
+    <div class="strategy-trades-stat">
+      <span class="strategy-trades-stat-label">Capital (Σ qty×entry)</span>
+      <span class="strategy-trades-stat-value">₹{{ summary().capitalPrice | number: '1.0-0' }}</span>
+    </div>
+    <div class="strategy-trades-stat">
+      <span class="strategy-trades-stat-label">Closed</span>
+      <span class="strategy-trades-stat-value">{{ summary().closed }}</span>
+    </div>
+    <div class="strategy-trades-stat">
+      <span class="strategy-trades-stat-label">Wins</span>
+      <span class="strategy-trades-stat-value up">{{ summary().wins }}</span>
+    </div>
+    <div class="strategy-trades-stat">
+      <span class="strategy-trades-stat-label">Losses</span>
+      <span class="strategy-trades-stat-value down">{{ summary().losses }}</span>
+    </div>
+    <div class="strategy-trades-stat">
+      <span class="strategy-trades-stat-label">Open</span>
+      <span class="strategy-trades-stat-value">{{ summary().open }}</span>
+    </div>
+  </div>
+
+  <div class="strategy-trades-filters" role="group" aria-label="Trade outcome filter">
+    <button
+      type="button"
+      class="strategy-trades-filter-btn"
+      [class.active]="outcomeFilter === 'all'"
+      (click)="setOutcomeFilter('all')"
+    >All</button>
+    <button
+      type="button"
+      class="strategy-trades-filter-btn"
+      [class.active]="outcomeFilter === 'positive'"
+      (click)="setOutcomeFilter('positive')"
+    >Winners</button>
+    <button
+      type="button"
+      class="strategy-trades-filter-btn"
+      [class.active]="outcomeFilter === 'negative'"
+      (click)="setOutcomeFilter('negative')"
+    >Losses &amp; expired</button>
+  </div>
+
+  @if (filteredTrades().length === 0) {
+    <p class="strategy-trades-empty">No trades for this strategy in the selected period.</p>
+  } @else {
+    <div class="strategy-trades-table-wrap" tabindex="0" role="region" aria-label="Strategy trades table">
+      <table class="strategy-trades-table">
+        <thead>
+          <tr>
+            <th scope="col">Symbol</th>
+            <th scope="col" class="num">Qty</th>
+            <th scope="col" class="num">Entry price (₹)</th>
+            <th scope="col" class="num">Exit price (₹)</th>
+            <th scope="col" class="num">Capital (₹)</th>
+            <th scope="col">Closed (IST)</th>
+            <th scope="col">Executed (IST)</th>
+            <th scope="col" class="num">P&amp;L (₹)</th>
+            <th scope="col" class="center">Status</th>
+            <th scope="col" class="center">Dir</th>
+            <th scope="col">Outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (t of pageItems(); track t.id) {
+            <tr
+              class="strategy-trades-row"
+              [class.strategy-trades-row-win]="t.status === 'CLOSED' && (tradeRealizedPnl(t) ?? 0) > 0"
+              [class.strategy-trades-row-loss]="t.status === 'CLOSED' && (tradeRealizedPnl(t) ?? 0) < 0"
+              [class.strategy-trades-row-open]="t.status === 'OPEN'"
+              [class.strategy-trades-row-rejected]="t.status === 'REJECTED' || t.status === 'CANCELLED' || t.status === 'EXPIRED' || t.status === 'INTERRUPTED'"
+            >
+              <td class="strategy-trades-symbol">{{ t.underlying }}</td>
+              <td class="num" [title]="tradeQuantityTitle(t)">{{ tradeQuantityLabel(t) }}</td>
+              <td class="num strategy-trades-price">
+                @if (tradeEntryPrice(t); as entry) {
+                  {{ entry | number: '1.2-2' }}
+                } @else {
+                  —
+                }
+              </td>
+              <td class="num strategy-trades-price">
+                @if (tradeExitPrice(t); as exit) {
+                  {{ exit | number: '1.2-2' }}
+                } @else {
+                  —
+                }
+              </td>
+              <td class="num" [title]="'Qty × entry price'">
+                @if (tradeCapitalPrice(t) > 0) {
+                  {{ tradeCapitalPrice(t) | number: '1.0-0' }}
+                } @else {
+                  —
+                }
+              </td>
+              <td class="strategy-trades-time" [title]="tradeClosedAt(t) || ''">
+                @if (tradeClosedAt(t); as closedAt) {
+                  {{ closedAt | date: 'dd MMM yy, HH:mm':'+0530' }}
+                } @else {
+                  —
+                }
+              </td>
+              <td class="strategy-trades-time" [title]="tradeExecutedAt(t) || ''">
+                @if (tradeExecutedAt(t); as executedAt) {
+                  {{ executedAt | date: 'dd MMM yy, HH:mm':'+0530' }}
+                } @else {
+                  —
+                }
+              </td>
+              <td
+                class="num"
+                [class.up]="(tradeRealizedPnl(t) ?? 0) > 0"
+                [class.down]="(tradeRealizedPnl(t) ?? 0) < 0"
+                [title]="tradePnlMismatchHint(t) || ''"
+              >
+                @if (tradeRealizedPnl(t); as pnl) {
+                  {{ pnl | number: '1.2-2' }}
+                } @else if (t.pnl != null) {
+                  {{ t.pnl | number: '1.2-2' }}
+                } @else {
+                  —
+                }
+              </td>
+              <td class="center">
+                <span
+                  class="strategy-trades-status"
+                  [class.open]="t.status === 'OPEN'"
+                  [class.closed]="t.status === 'CLOSED'"
+                  [class.rejected]="t.status === 'REJECTED' || t.status === 'CANCELLED' || t.status === 'EXPIRED' || t.status === 'INTERRUPTED'"
+                >{{ t.status }}</span>
+              </td>
+              <td
+                class="center"
+                [class.up]="t.direction === 'BULLISH' || t.direction === 'LONG'"
+                [class.down]="t.direction === 'BEARISH' || t.direction === 'SHORT'"
+              >{{ tradeDirectionShort(t.direction) }}</td>
+              <td class="strategy-trades-outcome">{{ t.exitReason || t.entryReason || '—' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    @if (pageCount() > 1) {
+      <nav class="strategy-trades-pagination" aria-label="Strategy trades pages">
+        <button type="button" class="strategy-trades-page-btn" [disabled]="page <= 1" (click)="setPage(page - 1)">Previous</button>
+        <span class="strategy-trades-page-meta">
+          Page {{ page }} of {{ pageCount() }}
+          ·
+          {{ (page - 1) * pageSize + 1 }}–{{ (page - 1) * pageSize + pageItems().length }}
+          of {{ filteredTrades().length }}
+        </span>
+        <button type="button" class="strategy-trades-page-btn" [disabled]="page >= pageCount()" (click)="setPage(page + 1)">Next</button>
+      </nav>
+    }
+  }
+</section>

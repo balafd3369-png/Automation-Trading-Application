@@ -68,10 +68,11 @@ public sealed class TenAmIntradayStrategy(
             if (TenAmIntradayPattern.TryBuildHighFade(indexName, chart.Candles, dayOpen, now, out var fade)
                 && fade is not null)
             {
-                var risk = fade.StopLoss - future.Last;
-                var reward = future.Last - fade.Target;
+                var risk = fade.StopLoss - spot.Last;
+                var reward = spot.Last - fade.Target;
                 if (risk > 0 && reward > 0
-                    && sessions.TryTakeSignal(indexName, istDay, fade.Strategy, fade.SignalBarTime))
+                    && sessions.TryTakeSignal(indexName, istDay, fade.Strategy, fade.SignalBarTime)
+                    && TryBuildTenAmLegs(spot, context, "BEARISH", future, out var fadeLegs, out var fadeAt))
                 {
                     yield return new StrategyCandidate(
                         fade.Strategy,
@@ -79,22 +80,23 @@ public sealed class TenAmIntradayStrategy(
                         "BEARISH",
                         82m,
                         fade.Evidence,
-                        [new(future.Symbol, indexName, "FUTURE", "SELL", 1, future.Last, Quote: future.Quote)],
+                        fadeLegs,
                         fade.StopLoss,
                         fade.Target,
                         risk,
                         reward,
-                        future.Quote.DataTimestamp);
+                        fadeAt);
                 }
             }
 
             if (TenAmIntradayPattern.TryBuildLowBreak(indexName, chart.Candles, dayOpen, now, out var lift)
                 && lift is not null)
             {
-                var risk = future.Last - lift.StopLoss;
-                var reward = lift.Target - future.Last;
+                var risk = spot.Last - lift.StopLoss;
+                var reward = lift.Target - spot.Last;
                 if (risk > 0 && reward > 0
-                    && sessions.TryTakeSignal(indexName, istDay, lift.Strategy, lift.SignalBarTime))
+                    && sessions.TryTakeSignal(indexName, istDay, lift.Strategy, lift.SignalBarTime)
+                    && TryBuildTenAmLegs(spot, context, "BULLISH", future, out var liftLegs, out var liftAt))
                 {
                     yield return new StrategyCandidate(
                         lift.Strategy,
@@ -102,12 +104,12 @@ public sealed class TenAmIntradayStrategy(
                         "BULLISH",
                         81m,
                         lift.Evidence,
-                        [new(future.Symbol, indexName, "FUTURE", "BUY", 1, future.Last, Quote: future.Quote)],
+                        liftLegs,
                         lift.StopLoss,
                         lift.Target,
                         risk,
                         reward,
-                        future.Quote.DataTimestamp);
+                        liftAt);
                 }
             }
         }
@@ -152,7 +154,8 @@ public sealed class TenAmIntradayStrategy(
                 var risk = fade.StopLoss - spot.Last;
                 var reward = spot.Last - fade.Target;
                 if (risk > 0 && reward > 0
-                    && sessions.TryTakeSignal(stock.Name, istDay, fade.Strategy, fade.SignalBarTime))
+                    && sessions.TryTakeSignal(stock.Name, istDay, fade.Strategy, fade.SignalBarTime)
+                    && TryBuildTenAmLegs(spot, context, "BEARISH", null, out var fadeLegs, out var fadeAt))
                 {
                     yield return new StrategyCandidate(
                         fade.Strategy,
@@ -160,12 +163,12 @@ public sealed class TenAmIntradayStrategy(
                         "BEARISH",
                         80m,
                         fade.Evidence,
-                        [new(stock.Name, stock.Name, "STOCK", "SELL", 1, spot.Last, Quote: spot.Quote)],
+                        fadeLegs,
                         fade.StopLoss,
                         fade.Target,
                         risk,
                         reward,
-                        spot.Quote.DataTimestamp);
+                        fadeAt);
                 }
             }
 
@@ -175,7 +178,8 @@ public sealed class TenAmIntradayStrategy(
                 var risk = spot.Last - lift.StopLoss;
                 var reward = lift.Target - spot.Last;
                 if (risk > 0 && reward > 0
-                    && sessions.TryTakeSignal(stock.Name, istDay, lift.Strategy, lift.SignalBarTime))
+                    && sessions.TryTakeSignal(stock.Name, istDay, lift.Strategy, lift.SignalBarTime)
+                    && TryBuildTenAmLegs(spot, context, "BULLISH", null, out var liftLegs, out var liftAt))
                 {
                     yield return new StrategyCandidate(
                         lift.Strategy,
@@ -183,15 +187,64 @@ public sealed class TenAmIntradayStrategy(
                         "BULLISH",
                         79m,
                         lift.Evidence,
-                        [new(stock.Name, stock.Name, "STOCK", "BUY", 1, spot.Last, Quote: spot.Quote)],
+                        liftLegs,
                         lift.StopLoss,
                         lift.Target,
                         risk,
                         reward,
-                        spot.Quote.DataTimestamp);
+                        liftAt);
                 }
             }
         }
+    }
+
+    private static bool TryBuildTenAmLegs(
+        MarketContextSnapshot spot,
+        IReadOnlyList<MarketContextSnapshot> context,
+        string direction,
+        MarketContextSnapshot? indexFuture,
+        out IReadOnlyList<StrategyLeg> legs,
+        out DateTimeOffset dataTimestamp)
+    {
+        legs = [];
+        dataTimestamp = spot.Quote.DataTimestamp;
+        if (ZoneBoardOptionLegSelector.TryBuildSingleLongOptionLeg(spot, direction, context, out var option)
+            && option is not null)
+        {
+            legs = [option];
+            dataTimestamp = option.Quote?.DataTimestamp ?? dataTimestamp;
+            return true;
+        }
+
+        if (indexFuture is not null && indexFuture.Last > 0)
+        {
+            var side = direction == "BULLISH" ? "BUY" : "SELL";
+            legs =
+            [
+                new StrategyLeg(
+                    indexFuture.Symbol,
+                    spot.Symbol,
+                    "FUTURE",
+                    side,
+                    1,
+                    indexFuture.Last,
+                    Quote: indexFuture.Quote),
+            ];
+            dataTimestamp = indexFuture.Quote.DataTimestamp;
+            return true;
+        }
+
+        if (!IndexUniverse.IsIndex(spot.Symbol) && spot.Last > 0)
+        {
+            var side = direction == "BULLISH" ? "BUY" : "SELL";
+            legs =
+            [
+                new StrategyLeg(spot.Symbol, spot.Symbol, "STOCK", side, 1, spot.Last, Quote: spot.Quote),
+            ];
+            return true;
+        }
+
+        return false;
     }
 
     private static decimal ResolveDayOpenFromChart(ChartResponse chart)

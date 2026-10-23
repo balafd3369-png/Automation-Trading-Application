@@ -1,7 +1,9 @@
+using TradeWithBeast.Broker;
 using TradeWithBeast.Models;
 
 namespace TradeWithBeast.Services;
 
+/// <summary>B1 touch-and-reject toward S2 — indices only (PE options), same universe as zone board.</summary>
 public sealed class StockB1RejectionStrategy(
     ZoneSessionTracker sessions,
     MockMarketService market) : IPaperStrategy
@@ -16,27 +18,32 @@ public sealed class StockB1RejectionStrategy(
         var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
         var istDay = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ist).DateTime);
 
-        foreach (var stock in context.Where(x => x.InstrumentType == "STOCK"))
+        foreach (var index in context.Where(x => IndexUniverse.IsIndex(x.Symbol)))
         {
-            if (!ZoneRejectionPattern.TryReadZoneFact(stock.Evidence.Facts, "B1=", out var b1)
-                || !ZoneRejectionPattern.TryReadZoneFact(stock.Evidence.Facts, "S2=", out var s2)
-                || !ZoneRejectionPattern.TryReadZoneFact(stock.Evidence.Facts, "S=", out var stopLine))
+            if (!ZoneRejectionPattern.TryReadZoneFact(index.Evidence.Facts, "B1=", out var b1)
+                || !ZoneRejectionPattern.TryReadZoneFact(index.Evidence.Facts, "S2=", out var s2)
+                || !ZoneRejectionPattern.TryReadZoneFact(index.Evidence.Facts, "S=", out var stopLine))
             {
                 continue;
             }
 
-            if (!sessions.TryTakePendingRejection(stock.Symbol, istDay))
+            if (!sessions.TryTakePendingRejection(index.Symbol, istDay))
             {
                 continue;
             }
 
-            var backtest = LoadBacktest(stock.Symbol, istDay, b1, s2);
+            var backtest = LoadBacktest(index.Symbol, istDay, b1, s2);
             if (!ZoneRejectionPattern.QualifiesForUserRecommendation(backtest))
             {
                 continue;
             }
 
-            var entry = stock.Last;
+            if (!ZoneBoardOptionLegSelector.TryBuildIndexOptionLegs(index, "BEARISH", context, out var legs))
+            {
+                continue;
+            }
+
+            var entry = index.Last;
             var stop = Math.Max(b1, entry) * 1.0015m;
             var risk = stop - entry;
             var reward = entry - s2;
@@ -45,23 +52,36 @@ public sealed class StockB1RejectionStrategy(
                 continue;
             }
 
+            var debit = legs.Sum(leg => leg.Price);
+            if (debit <= 0)
+            {
+                continue;
+            }
+
+            var at = index.Quote.DataTimestamp == default ? DateTimeOffset.UtcNow : index.Quote.DataTimestamp;
+            var plan = ZoneBoardOptionEstimator.PlanStrikes(index.Symbol, "BEARISH", index.Last, at);
+            var score = 88m + Math.Min(10m, (backtest.WinRatePercent - 90m) / 2m);
+
             yield return new StrategyCandidate(
                 ZoneRejectionPattern.B1RejectionToS2,
-                stock.Symbol,
+                index.Symbol,
                 "BEARISH",
-                88m + Math.Min(10m, (backtest.WinRatePercent - 90m) / 2m),
+                score,
                 [
                     $"B1 rejection after touch ({b1:0.##})",
                     $"backtest win rate {backtest.WinRatePercent:0.##}% over {backtest.Samples} samples",
                     $"target S2 {s2:0.##}",
                     $"reference pivot S {stopLine:0.##}",
+                    $"options ITM {plan.ItmStrike} + OTM {plan.OtmStrike} PE",
                 ],
-                [new(stock.Symbol, stock.Symbol, "STOCK", "SELL", 1, entry, Quote: stock.Quote)],
+                legs,
                 stop,
                 s2,
-                risk,
-                reward,
-                stock.Quote.DataTimestamp);
+                Math.Max(debit * 0.45m, risk),
+                Math.Max(debit * 1.2m, reward),
+                legs.Max(l => l.Quote is null || l.Quote.DataTimestamp == default
+                    ? DateTimeOffset.UtcNow
+                    : l.Quote.DataTimestamp));
         }
     }
 

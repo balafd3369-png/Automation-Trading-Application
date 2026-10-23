@@ -1,13 +1,12 @@
+@use '../../twb-glass' as glass;
+
 .si-page {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 24px 28px 36px;
-  background:
-    radial-gradient(900px 500px at 100% 0%, rgba(167, 139, 250, 0.12), transparent 55%),
-    radial-gradient(700px 400px at 0% 100%, var(--accent-muted), transparent 50%),
-    linear-gradient(165deg, color-mix(in srgb, var(--bg) 88%, #1a1d28) 0%, var(--bg) 45%, color-mix(in srgb, var(--sidebar) 70%, var(--bg) 30%) 100%);
-  color: var(--fg, #e8eaef);
+  @include glass.aurora-page-background;
+  color: var(--fg);
 }
 
 .si-hero {
@@ -17,7 +16,7 @@
   gap: 16px;
   margin-bottom: 20px;
   padding-bottom: 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--border);
 }
 
 .si-hero h1 {
@@ -33,7 +32,7 @@
 
 .si-sub {
   margin: 4px 0 0;
-  color: #94a3b8;
+  color: var(--muted);
   font-size: 0.9rem;
 }
 
@@ -41,7 +40,7 @@
   margin: 10px 0 0;
   max-width: 52rem;
   line-height: 1.5;
-  color: #cbd5e1;
+  color: var(--muted);
   font-size: 0.92rem;
 }
 
@@ -50,7 +49,7 @@
   align-items: center;
   gap: 14px;
   font-size: 0.75rem;
-  color: #94a3b8;
+  color: var(--muted);
 }
 
 .si-legend .dot {
@@ -94,7 +93,7 @@
 .si-hint {
   margin: 8px 0 12px;
   font-size: 0.8rem;
-  color: #64748b;
+  color: var(--dim);
 }
 
 .si-days {
@@ -108,6 +107,11 @@
   overflow-y: auto;
 }
 
+.si-calendar {
+  @include glass.glass-surface;
+  padding: 14px 16px;
+}
+
 .si-day-btn {
   display: flex;
   flex-direction: column;
@@ -115,13 +119,13 @@
   gap: 2px;
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid color-mix(in srgb, var(--fg) 10%, var(--border));
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.6);
-  color: #e2e8f0;
+  background: color-mix(in srgb, var(--glass-panel) 45%, transparent);
+  color: var(--fg);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 
 .si-day-btn:hover {
@@ -148,21 +152,19 @@
 
 .si-day-meta {
   font-size: 0.65rem;
-  color: #94a3b8;
+  color: var(--muted);
   text-transform: uppercase;
 }
 
 .si-day-pct {
   font-size: 0.65rem;
-  color: #64748b;
+  color: var(--dim);
 }
 
 .si-editor {
+  @include glass.glass-surface;
   min-width: 0;
   padding: 16px 18px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(15, 23, 42, 0.45);
 }
 
 .si-editor-head {
@@ -176,7 +178,7 @@
 
 .si-editor-head small {
   margin-left: 8px;
-  color: #94a3b8;
+  color: var(--muted);
   font-weight: 400;
 }
 
@@ -204,7 +206,7 @@
 
 .si-pillar-hint {
   font-size: 0.75rem;
-  color: #64748b;
+  color: var(--dim);
   margin-bottom: 4px;
 }
 
@@ -214,9 +216,9 @@
   min-height: 4.5rem;
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: #0f172a;
-  color: #f1f5f9;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-inset) 82%, transparent);
+  color: var(--fg);
   font-family: inherit;
   font-size: 0.85rem;
   line-height: 1.45;
@@ -231,5 +233,5 @@
 .si-save-note {
   margin: 14px 0 0;
   font-size: 0.72rem;
-  color: #64748b;
+  color: var(--dim);
 }

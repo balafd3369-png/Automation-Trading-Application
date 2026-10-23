@@ -1,4 +1,4 @@
-export type AppThemePresetId = 'default' | 'midnight' | 'ocean' | 'forest' | 'warm' | 'amoled';
+export type AppThemePresetId = 'default' | 'midnight' | 'ocean' | 'forest' | 'warm' | 'amoled' | 'aurora';
 
 export interface AppThemePalette {
   bg: string;
@@ -41,6 +41,75 @@ export interface AppThemeSelection {
 }
 
 export const APP_THEME_STORAGE_KEY = 'twb-app-theme';
+
+/** High-contrast chart surface (broker-style light pane); independent of app chrome theme. */
+export const CHART_READABILITY_SURFACE = {
+  chartBg: '#ffffff',
+  chartGrid: '#e3e6ec',
+  chartText: '#2a2e39',
+  crosshair: '#787b86',
+  fontFamily: '"DM Sans", "Segoe UI", system-ui, -apple-system, sans-serif',
+  fontSize: 12,
+} as const;
+
+export function resolveChartSurface(): typeof CHART_READABILITY_SURFACE {
+  return CHART_READABILITY_SURFACE;
+}
+
+/** Lightweight Charts layout/grid options for readable candlestick pane. */
+export function lightweightChartDisplayOptions(
+  surface: typeof CHART_READABILITY_SURFACE = CHART_READABILITY_SURFACE,
+): Record<string, unknown> {
+  return {
+    layout: {
+      background: { color: surface.chartBg },
+      textColor: surface.chartText,
+      fontSize: surface.fontSize,
+      fontFamily: surface.fontFamily,
+    },
+    grid: {
+      vertLines: { color: surface.chartGrid, style: 2 },
+      horzLines: { color: surface.chartGrid, style: 2 },
+    },
+    rightPriceScale: {
+      borderColor: surface.chartGrid,
+      scaleMargins: { top: 0.08, bottom: 0.08 },
+    },
+    timeScale: {
+      borderColor: surface.chartGrid,
+      visible: true,
+      timeVisible: true,
+      secondsVisible: false,
+    },
+    crosshair: {
+      mode: 1,
+      vertLine: {
+        width: 1,
+        color: surface.crosshair,
+        style: 2,
+        labelVisible: true,
+        labelBackgroundColor: '#2a2e39',
+      },
+      horzLine: {
+        width: 1,
+        color: surface.crosshair,
+        style: 2,
+        labelVisible: true,
+        labelBackgroundColor: '#2a2e39',
+      },
+    },
+  };
+}
+
+export const CHART_CANDLE_STYLE = {
+  upColor: '#089981',
+  downColor: '#f23645',
+  borderVisible: true,
+  wickUpColor: '#089981',
+  wickDownColor: '#f23645',
+  borderUpColor: '#089981',
+  borderDownColor: '#f23645',
+} as const;
 
 const PRESET_LIST: AppThemePreset[] = [
   {
@@ -159,6 +228,29 @@ const PRESET_LIST: AppThemePreset[] = [
     },
   },
   {
+    id: 'aurora',
+    label: 'Aurora',
+    preview: 'linear-gradient(135deg, #7c3aed, #06b6d4)',
+    palette: {
+      bg: '#0c0618',
+      title: '#16082a',
+      activity: '#221038',
+      sidebar: '#120a22',
+      editor: '#0c0618',
+      border: '#3d2a5c',
+      fg: '#f5f0ff',
+      muted: '#c4b5fd',
+      dim: '#8b7cb8',
+      chartBg: '#080412',
+      chartGrid: '#2e2248',
+      chartText: '#e9e0ff',
+      accent: '#a855f7',
+      accentHover: '#e879f9',
+      accentMuted: 'rgba(168, 85, 247, 0.2)',
+      accentBorder: '#7c3aed',
+    },
+  },
+  {
     id: 'amoled',
     label: 'AMOLED black',
     preview: '#000000',
@@ -210,13 +302,24 @@ export function saveThemeSelection(selection: AppThemeSelection): void {
 
 export function resolveThemePalette(selection: AppThemeSelection): AppThemePalette {
   if (selection.presetId === 'custom' && selection.customBg) {
-    return paletteFromBackground(selection.customBg);
+    return withReadableTextHierarchy(paletteFromBackground(selection.customBg));
   }
   const preset = PRESET_LIST.find((p) => p.id === selection.presetId) ?? PRESET_LIST[0];
-  return preset.palette;
+  return withReadableTextHierarchy(preset.palette);
 }
 
-export function applyThemePalette(palette: AppThemePalette): void {
+/** Load saved theme and apply CSS variables on `document.documentElement` (call before bootstrap). */
+export function initializeAppTheme(): AppThemePalette {
+  const selection = loadThemeSelection();
+  const palette = resolveThemePalette(selection);
+  applyThemePalette(palette, selection.presetId);
+  return palette;
+}
+
+export function applyThemePalette(
+  palette: AppThemePalette,
+  presetId: AppThemeSelection['presetId'] = 'default',
+): void {
   const root = document.documentElement;
   root.style.setProperty('--bg', palette.bg);
   root.style.setProperty('--title', palette.title);
@@ -227,17 +330,54 @@ export function applyThemePalette(palette: AppThemePalette): void {
   root.style.setProperty('--fg', palette.fg);
   root.style.setProperty('--muted', palette.muted);
   root.style.setProperty('--dim', palette.dim);
+  root.style.setProperty('--chart-bg', palette.chartBg);
+  root.style.setProperty('--chart-grid', palette.chartGrid);
+  root.style.setProperty('--chart-text', palette.chartText);
   root.style.setProperty('--accent', palette.accent);
   root.style.setProperty('--accent-hover', palette.accentHover);
   root.style.setProperty('--accent-muted', palette.accentMuted);
   root.style.setProperty('--accent-border', palette.accentBorder);
-  root.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${palette.accentBorder} 0%, ${palette.accent} 55%, ${palette.accentHover} 100%)`);
+  root.style.setProperty(
+    '--accent-gradient',
+    `linear-gradient(135deg, ${palette.accentBorder} 0%, ${palette.accent} 55%, ${palette.accentHover} 100%)`,
+  );
   root.style.setProperty('--success', TRADE_SEMANTIC.success);
   root.style.setProperty('--success-muted', TRADE_SEMANTIC.successMuted);
   root.style.setProperty('--danger', TRADE_SEMANTIC.danger);
   root.style.setProperty('--danger-muted', TRADE_SEMANTIC.dangerMuted);
   root.style.setProperty('--warning', TRADE_SEMANTIC.warning);
   root.style.setProperty('--warning-muted', TRADE_SEMANTIC.warningMuted);
+  root.style.setProperty('--panel', palette.sidebar);
+  root.style.setProperty('--surface-raised', palette.title);
+  root.style.setProperty('--surface-inset', palette.editor);
+  root.style.setProperty('--fg-on-title', pickReadableText(palette.title));
+  root.style.setProperty('--fg-on-sidebar', pickReadableText(palette.sidebar));
+  root.style.setProperty('--fg-on-activity', pickReadableText(palette.activity));
+  root.style.setProperty('--fg-on-editor', pickReadableText(palette.editor));
+  root.style.setProperty('--fg-on-accent-band', pickReadableText(palette.accent));
+  root.style.setProperty('--muted-on-title', mixHex(pickReadableText(palette.title), palette.title, 0.58));
+  root.style.setProperty('--muted-on-sidebar', mixHex(pickReadableText(palette.sidebar), palette.sidebar, 0.58));
+  root.style.setProperty(
+    '--ambient-ce',
+    `color-mix(in srgb, ${TRADE_SEMANTIC.success} 22%, transparent)`,
+  );
+  root.style.setProperty(
+    '--ambient-pe',
+    `color-mix(in srgb, ${TRADE_SEMANTIC.danger} 20%, transparent)`,
+  );
+  root.style.setProperty(
+    '--glass-panel',
+    `color-mix(in srgb, ${palette.sidebar} 88%, ${palette.bg})`,
+  );
+  root.dataset['twbTheme'] = presetId;
+  const { r, g, b } = hexToRgb(palette.bg);
+  root.style.colorScheme = relativeLuminance(r, g, b) > 0.45 ? 'light' : 'dark';
+
+  const body = document.body;
+  if (body) {
+    body.style.backgroundColor = palette.bg;
+    body.style.color = palette.fg;
+  }
 }
 
 function paletteFromBackground(hex: string): AppThemePalette {
@@ -250,10 +390,10 @@ function paletteFromBackground(hex: string): AppThemePalette {
   const border = shiftRgb(r, g, b, light ? -0.18 : 0.22);
   const chartBg = shiftRgb(r, g, b, light ? -0.04 : -0.06);
   const chartGrid = shiftRgb(r, g, b, light ? -0.22 : 0.18);
-  const fg = light ? '#1a1a1a' : '#e8e8e8';
-  const muted = light ? '#525252' : '#a3a3a3';
-  const dim = light ? '#737373' : '#6e6e6e';
-  const chartText = light ? '#262626' : '#d1d4dc';
+  const fg = pickReadableText(base);
+  const muted = mixHex(fg, base, 0.58);
+  const dim = mixHex(fg, base, 0.42);
+  const chartText = pickReadableText(rgbToHex(chartBg));
 
   return {
     bg: base,
@@ -322,4 +462,55 @@ function relativeLuminance(r: number, g: number, b: number): number {
     return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
   });
   return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
+}
+
+const READABLE_TEXT_LIGHT = '#f5f5f5';
+const READABLE_TEXT_DARK = '#0d0d0d';
+const MIN_BODY_CONTRAST = 4.5;
+const MIN_MUTED_CONTRAST = 3;
+
+/** Ensures primary / secondary text meets contrast on the main background. */
+function withReadableTextHierarchy(palette: AppThemePalette): AppThemePalette {
+  const fg =
+    contrastRatio(palette.fg, palette.bg) >= MIN_BODY_CONTRAST
+      ? palette.fg
+      : pickReadableText(palette.bg);
+  const muted =
+    contrastRatio(palette.muted, palette.bg) >= MIN_MUTED_CONTRAST
+      ? palette.muted
+      : mixHex(fg, palette.bg, 0.58);
+  const dim =
+    contrastRatio(palette.dim, palette.bg) >= 2.8 ? palette.dim : mixHex(fg, palette.bg, 0.42);
+  const chartText =
+    contrastRatio(palette.chartText, palette.chartBg) >= MIN_MUTED_CONTRAST
+      ? palette.chartText
+      : pickReadableText(palette.chartBg);
+  return { ...palette, fg, muted, dim, chartText };
+}
+
+function pickReadableText(bgHex: string): string {
+  const onWhite = contrastRatio(READABLE_TEXT_LIGHT, bgHex);
+  const onBlack = contrastRatio(READABLE_TEXT_DARK, bgHex);
+  return onWhite >= onBlack ? READABLE_TEXT_LIGHT : READABLE_TEXT_DARK;
+}
+
+function contrastRatio(fgHex: string, bgHex: string): number {
+  const fgRgb = hexToRgb(fgHex);
+  const bgRgb = hexToRgb(bgHex);
+  const fg = relativeLuminance(fgRgb.r, fgRgb.g, fgRgb.b);
+  const bg = relativeLuminance(bgRgb.r, bgRgb.g, bgRgb.b);
+  const lighter = Math.max(fg, bg);
+  const darker = Math.min(fg, bg);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function mixHex(fgHex: string, bgHex: string, fgWeight: number): string {
+  const w = Math.max(0, Math.min(1, fgWeight));
+  const fg = hexToRgb(fgHex);
+  const bg = hexToRgb(bgHex);
+  return rgbToHex({
+    r: fg.r * w + bg.r * (1 - w),
+    g: fg.g * w + bg.g * (1 - w),
+    b: fg.b * w + bg.b * (1 - w),
+  });
 }

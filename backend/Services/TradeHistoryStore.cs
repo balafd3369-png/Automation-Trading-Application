@@ -442,7 +442,12 @@ public sealed class TradeHistoryStore
                    (SELECT reason FROM paper_trade_events e WHERE e.trade_id=paper_trades.id AND e.event_type='PROPOSED' ORDER BY e.created_at ASC LIMIT 1),
                    created_at,opened_at,closed_at
             FROM paper_trades
-            WHERE user_id=$user AND created_at >= $from AND created_at <= $to
+            WHERE user_id=$user
+              AND (
+                (created_at >= $from AND created_at <= $to)
+                OR (closed_at IS NOT NULL AND closed_at >= $from AND closed_at <= $to)
+                OR (status = 'OPEN' AND created_at <= $to AND (closed_at IS NULL OR closed_at > $from))
+              )
             ORDER BY created_at DESC;
             """;
         Add(command, "$user", LocalUserId);
@@ -1044,19 +1049,25 @@ public sealed class TradeHistoryStore
         while (reader.Read())
         {
             var entry = DecimalValue(reader, 6);
-            var current = DecimalValue(reader, 8) ?? DecimalValue(reader, 7);
+            var exitPrice = DecimalValue(reader, 8);
+            var currentPrice = DecimalValue(reader, 7);
+            var mark = exitPrice is > 0
+                ? exitPrice
+                : currentPrice is > 0
+                    ? currentPrice
+                    : entry;
             decimal? pnl = null;
-            if (entry is not null && current is not null)
+            if (entry is > 0 && mark is > 0)
             {
                 var movement = reader.GetString(3) == "BUY"
-                    ? current.Value - entry.Value
-                    : entry.Value - current.Value;
+                    ? mark.Value - entry.Value
+                    : entry.Value - mark.Value;
                 pnl = movement * reader.GetInt32(4);
             }
             legs.Add(new(
                 reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                reader.GetInt32(4), DecimalValue(reader, 5) ?? 0, entry, DecimalValue(reader, 7),
-                DecimalValue(reader, 8), pnl, DecimalValue(reader, 9),
+                reader.GetInt32(4), DecimalValue(reader, 5) ?? 0, entry, currentPrice,
+                exitPrice, pnl, DecimalValue(reader, 9),
                 reader.IsDBNull(10) ? null : reader.GetString(10), DateValue(reader, 11)));
         }
         return legs;

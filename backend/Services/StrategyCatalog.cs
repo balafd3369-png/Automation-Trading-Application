@@ -39,7 +39,7 @@ public static class StrategyCatalog
         Timeframe: "15 minute candles",
         Session: "NSE cash · 9:15–15:30 IST",
         Status: "paper-ready",
-        Tags: ["intraday", "index", "stocks", "morning-structure", "rejection", "breakeven"],
+        Tags: ["intraday", "index", "stocks", "options", "morning-structure", "rejection", "breakeven"],
         Playbook: new StrategyPlaybook(
             Intent:
                 "SHORT fade when the 10 AM high fails after 11:00. Target session day low. Stop tied to the break "
@@ -96,7 +96,7 @@ public static class StrategyCatalog
         Timeframe: "15 minute candles",
         Session: "NSE cash · 9:15–15:30 IST",
         Status: "paper-ready",
-        Tags: ["intraday", "index", "stocks", "morning-structure", "recovery", "breakeven"],
+        Tags: ["intraday", "index", "stocks", "options", "morning-structure", "recovery", "breakeven"],
         Playbook: new StrategyPlaybook(
             Intent:
                 "LONG recovery when a weak open makes the 10 AM window the morning low zone, price dips slightly, then "
@@ -238,15 +238,15 @@ public static class StrategyCatalog
 
     private static StrategyCatalogEntry StockB1RejectionToS2() => new(
         Id: StockB1RejectionId,
-        Name: "Stock B1 rejection → S2",
+        Name: "Index B1 rejection → S2",
         Author: "Trade with Beast",
         Summary:
-            "At B1 resistance: session touches B1, then a 5m candle fails (close back below B1) → SHORT toward S2. "
-            + "Stop above rejection high / B1. Paper agent only recommends when backtest shows ≥90% win with ≥8 samples.",
+            "On index B1 resistance: session touches B1, then price fails → bearish setup toward S2 via index PE options. "
+            + "Stop above rejection / B1 on underlying. Paper agent only recommends when index backtest qualifies.",
         Timeframe: "5 minute candles (per-day zones in backtest)",
-        Session: "NSE F&O stocks",
+        Session: "NIFTY, BANKNIFTY, FINNIFTY, SENSEX",
         Status: "paper-ready",
-        Tags: ["stocks", "zones", "backtest-gated"],
+        Tags: ["indices", "zones", "options", "backtest-gated"],
         Playbook: new StrategyPlaybook(
             Intent: "Defined zone rejection on individual names with historical qualification.",
             Phases:

@@ -79,17 +79,17 @@ describe('BoardService', () => {
     expect(chart.candles[0].close).toBe(23300);
   });
 
-  it('loads three-month trade history', async () => {
-    const historyPromise = firstValueFrom(service.tradeHistory('3m'));
+  it('loads one-month trade history', async () => {
+    const historyPromise = firstValueFrom(service.tradeHistory('1m'));
     const req = httpMock.expectOne(
       (request) =>
         request.url === '/api/paper-agent/history' &&
-        request.params.get('range') === '3m',
+        request.params.get('range') === '1m',
     );
     expect(req.request.method).toBe('GET');
     req.flush({
       userId: 'local-user',
-      range: '3m',
+      range: '1m',
       from: '2026-06-15T00:00:00Z',
       to: '2026-09-15T00:00:00Z',
       summary: {

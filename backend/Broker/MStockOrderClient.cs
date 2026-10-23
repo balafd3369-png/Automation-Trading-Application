@@ -98,18 +98,21 @@ public sealed class MStockOrderClient : IMStockOrderClient
     private readonly HttpClient _http;
     private readonly MStockOptions _options;
     private readonly MStockSessionStore _sessions;
+    private readonly MStockLoginContext _login;
     private readonly ILogger<MStockOrderClient> _log;
 
     public MStockOrderClient(
         IHttpClientFactory httpFactory,
         MStockOptions options,
         MStockSessionStore sessions,
+        MStockLoginContext login,
         ILogger<MStockOrderClient> log)
     {
         _http = httpFactory.CreateClient("mstock");
         _http.BaseAddress = new Uri(options.RestBaseUrl.TrimEnd('/') + "/");
         _options = options;
         _sessions = sessions;
+        _login = login;
         _log = log;
     }
 
@@ -188,7 +191,8 @@ public sealed class MStockOrderClient : IMStockOrderClient
 
         using var request = new HttpRequestMessage(method, path);
         request.Headers.TryAddWithoutValidation("X-Mirae-Version", "1");
-        request.Headers.TryAddWithoutValidation("Authorization", $"token {_options.ApiKey}:{token}");
+        var apiKey = _login.ResolveApiKey(_options);
+        request.Headers.TryAddWithoutValidation("Authorization", $"token {apiKey}:{token}");
         if (fields is not null)
         {
             request.Content = jsonContent

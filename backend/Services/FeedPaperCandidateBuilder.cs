@@ -34,18 +34,49 @@ public static class FeedPaperCandidateBuilder
         var side = strategyCode == TenAmIntradayPattern.HighFadeStrategy ? "SELL" : "BUY";
         var direction = rec.Direction;
 
+        var indexSpot = context.FirstOrDefault(x =>
+            x.Symbol.Equals(rec.Symbol, StringComparison.OrdinalIgnoreCase)
+            && (x.InstrumentType == "INDEX" || x.InstrumentType == "STOCK"));
+        if (indexSpot is null || indexSpot.Last <= 0)
+        {
+            return null;
+        }
+
+        var (risk, reward) = Payoff(
+            side,
+            rec.StopLoss,
+            rec.Target,
+            indexSpot.Last,
+            rec.RiskPoints,
+            rec.RewardPoints);
+        if (risk <= 0 || reward <= 0)
+        {
+            return null;
+        }
+
+        if (ZoneBoardOptionLegSelector.TryBuildSingleLongOptionLeg(indexSpot, direction, context, out var option)
+            && option is not null)
+        {
+            return new StrategyCandidate(
+                strategyCode,
+                rec.Symbol,
+                direction,
+                84m,
+                rec.WhyNow,
+                [option],
+                rec.StopLoss,
+                rec.Target,
+                risk,
+                reward,
+                option.Quote?.DataTimestamp ?? indexSpot.Quote.DataTimestamp);
+        }
+
         if (isIndex)
         {
             var future = context.FirstOrDefault(x =>
                 x.Symbol.Equals($"{rec.Symbol} FUT", StringComparison.OrdinalIgnoreCase)
                 && x.InstrumentType == "FUTURE");
             if (future is null || future.Last <= 0)
-            {
-                return null;
-            }
-
-            var (risk, reward) = Payoff(side, rec.StopLoss, rec.Target, future.Last, rec.RiskPoints, rec.RewardPoints);
-            if (risk <= 0 || reward <= 0)
             {
                 return null;
             }
@@ -64,48 +95,44 @@ public static class FeedPaperCandidateBuilder
                 future.Quote.DataTimestamp);
         }
 
-        var spot = context.FirstOrDefault(x =>
-            x.Symbol.Equals(rec.Symbol, StringComparison.OrdinalIgnoreCase)
-            && x.InstrumentType == "STOCK");
-        if (spot is null || spot.Last <= 0)
-        {
-            return null;
-        }
-
-        var (stockRisk, stockReward) = Payoff(side, rec.StopLoss, rec.Target, spot.Last, rec.RiskPoints, rec.RewardPoints);
-        if (stockRisk <= 0 || stockReward <= 0)
-        {
-            return null;
-        }
-
         return new StrategyCandidate(
             strategyCode,
             rec.Symbol,
             direction,
             83m,
             rec.WhyNow,
-            [new(spot.Symbol, spot.Symbol, "STOCK", side, 1, spot.Last, Quote: spot.Quote)],
+            [new(indexSpot.Symbol, indexSpot.Symbol, "STOCK", side, 1, indexSpot.Last, Quote: indexSpot.Quote)],
             rec.StopLoss,
             rec.Target,
-            stockRisk,
-            stockReward,
-            spot.Quote.DataTimestamp);
+            risk,
+            reward,
+            indexSpot.Quote.DataTimestamp);
     }
 
     private static StrategyCandidate? BuildB1(
         StrategyLiveRecommendation rec,
         IReadOnlyList<MarketContextSnapshot> context)
     {
-        var spot = context.FirstOrDefault(x =>
-            x.Symbol.Equals(rec.Symbol, StringComparison.OrdinalIgnoreCase)
-            && x.InstrumentType == "STOCK");
-        if (spot is null || spot.Last <= 0)
+        if (!IndexUniverse.IsIndex(rec.Symbol))
         {
             return null;
         }
 
-        var risk = rec.StopLoss - spot.Last;
-        var reward = spot.Last - rec.Target;
+        var index = context.FirstOrDefault(x =>
+            x.Symbol.Equals(rec.Symbol, StringComparison.OrdinalIgnoreCase)
+            && IndexUniverse.IsIndex(x.Symbol));
+        if (index is null || index.Last <= 0)
+        {
+            return null;
+        }
+
+        if (!ZoneBoardOptionLegSelector.TryBuildIndexOptionLegs(index, "BEARISH", context, out var legs))
+        {
+            return null;
+        }
+
+        var risk = rec.StopLoss - index.Last;
+        var reward = index.Last - rec.Target;
         if (risk <= 0 || reward <= 0)
         {
             risk = rec.RiskPoints;
@@ -117,18 +144,26 @@ public static class FeedPaperCandidateBuilder
             return null;
         }
 
+        var debit = legs.Sum(leg => leg.Price);
+        if (debit <= 0)
+        {
+            return null;
+        }
+
         return new StrategyCandidate(
             ZoneRejectionPattern.B1RejectionToS2,
             rec.Symbol,
             "BEARISH",
             78m,
             rec.WhyNow,
-            [new(spot.Symbol, spot.Symbol, "STOCK", "SELL", 1, spot.Last, Quote: spot.Quote)],
+            legs,
             rec.StopLoss,
             rec.Target,
-            risk,
-            reward,
-            spot.Quote.DataTimestamp);
+            Math.Max(debit * 0.45m, risk),
+            Math.Max(debit * 1.2m, reward),
+            legs.Max(l => l.Quote is null || l.Quote.DataTimestamp == default
+                ? DateTimeOffset.UtcNow
+                : l.Quote.DataTimestamp));
     }
 
     private static (decimal Risk, decimal Reward) Payoff(

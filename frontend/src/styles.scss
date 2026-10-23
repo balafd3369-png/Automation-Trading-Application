@@ -1,3 +1,5 @@
+@use 'twb-glass' as glass;
+
 :root {
   --bg: #1e1e1e;
   --title: #3c3c3c;
@@ -31,6 +33,23 @@
   --radius-lg: 14px;
   --radius-pill: 999px;
 
+  --panel: var(--sidebar);
+  --surface-raised: var(--title);
+  --surface-inset: var(--editor);
+  --chart-bg: #131313;
+  --chart-grid: #2a2e39;
+  --chart-text: #d1d4dc;
+  --fg-on-title: var(--fg);
+  --fg-on-sidebar: var(--fg);
+  --fg-on-activity: var(--fg);
+  --fg-on-editor: var(--fg);
+  --fg-on-accent-band: #f5f5f5;
+  --muted-on-title: var(--muted);
+  --muted-on-sidebar: var(--muted);
+  --ambient-ce: rgb(63 185 80 / 18%);
+  --ambient-pe: rgb(248 81 73 / 16%);
+  --glass-panel: var(--sidebar);
+
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.45);
@@ -40,6 +59,27 @@
   --transition-med: 0.22s var(--ease-out);
 
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+  /* Uppercase column / section labels (tables, grids) */
+  --twb-table-head-size: 14px;
+  --twb-table-head-weight: 800;
+  --twb-table-head-tracking: 0.04em;
+  --twb-table-head-color: var(--muted);
+  --twb-section-label-size: 13px;
+  --twb-section-label-weight: 800;
+  --twb-section-label-tracking: 0.05em;
+
+  --glass-blur: 20px;
+  --glass-saturate: 1.35;
+}
+
+.twb-aurora-page {
+  @include glass.aurora-page-background;
+}
+
+.twb-glass-card {
+  @include glass.glass-surface;
+  @include glass.glass-surface-hover;
 }
 
 @mixin hide-scrollbar {
@@ -56,9 +96,31 @@
 html,
 body,
 app-root {
+  display: block;
   height: 100%;
   margin: 0;
   overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.ide {
+  color: var(--fg);
+  transition:
+    background-color var(--transition-med),
+    color var(--transition-med);
+}
+
+.titlebar-main,
+.titlebar-trade-row {
+  color: var(--fg-on-title);
+}
+
+.rail,
+.editor,
+.workbench,
+.agent-panel {
+  color: var(--fg);
 }
 
 body {
@@ -70,6 +132,9 @@ body {
   background: var(--bg);
   color: var(--fg);
   line-height: 1.45;
+  transition:
+    background-color var(--transition-med),
+    color var(--transition-med);
 }
 
 *,
@@ -93,4 +158,14 @@ textarea:focus-visible,
 summary:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+.ide table thead th,
+.ide .month-table-head {
+  color: var(--twb-table-head-color);
+  font-size: var(--twb-table-head-size);
+  font-weight: var(--twb-table-head-weight);
+  letter-spacing: var(--twb-table-head-tracking);
+  text-transform: uppercase;
+  line-height: 1.25;
 }

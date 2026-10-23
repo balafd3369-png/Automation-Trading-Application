@@ -15,6 +15,7 @@ public sealed class MStockAuthClient : IBrokerMarketClient
     private readonly HttpClient _http;
     private readonly MStockOptions _options;
     private readonly MStockSessionStore _sessions;
+    private readonly MStockLoginContext _login;
     private readonly ILogger<MStockAuthClient> _log;
     private readonly object _gate = new();
     private string _accessToken = "";
@@ -23,11 +24,13 @@ public sealed class MStockAuthClient : IBrokerMarketClient
         IHttpClientFactory httpFactory,
         MStockOptions options,
         MStockSessionStore sessions,
+        MStockLoginContext login,
         ILogger<MStockAuthClient> log)
     {
         _http = httpFactory.CreateClient("mstock");
         _options = options;
         _sessions = sessions;
+        _login = login;
         _log = log;
         _http.BaseAddress = new Uri(options.RestBaseUrl.TrimEnd('/') + "/");
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -58,23 +61,59 @@ public sealed class MStockAuthClient : IBrokerMarketClient
         }
 
         _sessions.ClearToken();
+        _login.Clear();
         _log.LogWarning("m.Stock session cleared. Re-verify OTP for live quotes.");
     }
 
-    public async Task<JsonElement> SendOtpAsync(CancellationToken ct)
+    public bool IsApiKeyConfigured() => !string.IsNullOrWhiteSpace(_login.ResolveApiKey(_options));
+
+    public Task<JsonElement> SendOtpAsync(CancellationToken ct) =>
+        SendOtpAsync(null, null, null, ct);
+
+    public async Task<JsonElement> SendOtpAsync(string? username, string? password, string? apiKey, CancellationToken ct)
     {
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            _login.SetApiKeyOverride(apiKey);
+        }
+
+        var user = FirstNonEmpty(username?.Trim(), _options.Username);
+        var pass = FirstNonEmpty(password, _options.Password);
+        if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(pass))
+        {
+            throw new InvalidOperationException(
+                "m.Stock user ID and password are required. Enter them in the Broker panel or set MStock:Username and MStock:Password in server config.");
+        }
+
+        _log.LogInformation("m.Stock login OTP request for user {Username}.", user);
+
         using var req = new HttpRequestMessage(HttpMethod.Post, "openapi/typea/connect/login");
         ApplyCommonHeaders(req);
         req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            ["username"] = _options.Username,
-            ["password"] = _options.Password,
+            ["username"] = user,
+            ["password"] = pass,
         });
-        return await SendJson(req, ct);
+        var result = await SendJson(req, ct);
+        if (!MStockJson.IsOtpSendAcknowledged(result))
+        {
+            var message = MStockJson.ReadMessage(result) ?? "login failed";
+            _log.LogWarning("m.Stock login did not send OTP: {Message}", message);
+        }
+
+        return result;
     }
 
-    public async Task<JsonElement> VerifyOtpAsync(string otp, CancellationToken ct)
+    public Task<JsonElement> VerifyOtpAsync(string otp, CancellationToken ct) =>
+        VerifyOtpAsync(otp, null, ct);
+
+    public async Task<JsonElement> VerifyOtpAsync(string otp, string? apiKey, CancellationToken ct)
     {
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            _login.SetApiKeyOverride(apiKey);
+        }
+
         var last = await ExchangeOtpForSessionAsync(otp, "L", ct);
         if (TryReadAccessToken(last, out var token))
         {
@@ -107,9 +146,15 @@ public sealed class MStockAuthClient : IBrokerMarketClient
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, "openapi/typea/session/token");
         ApplyCommonHeaders(req);
+        var apiKey = _login.ResolveApiKey(_options);
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new InvalidOperationException("m.Stock API key is missing. Request OTP again after entering your API key.");
+        }
+
         req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            ["api_key"] = _options.ApiKey,
+            ["api_key"] = apiKey,
             ["request_token"] = otp.Trim(),
             ["checksum"] = checksum,
         });
@@ -132,6 +177,27 @@ public sealed class MStockAuthClient : IBrokerMarketClient
 
     public async Task<IReadOnlyDictionary<string, decimal>> GetLtpAsync(CancellationToken ct) =>
         await FetchQuoteBatchesAsync("openapi/typea/instruments/quote/ltp?", ParseLtpQuotes, ct);
+
+    public async Task<IReadOnlyDictionary<string, decimal>> GetLtpForBoardNamesAsync(
+        IReadOnlyList<string> boardNames,
+        CancellationToken ct)
+    {
+        if (boardNames.Count == 0)
+        {
+            return new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var keys = boardNames
+            .SelectMany(name => QuoteKeys.TryGetValue(name, out var aliases) ? aliases : Array.Empty<string>())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (keys.Length == 0)
+        {
+            return new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return await FetchQuoteBatchesAsync("openapi/typea/instruments/quote/ltp?", ParseLtpQuotes, ct, keys);
+    }
 
     public async Task<QuoteSnap?> GetBoardQuoteAsync(string boardName, CancellationToken ct)
     {
@@ -432,9 +498,10 @@ public sealed class MStockAuthClient : IBrokerMarketClient
     private void ApplyCommonHeaders(HttpRequestMessage req)
     {
         req.Headers.TryAddWithoutValidation("X-Mirae-Version", "1");
-        if (!string.IsNullOrWhiteSpace(_options.ApiKey))
+        var apiKey = _login.ResolveApiKey(_options);
+        if (!string.IsNullOrWhiteSpace(apiKey))
         {
-            req.Headers.TryAddWithoutValidation("X-PrivateKey", _options.ApiKey);
+            req.Headers.TryAddWithoutValidation("X-PrivateKey", apiKey);
         }
     }
 
@@ -446,9 +513,10 @@ public sealed class MStockAuthClient : IBrokerMarketClient
             token = _accessToken;
         }
 
-        if (!string.IsNullOrWhiteSpace(token))
+        var apiKey = _login.ResolveApiKey(_options);
+        if (!string.IsNullOrWhiteSpace(token) && !string.IsNullOrWhiteSpace(apiKey))
         {
-            req.Headers.TryAddWithoutValidation("Authorization", $"token {_options.ApiKey}:{token}");
+            req.Headers.TryAddWithoutValidation("Authorization", $"token {apiKey}:{token}");
         }
     }
 
@@ -478,40 +546,12 @@ public sealed class MStockAuthClient : IBrokerMarketClient
                 continue;
             }
 
-            var last = item.TryGetProperty("last_price", out var lp) ? ToDec(lp) : 0m;
-            var token = item.TryGetProperty("instrument_token", out var it) ? (int)ToDec(it) : 0;
-            decimal open = 0;
-            decimal close = 0;
-            if (item.TryGetProperty("ohlc", out var ohlc))
-            {
-                if (ohlc.TryGetProperty("open", out var o))
-                {
-                    open = ToDec(o);
-                }
-
-                if (ohlc.TryGetProperty("close", out var c))
-                {
-                    close = ToDec(c);
-                }
-            }
-
-            if (last <= 0 && token <= 0)
+            if (!TryParseQuoteItem(item, alias.Split(':')[0], out var snap))
             {
                 continue;
             }
 
-            var liquidity = ParseLiquidity(item);
-            return new QuoteSnap(
-                token,
-                last,
-                open,
-                close,
-                alias.Split(':')[0],
-                liquidity.Bid,
-                liquidity.Ask,
-                liquidity.Volume,
-                liquidity.OpenInterest,
-                liquidity.Timestamp);
+            return snap;
         }
 
         return null;
@@ -534,44 +574,17 @@ public sealed class MStockAuthClient : IBrokerMarketClient
                     continue;
                 }
 
-                var last = item.TryGetProperty("last_price", out var lp) ? ToDec(lp) : 0m;
-                var token = item.TryGetProperty("instrument_token", out var it) ? (int)ToDec(it) : 0;
-                decimal open = 0;
-                decimal close = 0;
-                if (item.TryGetProperty("ohlc", out var ohlc))
-                {
-                    if (ohlc.TryGetProperty("open", out var o))
-                    {
-                        open = ToDec(o);
-                    }
-
-                    if (ohlc.TryGetProperty("close", out var c))
-                    {
-                        close = ToDec(c);
-                    }
-                }
-
-                if (last <= 0 && token <= 0)
+                if (!TryParseQuoteItem(item, alias.Split(':')[0], out var snap))
                 {
                     continue;
                 }
 
-                var liquidity = ParseLiquidity(item);
-                map[kv.Key] = new QuoteSnap(
-                    token,
-                    last,
-                    open,
-                    close,
-                    alias.Split(':')[0],
-                    liquidity.Bid,
-                    liquidity.Ask,
-                    liquidity.Volume,
-                    liquidity.OpenInterest,
-                    liquidity.Timestamp);
+                map[kv.Key] = snap;
                 break;
             }
         }
 
+        MergeQuotesFromInstrumentKeys(data, map);
         return map;
     }
 
@@ -592,18 +605,101 @@ public sealed class MStockAuthClient : IBrokerMarketClient
                     continue;
                 }
 
-                var last = item.TryGetProperty("last_price", out var lp) ? ToDec(lp) : 0m;
-                if (last <= 0)
+                if (!TryParseQuoteItem(item, alias.Split(':')[0], out var snap) || snap.Last <= 0)
                 {
                     continue;
                 }
 
-                map[kv.Key] = last;
+                map[kv.Key] = snap.Last;
                 break;
             }
         }
 
+        var ohlcFallback = new Dictionary<string, QuoteSnap>(StringComparer.OrdinalIgnoreCase);
+        MergeQuotesFromInstrumentKeys(data, ohlcFallback);
+        foreach (var (boardName, snap) in ohlcFallback)
+        {
+            if (snap.Last > 0 && !map.ContainsKey(boardName))
+            {
+                map[boardName] = snap.Last;
+            }
+        }
+
         return map;
+    }
+
+    private static void MergeQuotesFromInstrumentKeys(
+        JsonElement data,
+        Dictionary<string, QuoteSnap> map)
+    {
+        foreach (var prop in data.EnumerateObject())
+        {
+            if (!IndexUniverse.TryResolveBoardFromInstrumentKey(prop.Name, out var boardName)
+                || map.ContainsKey(boardName))
+            {
+                continue;
+            }
+
+            var exchange = prop.Name.Contains(':')
+                ? prop.Name.Split(':')[0]
+                : "NSE";
+            if (!TryParseQuoteItem(prop.Value, exchange, out var snap))
+            {
+                continue;
+            }
+
+            map[boardName] = snap;
+        }
+    }
+
+    private static bool TryParseQuoteItem(JsonElement item, string exchange, out QuoteSnap snap)
+    {
+        snap = default!;
+        var last = item.TryGetProperty("last_price", out var lp) ? ToDec(lp) : 0m;
+        var token = item.TryGetProperty("instrument_token", out var it) ? (int)ToDec(it) : 0;
+        decimal open = 0;
+        decimal close = 0;
+        if (item.TryGetProperty("ohlc", out var ohlc))
+        {
+            if (ohlc.TryGetProperty("open", out var o))
+            {
+                open = ToDec(o);
+            }
+
+            if (ohlc.TryGetProperty("close", out var c))
+            {
+                close = ToDec(c);
+            }
+        }
+
+        if (last <= 0 && close > 0)
+        {
+            last = close;
+        }
+
+        if (last <= 0 && open > 0)
+        {
+            last = open;
+        }
+
+        if (last <= 0 && token <= 0)
+        {
+            return false;
+        }
+
+        var liquidity = ParseLiquidity(item);
+        snap = new QuoteSnap(
+            token,
+            last,
+            open,
+            close,
+            exchange,
+            liquidity.Bid,
+            liquidity.Ask,
+            liquidity.Volume,
+            liquidity.OpenInterest,
+            liquidity.Timestamp);
+        return true;
     }
 
     private static bool TryReadOptionOhlc(

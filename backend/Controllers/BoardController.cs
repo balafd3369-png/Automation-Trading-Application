@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
 
@@ -38,10 +39,24 @@ public sealed class BoardController : ControllerBase
     }
 
     [HttpGet("board/chart/{name}")]
-    public async Task<IActionResult> GetChart(string name, [FromQuery] string interval = "5minute", CancellationToken ct = default)
+    [OutputCache(PolicyName = ChartOutputCachePolicy.PolicyName)]
+    public async Task<IActionResult> GetChart(
+        string name,
+        [FromQuery] string interval = "5minute",
+        [FromQuery] string depth = "full",
+        CancellationToken ct = default)
     {
-        var chart = await _market.ChartAsync(name, interval, ct);
-        return chart is null ? NotFound() : Ok(chart);
+        var loadDepth = depth.Equals("fast", StringComparison.OrdinalIgnoreCase)
+            ? ChartLoadDepth.Fast
+            : ChartLoadDepth.Full;
+        var chart = await _market.ChartAsync(name, interval, ct, loadDepth);
+        if (chart is null)
+        {
+            return NotFound();
+        }
+
+        ChartHttpCacheHeaders.Apply(Response, loadDepth, chart);
+        return Ok(chart);
     }
 
     [HttpGet("board/option-chart")]

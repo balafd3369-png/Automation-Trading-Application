@@ -28,6 +28,8 @@ export interface SymbolSnapshot {
   mark: PressureMark;
   tightRange: boolean;
   previousClose: number;
+  /** False when m.Stock is connected but this symbol still has demo seed / unmapped quote. */
+  quoteVerified?: boolean;
 }
 
 export interface BoardResponse {
@@ -43,6 +45,19 @@ export interface ChartBar {
   high: number;
   low: number;
   close: number;
+}
+
+export interface ChartLiveUpdate {
+  name: string;
+  interval: string;
+  bar: ChartBar;
+  last: number;
+  b2: number;
+  b1: number;
+  s: number;
+  s1: number;
+  s2: number;
+  serverTime: string;
 }
 
 export interface ChartResponse {

@@ -53,12 +53,56 @@ public static class IndexUniverse
     public static IReadOnlyList<string> AllNames { get; } =
         IndexNames.Concat(Equities).ToArray();
 
+    /// <summary>
+    /// Board symbol → m.Stock quote instrument keys when the NSE ticker no longer matches the index name.
+    /// Must be declared before <see cref="QuoteKeys"/> (static init order).
+    /// </summary>
+    private static readonly Dictionary<string, string[]> EquityQuoteAliasOverrides =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Post-demerger: Nifty still uses TATAMOTORS; live NSE symbols are TMCV / TMPV.
+            ["TATAMOTORS"] = ["NSE:TMCV-EQ", "NSE:TMPV-EQ", "NSE:TATAMOTORS-EQ"],
+            ["ICICIPRULI"] = ["NSE:ICICIPRULI-EQ", "NSE:ICICIPRULI"],
+        };
+
     public static Dictionary<string, string[]> QuoteKeys { get; } = BuildQuoteKeys();
 
     private static readonly object QuoteKeyGate = new();
 
     public static bool IsIndex(string name) =>
         IndexNames.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Maps m.Stock quote payload keys (e.g. NSE:ICICIPRULI-EQ) to board symbols.</summary>
+    public static bool TryResolveBoardFromInstrumentKey(string instrumentKey, out string boardName)
+    {
+        foreach (var kv in QuoteKeys)
+        {
+            if (kv.Value.Any(alias => alias.Equals(instrumentKey, StringComparison.OrdinalIgnoreCase)))
+            {
+                boardName = kv.Key;
+                return true;
+            }
+        }
+
+        var colon = instrumentKey.IndexOf(':');
+        if (colon >= 0 && colon < instrumentKey.Length - 1)
+        {
+            var ticker = instrumentKey[(colon + 1)..].Trim();
+            if (ticker.EndsWith("-EQ", StringComparison.OrdinalIgnoreCase))
+            {
+                ticker = ticker[..^3];
+            }
+
+            if (QuoteKeys.ContainsKey(ticker))
+            {
+                boardName = ticker;
+                return true;
+            }
+        }
+
+        boardName = "";
+        return false;
+    }
 
     /// <summary>Registers NSE/BSE quote aliases for equities not in the default board universe.</summary>
     public static bool TryRegisterEquity(string symbol, out string[] quoteKeys)
@@ -126,7 +170,9 @@ public static class IndexUniverse
 
         foreach (var equity in Equities)
         {
-            map[equity] = [$"NSE:{equity}-EQ"];
+            map[equity] = EquityQuoteAliasOverrides.TryGetValue(equity, out var aliases)
+                ? aliases
+                : [$"NSE:{equity}-EQ"];
         }
 
         return map;

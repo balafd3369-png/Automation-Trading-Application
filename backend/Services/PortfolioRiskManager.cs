@@ -114,11 +114,13 @@ public sealed class PortfolioRiskManager
         }
         if (candidate.Strategy == ZoneRejectionPattern.B1RejectionToS2)
         {
-            if (candidate.Legs.Count != 1
-                || candidate.Legs[0].InstrumentType != "STOCK"
-                || candidate.Legs[0].Side != "SELL")
+            if (!IsIndex(candidate.Underlying))
             {
-                rejections.Add("B1 rejection pattern requires a single stock short leg");
+                rejections.Add("B1 rejection runs on indices only (NIFTY, BANKNIFTY, FINNIFTY, SENSEX)");
+            }
+            else if (!candidate.Legs.All(x => x.InstrumentType == "OPTION" && x.Side == "BUY"))
+            {
+                rejections.Add("B1 rejection on index requires option buy legs (PE spread)");
             }
         }
         if (candidate.Strategy is TenAmIntradayPattern.HighFadeStrategy or TenAmIntradayPattern.LowBreakStrategy)
@@ -134,6 +136,7 @@ public sealed class PortfolioRiskManager
                 {
                     "FUTURE" => IsIndex(candidate.Underlying),
                     "STOCK" => !IsIndex(candidate.Underlying),
+                    "OPTION" => leg.Side == "BUY",
                     _ => false,
                 };
                 if (!ok)

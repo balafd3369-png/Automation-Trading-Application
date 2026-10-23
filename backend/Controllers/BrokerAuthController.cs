@@ -22,7 +22,9 @@ public sealed class BrokerAuthController : ControllerBase
         _market = market;
     }
 
-    public sealed record OtpBody(string Otp);
+    public sealed record OtpBody(string Otp, string? ApiKey);
+
+    public sealed record OtpSendBody(string? Username, string? Password, string? ApiKey);
 
     [HttpGet("capabilities")]
     public IActionResult Capabilities() =>
@@ -30,6 +32,7 @@ public sealed class BrokerAuthController : ControllerBase
         {
             version = 2,
             mstockOtp = true,
+            apiKeyConfigured = _mstock.IsApiKeyConfigured(),
         });
 
     [HttpGet("providers")]
@@ -43,14 +46,14 @@ public sealed class BrokerAuthController : ControllerBase
         }));
 
     [HttpPost("otp/send")]
-    public async Task<IActionResult> SendOtp(CancellationToken ct)
+    public async Task<IActionResult> SendOtp([FromBody] OtpSendBody? body, CancellationToken ct)
     {
         _brokers.SetActiveProvider(BrokerIds.MStock);
         try
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(TimeSpan.FromSeconds(28));
-            var result = await _mstock.SendOtpAsync(deadline.Token);
+            var result = await _mstock.SendOtpAsync(body?.Username, body?.Password, body?.ApiKey, deadline.Token);
             var ok = MStockJson.IsOtpSendAcknowledged(result);
             var message = result.TryGetProperty("message", out var msg) ? msg.GetString() : null;
             return Ok(new { status = ok ? "success" : "error", message, provider = BrokerIds.MStock });
@@ -61,6 +64,15 @@ public sealed class BrokerAuthController : ControllerBase
             {
                 status = "success",
                 message = "OTP request is taking longer than usual. If SMS arrived on your phone, enter it below.",
+                provider = BrokerIds.MStock,
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Ok(new
+            {
+                status = "error",
+                message = ex.Message,
                 provider = BrokerIds.MStock,
             });
         }
@@ -88,7 +100,7 @@ public sealed class BrokerAuthController : ControllerBase
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(TimeSpan.FromSeconds(28));
-            var result = await _mstock.VerifyOtpAsync(body.Otp, deadline.Token);
+            var result = await _mstock.VerifyOtpAsync(body.Otp, body.ApiKey, deadline.Token);
             if (_brokers.HasSession)
             {
                 _brokers.OnMStockSessionEstablished();

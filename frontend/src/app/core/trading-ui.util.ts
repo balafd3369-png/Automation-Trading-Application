@@ -1,5 +1,5 @@
 import { PaperPosition, PaperTradeHistoryItem, PaperTradeHistoryLeg, SymbolSnapshot } from './board.models';
-import { isIstCashSessionOpen, istSessionBucketStart } from './chart-ui.util';
+import { isIstCashSessionOpen, istParts, istSessionBucketStart } from './chart-ui.util';
 
 export function chartStepSec(interval: string): number {
   switch (interval) {
@@ -36,6 +36,13 @@ export function syncLiveCandle(
   const lastBucket = istSessionBucketStart(lastBar.time, stepMinutes);
 
   if (currentBucket > lastBucket) {
+    const stepSec = chartStepSec(interval);
+    const gapSec = currentBucket - lastBar.time;
+    const lastDate = istParts(lastBar.time).dateKey;
+    const currentDate = istParts(currentBucket).dateKey;
+    if (lastDate !== currentDate || gapSec > stepSec) {
+      return null;
+    }
     return {
       isNew: true,
       bar: { time: currentBucket, open: liveLast, high: liveLast, low: liveLast, close: liveLast },
@@ -76,6 +83,15 @@ export function brokerOtpSendSucceeded(res: { status?: string; message?: string 
     return false;
   }
   return msg.includes('otp') || msg.includes('sent');
+}
+
+/** Login step failed — do not prompt for OTP entry. */
+export function brokerLoginRejectedMessage(message: string | null | undefined): boolean {
+  const msg = (message ?? '').toLowerCase();
+  if (!msg) {
+    return false;
+  }
+  return msg.includes('invalid username') || msg.includes('invalid password') || msg.includes('attempts remaining');
 }
 
 /** Board feed must not cancel an in-progress OTP entry (live board polls every second). */
@@ -136,8 +152,8 @@ const PAPER_HISTORY_STRATEGY_LABELS: Record<string, string> = {
   'ten-am-low-break-to-day-open': 'Ten AM low break → day open',
   ten_am_high_fade_day_low: 'Ten AM high fade → day low',
   'bala-10am-high-fade': 'Ten AM high fade → day low',
-  stock_b1_rejection_to_s2: 'Stock B1 rejection → S2',
-  'stock-b1-rejection-to-s2': 'Stock B1 rejection → S2',
+  stock_b1_rejection_to_s2: 'Index B1 rejection → S2',
+  'stock-b1-rejection-to-s2': 'Index B1 rejection → S2',
   zone_b1_break_b2: 'Zone B1 break → B2',
   'zone-b1-break-b2': 'Zone B1 break → B2',
   zone_s1_break_s2: 'Zone S1 break → S2',
@@ -168,24 +184,71 @@ export function formatPaperHistoryStrategyLabel(strategy: string): string {
   return strategy.replace(/_/g, ' ').replace(/-/g, ' ');
 }
 
+/** Canonical catalog ids (same order as backend StrategyCatalog.All()). */
+export const CATALOG_STRATEGY_CANONICAL_IDS = [
+  'zone-b1-break-b2',
+  'zone-s1-break-s2',
+  'zone-s2-bounce-b1',
+  'stock-b1-rejection-to-s2',
+  'bala-10am-high-fade',
+  'ten-am-low-break-to-day-open',
+] as const;
+
+const CATALOG_STRATEGY_ALIAS_TO_CANONICAL: Record<string, string> = {
+  zone_b1_break_b2: 'zone-b1-break-b2',
+  'zone-b1-break-b2': 'zone-b1-break-b2',
+  zone_s1_break_s2: 'zone-s1-break-s2',
+  'zone-s1-break-s2': 'zone-s1-break-s2',
+  zone_s2_bounce_b1: 'zone-s2-bounce-b1',
+  'zone-s2-bounce-b1': 'zone-s2-bounce-b1',
+  stock_b1_rejection_to_s2: 'stock-b1-rejection-to-s2',
+  'stock-b1-rejection-to-s2': 'stock-b1-rejection-to-s2',
+  ten_am_high_fade_day_low: 'bala-10am-high-fade',
+  'bala-10am-high-fade': 'bala-10am-high-fade',
+  ten_am_low_break_day_open: 'ten-am-low-break-to-day-open',
+  'ten-am-low-break-to-day-open': 'ten-am-low-break-to-day-open',
+};
+
+export function normalizeCatalogStrategyId(strategy: string | null | undefined): string | null {
+  const raw = (strategy ?? '').trim();
+  if (!raw) {
+    return null;
+  }
+  const key = raw.toLowerCase().replace(/-/g, '_');
+  const canonical = CATALOG_STRATEGY_ALIAS_TO_CANONICAL[key] ?? CATALOG_STRATEGY_ALIAS_TO_CANONICAL[raw.toLowerCase()];
+  if (canonical) {
+    return canonical;
+  }
+  const kebab = raw.toLowerCase().replace(/_/g, '-');
+  if ((CATALOG_STRATEGY_CANONICAL_IDS as readonly string[]).includes(kebab)) {
+    return kebab;
+  }
+  return isCatalogPaperHistoryTrade({ strategy: raw } as PaperTradeHistoryItem) ? kebab : null;
+}
+
+export function tradeMatchesCatalogStrategy(trade: PaperTradeHistoryItem, canonicalStrategyId: string): boolean {
+  return normalizeCatalogStrategyId(trade.strategy) === canonicalStrategyId;
+}
+
 export function buildPaperHistoryStrategyBreakdown(
   trades: PaperTradeHistoryItem[],
 ): PaperHistoryStrategyBreakdownRow[] {
   const map = new Map<string, PaperHistoryStrategyBreakdownRow>();
   for (const trade of trades) {
-    const strategy = (trade.strategy ?? '').trim() || 'Unknown';
-    let row = map.get(strategy);
+    const canonical =
+      normalizeCatalogStrategyId(trade.strategy) ?? ((trade.strategy ?? '').trim() || 'Unknown');
+    let row = map.get(canonical);
     if (!row) {
       row = {
-        strategy,
-        label: formatPaperHistoryStrategyLabel(strategy),
+        strategy: canonical,
+        label: formatPaperHistoryStrategyLabel(canonical),
         closed: 0,
         wins: 0,
         losses: 0,
         open: 0,
         realizedPnl: 0,
       };
-      map.set(strategy, row);
+      map.set(canonical, row);
     }
     if (trade.status === 'OPEN') {
       row.open += 1;
@@ -204,6 +267,37 @@ export function buildPaperHistoryStrategyBreakdown(
     }
   }
   return [...map.values()].sort((a, b) => b.realizedPnl - a.realizedPnl);
+}
+
+/** P&L table: every catalog strategy, including zero-trade rows (zone + Ten AM + stock). */
+export function buildCatalogPaperHistoryStrategyBreakdown(
+  trades: PaperTradeHistoryItem[],
+): PaperHistoryStrategyBreakdownRow[] {
+  const fromTrades = buildPaperHistoryStrategyBreakdown(trades);
+  const byId = new Map(fromTrades.map((row) => [row.strategy, row]));
+  const rows: PaperHistoryStrategyBreakdownRow[] = [];
+  for (const id of CATALOG_STRATEGY_CANONICAL_IDS) {
+    const existing = byId.get(id);
+    if (existing) {
+      rows.push(existing);
+      continue;
+    }
+    rows.push({
+      strategy: id,
+      label: formatPaperHistoryStrategyLabel(id),
+      closed: 0,
+      wins: 0,
+      losses: 0,
+      open: 0,
+      realizedPnl: 0,
+    });
+  }
+  for (const row of fromTrades) {
+    if (!(CATALOG_STRATEGY_CANONICAL_IDS as readonly string[]).includes(row.strategy)) {
+      rows.push(row);
+    }
+  }
+  return rows;
 }
 
 const IST_TIME_ZONE = 'Asia/Kolkata';
@@ -240,6 +334,21 @@ export function paperTradeHistoryInIstDateRange(
 
 export function istTodayCalendarYmd(now = new Date()): string {
   return now.toLocaleDateString('en-CA', { timeZone: IST_TIME_ZONE });
+}
+
+/** Human-readable IST calendar day from `yyyy-MM-dd`. */
+export function formatIstCalendarDayLabel(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map((part) => Number(part));
+  if (!y || !m || !d) {
+    return ymd;
+  }
+  const utc = Date.UTC(y, m - 1, d, 5, 30);
+  return new Date(utc).toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
 }
 
 export function shiftIstCalendarYmdByDays(ymd: string, deltaDays: number): string {
@@ -293,6 +402,20 @@ function legExitPrice(leg: PaperTradeHistoryLeg): number | null {
   return price != null && price > 0 ? price : null;
 }
 
+/** Reject mock/seed marks (e.g. ₹100) on equity legs whose entry is in thousands. */
+export function paperTradePlausibleMark(entry: number, mark: number): boolean {
+  if (mark <= 0 || entry <= 0) {
+    return false;
+  }
+  if (entry <= 200) {
+    return true;
+  }
+  if (mark <= 150 && entry / mark > 3) {
+    return false;
+  }
+  return true;
+}
+
 /** Quantity-weighted average entry across legs (single-leg trades = that leg’s fill). */
 export function paperTradeEntryPrice(trade: PaperTradeHistoryItem): number | null {
   const legs = trade.legs ?? [];
@@ -322,13 +445,30 @@ export function paperTradeExitPrice(trade: PaperTradeHistoryItem): number | null
   let sum = 0;
   for (const leg of legs) {
     const exit = legExitPrice(leg);
-    if (exit == null) {
+    const entry = legEntryPrice(leg);
+    if (exit == null || entry == null || !paperTradePlausibleMark(entry, exit)) {
       continue;
     }
     sum += exit * leg.quantity;
     qty += leg.quantity;
   }
-  return qty > 0 ? sum / qty : null;
+  if (qty > 0) {
+    return sum / qty;
+  }
+  const entry = paperTradeEntryPrice(trade);
+  const reason = trade.exitReason?.toLowerCase() ?? '';
+  if (entry != null && trade.stopLoss && trade.stopLoss > 0 && reason.includes('stop')) {
+    return paperTradePlausibleMark(entry, trade.stopLoss) ? trade.stopLoss : null;
+  }
+  if (entry != null && trade.target && trade.target > 0 && reason.includes('target')) {
+    return paperTradePlausibleMark(entry, trade.target) ? trade.target : null;
+  }
+  return null;
+}
+
+/** Capital deployed at entry: Σ (qty × entry price) per leg. */
+export function paperTradeCapitalPrice(trade: PaperTradeHistoryItem): number {
+  return paperTradeEntryNotional(trade);
 }
 
 export function paperTradeStopLoss(trade: PaperTradeHistoryItem): number | null {
@@ -353,6 +493,123 @@ export function paperTradeCapitalUsed(trade: PaperTradeHistoryItem): number {
     const price = leg.entryPrice ?? leg.proposedPrice ?? 0;
     return sum + Math.abs(price * leg.quantity);
   }, 0);
+}
+
+export function paperTradeExecutedAt(trade: PaperTradeHistoryItem): string | null {
+  if (trade.openedAt) {
+    return trade.openedAt;
+  }
+  if (trade.status === 'OPEN' || trade.status === 'CLOSED') {
+    return trade.createdAt;
+  }
+  return null;
+}
+
+export function paperTradeClosedAt(trade: PaperTradeHistoryItem): string | null {
+  return trade.closedAt;
+}
+
+export function paperTradeQuantityTotal(trade: PaperTradeHistoryItem): number {
+  return (trade.legs ?? []).reduce((sum, leg) => sum + (leg.quantity ?? 0), 0);
+}
+
+export function paperTradeQuantityLabel(trade: PaperTradeHistoryItem): string {
+  const legs = trade.legs ?? [];
+  if (!legs.length) {
+    return '—';
+  }
+  if (legs.length === 1) {
+    return String(legs[0].quantity);
+  }
+  return String(paperTradeQuantityTotal(trade));
+}
+
+export function paperTradeQuantityTitle(trade: PaperTradeHistoryItem): string {
+  const legs = trade.legs ?? [];
+  if (!legs.length) {
+    return '';
+  }
+  return legs.map((leg) => `${leg.side} ${leg.symbol} × ${leg.quantity}`).join(' · ');
+}
+
+export function paperTradeDirectionShort(direction: string): string {
+  if (direction === 'BULLISH' || direction === 'LONG') {
+    return 'Bull';
+  }
+  if (direction === 'BEARISH' || direction === 'SHORT') {
+    return 'Bear';
+  }
+  return direction.length > 5 ? direction.slice(0, 5) : direction;
+}
+
+export function paperTradeLegPnl(leg: PaperTradeHistoryLeg): number | null {
+  const entry = legEntryPrice(leg);
+  const rawExit = legExitPrice(leg);
+  const exit =
+    entry != null && rawExit != null && paperTradePlausibleMark(entry, rawExit) ? rawExit : null;
+  if (entry == null || exit == null || entry <= 0 || exit <= 0) {
+    if (leg.pnl != null && Number.isFinite(leg.pnl)) {
+      return leg.pnl;
+    }
+    return null;
+  }
+  const move = leg.side === 'BUY' ? exit - entry : entry - exit;
+  return move * leg.quantity;
+}
+
+/** P&L from leg fills (entry/exit × qty); falls back to trade-level pnl when fills are missing. */
+export function paperTradeRealizedPnl(trade: PaperTradeHistoryItem): number | null {
+  const legs = trade.legs ?? [];
+  if (!legs.length) {
+    return trade.pnl;
+  }
+  let sum = 0;
+  let any = false;
+  for (const leg of legs) {
+    const legPnl = paperTradeLegPnl(leg);
+    if (legPnl != null) {
+      sum += legPnl;
+      any = true;
+    }
+  }
+  if (any) {
+    return sum;
+  }
+  return trade.pnl;
+}
+
+/** Notional at entry (₹) — sum of |entry × qty| across legs. */
+export function paperTradeEntryNotional(trade: PaperTradeHistoryItem): number {
+  const legs = trade.legs ?? [];
+  if (!legs.length) {
+    return 0;
+  }
+  return legs.reduce((sum, leg) => {
+    const entry = legEntryPrice(leg);
+    if (entry == null) {
+      return sum;
+    }
+    return sum + Math.abs(entry * leg.quantity);
+  }, 0);
+}
+
+export function paperTradeDurationLabel(trade: PaperTradeHistoryItem): string | null {
+  const start = paperTradeExecutedAt(trade);
+  const end = trade.closedAt;
+  if (!start || !end) {
+    return null;
+  }
+  const ms = Date.parse(end) - Date.parse(start);
+  if (!Number.isFinite(ms) || ms < 0) {
+    return null;
+  }
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) {
+    return `${mins} min`;
+  }
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`;
 }
 
 export function paperPositionCapitalUsed(
@@ -433,4 +690,15 @@ export function mergePaperPositions(agent: PaperPosition[] | undefined, history:
     return live;
   }
   return paperPositionsFromHistory(history);
+}
+
+/** True when the board row may show LTP (broker-verified or offline mock). */
+export function symbolHasVerifiedQuote(symbol: SymbolSnapshot | null | undefined): boolean {
+  if (!symbol) {
+    return false;
+  }
+  if (symbol.quoteVerified === false) {
+    return false;
+  }
+  return symbol.last > 0;
 }

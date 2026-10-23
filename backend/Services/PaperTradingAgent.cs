@@ -394,17 +394,14 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 }
                 foreach (var item in context.Where(x => x.InstrumentType != "OPTION")) _previous[item.Symbol] = item.Last;
                 var istDay = DateOnly.FromDateTime(nowIst.DateTime);
-                foreach (var item in context.Where(x => x.InstrumentType is "STOCK" or "INDEX"))
+                foreach (var item in context.Where(x => IndexUniverse.IsIndex(x.Symbol)))
                 {
                     if (ZoneRejectionPattern.TryReadZoneFact(item.Evidence.Facts, "B1=", out var b1)
                         && ZoneRejectionPattern.TryReadZoneFact(item.Evidence.Facts, "S1=", out var s1)
                         && ZoneRejectionPattern.TryReadZoneFact(item.Evidence.Facts, "S2=", out var s2))
                     {
                         _zoneBoardSessions.Update(item.Symbol, item.Last, b1, s1, s2, istDay);
-                        if (item.InstrumentType == "STOCK")
-                        {
-                            _zoneSessions.Update(item.Symbol, item.Last, b1, istDay);
-                        }
+                        _zoneSessions.Update(item.Symbol, item.Last, b1, istDay);
                     }
                 }
                 _updatedAt = now;
@@ -607,7 +604,8 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 {
                     continue;
                 }
-                if (IsZoneBoardStrategy(candidate.Strategy)
+                if ((IsZoneBoardStrategy(candidate.Strategy)
+                        || candidate.Strategy == ZoneRejectionPattern.B1RejectionToS2)
                     && !IndexUniverse.IndexNames.Contains(candidate.Underlying, StringComparer.OrdinalIgnoreCase))
                 {
                     continue;
@@ -825,11 +823,21 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 var quote = context.FirstOrDefault(x => x.Symbol.Equals(leg.Symbol, StringComparison.OrdinalIgnoreCase));
                 if (quote is not null && quote.Last > 0)
                 {
-                    leg.CurrentPrice = leg.OptionRight is null
+                    var mark = leg.OptionRight is null
                         ? quote.Last
                         : leg.Side == "BUY"
                             ? quote.Quote.Bid ?? quote.Last
                             : quote.Quote.Ask ?? quote.Last;
+                    if (leg.EntryPrice > 200m && mark <= 150m && leg.EntryPrice / mark > 3m)
+                    {
+                        continue;
+                    }
+
+                    leg.CurrentPrice = mark;
+                }
+                else if (leg.CurrentPrice <= 0 && leg.EntryPrice > 0)
+                {
+                    leg.CurrentPrice = leg.EntryPrice;
                 }
             }
             _history.UpdateLegMarks(position.Id, position.LegSnapshots());
@@ -914,6 +922,14 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
 
     private void CloseUnsafe(Position position, string reason)
     {
+        foreach (var leg in position.Legs)
+        {
+            if (leg.CurrentPrice <= 0 && leg.EntryPrice > 0)
+            {
+                leg.CurrentPrice = leg.EntryPrice;
+            }
+        }
+
         var pnl = PositionPnl(position);
         _realizedPnl += pnl;
         _closedTrades++;

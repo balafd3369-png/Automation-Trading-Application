@@ -162,6 +162,88 @@ export function parseDrawings(raw: string | null): ChartDrawing[] {
   }
 }
 
+/** Sort ascending, drop invalid OHLC, collapse duplicate timestamps (keep last). */
+export function normalizeChartCandles(candles: ChartBar[]): ChartBar[] {
+  const sorted = candles
+    .filter((c) => c.open > 0 && c.high >= c.low && Number.isFinite(c.time))
+    .sort((a, b) => a.time - b.time);
+  const out: ChartBar[] = [];
+  for (const candle of sorted) {
+    const last = out.at(-1);
+    if (last && last.time === candle.time) {
+      out[out.length - 1] = candle;
+    } else {
+      out.push(candle);
+    }
+  }
+  return out;
+}
+
+/**
+ * Combine chart API payloads without letting a short "today only" response erase multi-day history.
+ * Per-timestamp OHLC from `incoming` wins.
+ */
+function chartBarsSharePriceScale(cached: ChartBar[], incoming: ChartBar[]): boolean {
+  const prevClose = cached.at(-1)?.close ?? 0;
+  const nextClose = incoming[0]?.close ?? 0;
+  if (prevClose <= 0 || nextClose <= 0) {
+    return true;
+  }
+  const ratio = prevClose / nextClose;
+  return ratio >= 0.25 && ratio <= 4;
+}
+
+export function mergeChartCandlesStable(cached: ChartBar[], incoming: ChartBar[]): ChartBar[] {
+  const next = normalizeChartCandles(incoming);
+  if (!cached.length) {
+    return next;
+  }
+  const prev = normalizeChartCandles(cached);
+  if (!next.length) {
+    return prev;
+  }
+  if (!chartBarsSharePriceScale(prev, next)) {
+    return next;
+  }
+  if (next.length >= prev.length && next[0].time <= prev[0].time) {
+    return next;
+  }
+  const byTime = new Map<number, ChartBar>();
+  for (const bar of prev) {
+    byTime.set(bar.time, bar);
+  }
+  for (const bar of next) {
+    byTime.set(bar.time, bar);
+  }
+  return normalizeChartCandles([...byTime.values()]);
+}
+
+/** True when `next` only extends or revises the tail of `previous` (same prefix times). */
+export function chartCandlesTailOnlyChange(previous: ChartBar[], next: ChartBar[]): boolean {
+  if (!previous.length || next.length < previous.length || next.length > previous.length + 1) {
+    return false;
+  }
+  for (let i = 0; i < previous.length - 1; i++) {
+    if (previous[i].time !== next[i].time) {
+      return false;
+    }
+  }
+  if (next.length === previous.length) {
+    for (let i = 0; i < previous.length; i++) {
+      if (previous[i].time !== next[i].time) {
+        return false;
+      }
+    }
+    return true;
+  }
+  for (let i = 0; i < previous.length; i++) {
+    if (previous[i].time !== next[i].time) {
+      return false;
+    }
+  }
+  return next[next.length - 1].time > previous[previous.length - 1].time;
+}
+
 export function firstChangedCandle(previous: ChartBar[], next: ChartBar[]): number {
   if (previous.length === 0 || next.length < previous.length) {
     return 0;

@@ -10,6 +10,7 @@ public interface IBrokerMarketClient
 
     Task<IReadOnlyDictionary<string, QuoteSnap>> GetOhlcAsync(CancellationToken ct);
     Task<IReadOnlyDictionary<string, decimal>> GetLtpAsync(CancellationToken ct);
+    Task<IReadOnlyDictionary<string, decimal>> GetLtpForBoardNamesAsync(IReadOnlyList<string> boardNames, CancellationToken ct);
     Task<QuoteSnap?> GetBoardQuoteAsync(string boardName, CancellationToken ct);
     Task<OptionQuoteSnap?> GetOptionQuoteAsync(string underlying, DateTime expiry, decimal strike, string side, CancellationToken ct);
     Task<IReadOnlyList<OptionMarketQuote>> GetOptionQuotesAsync(IReadOnlyList<OptionQuoteRequest> contracts, CancellationToken ct);

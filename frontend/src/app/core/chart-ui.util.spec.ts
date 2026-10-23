@@ -1,8 +1,11 @@
 import { ChartBar } from './board.models';
 import {
   drawingStorageKey,
+  chartCandlesTailOnlyChange,
   firstChangedCandle,
   istDateTime,
+  mergeChartCandlesStable,
+  normalizeChartCandles,
   movingAverage,
   parseDrawings,
   sessionStartBars,
@@ -46,6 +49,44 @@ describe('chart UI utilities', () => {
       first[0].time,
       secondDay[0].time,
     ]);
+  });
+
+  it('does not merge candles when price scale changes (symbol switch)', () => {
+    const indexBars = bars([22_000, 22_100], 1_700_000_000);
+    const stockBars = bars([865, 870], 1_700_000_000);
+    const merged = mergeChartCandlesStable(indexBars, stockBars);
+    expect(merged).toEqual(stockBars);
+  });
+
+  it('keeps multi-day history when a short today-only payload arrives', () => {
+    const day1 = bars([10, 11, 12], 1_700_000_000);
+    const day2Start = day1[day1.length - 1].time + 86400;
+    const history = [...day1, ...bars([20, 21], day2Start)];
+    const todayOnly = bars([22, 23, 24], day2Start + 3600);
+    const merged = mergeChartCandlesStable(history, todayOnly);
+    expect(merged.length).toBeGreaterThan(todayOnly.length);
+    expect(merged[0].time).toBe(history[0].time);
+    expect(merged.at(-1)?.close).toBe(24);
+  });
+
+  it('normalizes duplicate timestamps and sorts candles', () => {
+    const bars = normalizeChartCandles([
+      { time: 200, open: 2, high: 3, low: 1, close: 2 },
+      { time: 100, open: 1, high: 2, low: 1, close: 1 },
+      { time: 200, open: 2, high: 4, low: 1, close: 3 },
+    ]);
+    expect(bars.map((bar) => bar.time)).toEqual([100, 200]);
+    expect(bars[1].close).toBe(3);
+  });
+
+  it('detects tail-only candle updates', () => {
+    const previous = bars([10, 20]);
+    const tailRevise = bars([10, 21]);
+    const append = [...bars([10, 20]), bars([30], previous[1].time + 60)[0]];
+    const shifted = bars([11, 21], previous[0].time + 120);
+    expect(chartCandlesTailOnlyChange(previous, tailRevise)).toBeTrue();
+    expect(chartCandlesTailOnlyChange(previous, append)).toBeTrue();
+    expect(chartCandlesTailOnlyChange(previous, shifted)).toBeFalse();
   });
 
   it('finds the first changed candle without treating an append as a full reset', () => {

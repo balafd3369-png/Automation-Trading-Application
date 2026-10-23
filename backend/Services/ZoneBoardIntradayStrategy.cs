@@ -5,7 +5,7 @@ using TradeWithBeast.Models;
 namespace TradeWithBeast.Services;
 
 /// <summary>
-/// Image-based zone board: buy on B1/S2 setups, sell on S1/B1 rejection; exit at target or pivot stop (S).
+/// Image-based zone board on indices only: option legs (CE/PE) on B1/S1/S2 setups.
 /// </summary>
 public sealed class ZoneBoardIntradayStrategy(ZoneBoardSessionTracker sessions) : IPaperStrategy
 {
@@ -16,7 +16,7 @@ public sealed class ZoneBoardIntradayStrategy(ZoneBoardSessionTracker sessions) 
         var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
         var istDay = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ist).DateTime);
 
-        foreach (var item in context.Where(x => x.InstrumentType is "STOCK" or "INDEX"))
+        foreach (var item in context.Where(x => IndexUniverse.IsIndex(x.Symbol)))
         {
             if (!TryZones(item.Evidence.Facts, out var b2, out var b1, out var pivot, out var s1, out var s2))
             {
@@ -38,8 +38,7 @@ public sealed class ZoneBoardIntradayStrategy(ZoneBoardSessionTracker sessions) 
 
             if (sessions.TryTakeCross(item.Symbol, istDay, ZoneBoardPattern.B1BreakLong, prior, item.Last, b1, s1))
             {
-                if (IndexUniverse.IsIndex(item.Symbol)
-                    && TryIndexZoneOptions(
+                if (TryIndexZoneOptions(
                         item,
                         context,
                         "BULLISH",
@@ -53,21 +52,11 @@ public sealed class ZoneBoardIntradayStrategy(ZoneBoardSessionTracker sessions) 
                 {
                     yield return b1Index;
                 }
-                else if (TryLong(item, b1, pivot, b2, ZoneBoardPattern.B1BreakLong,
-                        $"5m-style cross above B1 {b1:0.##} (buy zone)",
-                        $"target B2 {b2:0.##}",
-                        $"stop pivot S {pivot:0.##}",
-                        "exit: target B2 or stop at S / 15:20 square-off",
-                        out var b1Long))
-                {
-                    yield return b1Long;
-                }
             }
 
             if (sessions.TryTakeCross(item.Symbol, istDay, ZoneBoardPattern.S1BreakShort, prior, item.Last, b1, s1))
             {
-                if (IndexUniverse.IsIndex(item.Symbol)
-                    && TryIndexZoneOptions(
+                if (TryIndexZoneOptions(
                         item,
                         context,
                         "BEARISH",
@@ -81,21 +70,11 @@ public sealed class ZoneBoardIntradayStrategy(ZoneBoardSessionTracker sessions) 
                 {
                     yield return s1Index;
                 }
-                else if (TryShort(item, s1, pivot, s2, ZoneBoardPattern.S1BreakShort,
-                        $"cross below S1 {s1:0.##} (sell zone)",
-                        $"target S2 {s2:0.##}",
-                        $"stop pivot S {pivot:0.##}",
-                        "exit: target S2 or stop at S / 15:20 square-off",
-                        out var s1Short))
-                {
-                    yield return s1Short;
-                }
             }
 
             if (sessions.TryTakeS2Bounce(item.Symbol, istDay, prior, item.Last, s2))
             {
-                if (IndexUniverse.IsIndex(item.Symbol)
-                    && TryIndexZoneOptions(
+                if (TryIndexZoneOptions(
                         item,
                         context,
                         "BULLISH",
@@ -108,16 +87,6 @@ public sealed class ZoneBoardIntradayStrategy(ZoneBoardSessionTracker sessions) 
                         out var s2Index))
                 {
                     yield return s2Index;
-                }
-                else if (TryLong(item, s2, Math.Min(s2, item.Last) * (1m - ZoneBoardPattern.TouchTolerance), b1,
-                        ZoneBoardPattern.S2BounceLong,
-                        $"S2 support touch then reclaim {s2:0.##}",
-                        $"target B1 {b1:0.##}",
-                        $"stop below S2",
-                        "exit: target B1 or stop under S2 / 15:20 square-off",
-                        out var s2Long))
-                {
-                    yield return s2Long;
                 }
             }
         }
@@ -185,86 +154,6 @@ public sealed class ZoneBoardIntradayStrategy(ZoneBoardSessionTracker sessions) 
             legs.Max(l => l.Quote is null || l.Quote.DataTimestamp == default
                 ? DateTimeOffset.UtcNow
                 : l.Quote.DataTimestamp));
-        return true;
-    }
-
-    private static bool TryLong(
-        MarketContextSnapshot item,
-        decimal entryRef,
-        decimal stop,
-        decimal target,
-        string strategy,
-        string trigger,
-        string targetNote,
-        string stopNote,
-        string exitNote,
-        out StrategyCandidate candidate)
-    {
-        candidate = null!;
-        var entry = item.Last;
-        var risk = entry - stop;
-        var reward = target - entry;
-        if (risk <= 0 || reward <= 0 || entry <= entryRef)
-        {
-            return false;
-        }
-
-        var score = 62m;
-        if (item.Evidence.Trend == "UP") score += 8m;
-        if (item.Evidence.MomentumPercent > 0) score += 5m;
-
-        candidate = new StrategyCandidate(
-            strategy,
-            item.Symbol,
-            "BULLISH",
-            score,
-            [trigger, targetNote, stopNote, exitNote, $"zone={item.Evidence.Zone}"],
-            [new(item.Symbol, item.Symbol, item.InstrumentType, "BUY", 1, entry, Quote: item.Quote)],
-            stop,
-            target,
-            risk,
-            reward,
-            item.Quote.DataTimestamp);
-        return true;
-    }
-
-    private static bool TryShort(
-        MarketContextSnapshot item,
-        decimal entryRef,
-        decimal stop,
-        decimal target,
-        string strategy,
-        string trigger,
-        string targetNote,
-        string stopNote,
-        string exitNote,
-        out StrategyCandidate candidate)
-    {
-        candidate = null!;
-        var entry = item.Last;
-        var risk = stop - entry;
-        var reward = entry - target;
-        if (risk <= 0 || reward <= 0 || entry >= entryRef)
-        {
-            return false;
-        }
-
-        var score = 62m;
-        if (item.Evidence.Trend == "DOWN") score += 8m;
-        if (item.Evidence.MomentumPercent < 0) score += 5m;
-
-        candidate = new StrategyCandidate(
-            strategy,
-            item.Symbol,
-            "BEARISH",
-            score,
-            [trigger, targetNote, stopNote, exitNote, $"zone={item.Evidence.Zone}"],
-            [new(item.Symbol, item.Symbol, item.InstrumentType, "SELL", 1, entry, Quote: item.Quote)],
-            stop,
-            target,
-            risk,
-            reward,
-            item.Quote.DataTimestamp);
         return true;
     }
 

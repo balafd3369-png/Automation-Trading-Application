@@ -63,7 +63,7 @@ public sealed class StrategyRecommendationEngine(
                 live.Add(ToRecommendation(lift, symbol.Name, isIndex, now, board));
             }
 
-            if (!isIndex && zoneSessions.HasPendingRejection(symbol.Name, istDay))
+            if (isIndex && zoneSessions.HasPendingRejection(symbol.Name, istDay))
             {
                 if (TryBuildB1Recommendation(symbol, chart, istDay, now, out var b1Rec) && b1Rec is not null)
                 {

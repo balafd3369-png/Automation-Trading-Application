@@ -50,4 +50,29 @@ public sealed class IndexUniverseTests
     {
         Assert.Contains("NSE:RELIANCE-EQ", IndexUniverse.QuoteKeys["RELIANCE"]);
     }
+
+    [Fact]
+    public void QuoteKeys_maps_tatamotors_to_post_demerger_nse_symbols()
+    {
+        var keys = IndexUniverse.QuoteKeys["TATAMOTORS"];
+        Assert.Contains("NSE:TMCV-EQ", keys);
+        Assert.Contains("NSE:TMPV-EQ", keys);
+    }
+
+    [Fact]
+    public void QuoteKeys_maps_icicipruli_with_eq_alias_fallback()
+    {
+        var keys = IndexUniverse.QuoteKeys["ICICIPRULI"];
+        Assert.Contains("NSE:ICICIPRULI-EQ", keys);
+        Assert.Contains("NSE:ICICIPRULI", keys);
+    }
+
+    [Theory]
+    [InlineData("NSE:ICICIPRULI-EQ", "ICICIPRULI")]
+    [InlineData("NSE:RELIANCE-EQ", "RELIANCE")]
+    public void TryResolveBoardFromInstrumentKey_maps_nse_eq_keys(string instrumentKey, string expected)
+    {
+        Assert.True(IndexUniverse.TryResolveBoardFromInstrumentKey(instrumentKey, out var boardName));
+        Assert.Equal(expected, boardName, ignoreCase: true);
+    }
 }

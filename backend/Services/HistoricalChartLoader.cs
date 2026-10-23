@@ -87,7 +87,7 @@ internal static class HistoricalChartLoader
         int chunkCalendarDays,
         CancellationToken ct)
     {
-        var merged = new Dictionary<long, DayCandle>();
+        var ranges = new List<(DateTimeOffset From, DateTimeOffset To)>();
         var cursor = fromIst;
         while (cursor < toIst)
         {
@@ -97,26 +97,45 @@ internal static class HistoricalChartLoader
                 chunkEnd = toIst;
             }
 
-            var chunk = await FetchChunkAsync(
-                broker,
-                boardName,
-                exchange,
-                instrumentToken,
-                interval,
-                cursor,
-                chunkEnd,
-                ct);
-            foreach (var candle in chunk)
-            {
-                merged[candle.Time.ToUnixTimeSeconds()] = candle;
-            }
-
+            ranges.Add((cursor, chunkEnd));
             if (chunkEnd <= cursor)
             {
                 break;
             }
 
             cursor = chunkEnd;
+        }
+
+        if (ranges.Count == 0)
+        {
+            return [];
+        }
+
+        const int maxParallel = 3;
+        var merged = new Dictionary<long, DayCandle>();
+        for (var i = 0; i < ranges.Count; i += maxParallel)
+        {
+            ct.ThrowIfCancellationRequested();
+            var batch = ranges.Skip(i).Take(maxParallel);
+            var tasks = batch
+                .Select(r => FetchChunkAsync(
+                    broker,
+                    boardName,
+                    exchange,
+                    instrumentToken,
+                    interval,
+                    r.From,
+                    r.To,
+                    ct))
+                .ToList();
+            var chunks = await Task.WhenAll(tasks);
+            foreach (var chunk in chunks)
+            {
+                foreach (var candle in chunk)
+                {
+                    merged[candle.Time.ToUnixTimeSeconds()] = candle;
+                }
+            }
         }
 
         return merged.Values.OrderBy(c => c.Time).ToList();

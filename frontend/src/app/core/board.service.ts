@@ -53,12 +53,17 @@ export class BoardService {
     );
   }
 
-  chart(name: string, interval = '5minute'): Observable<ChartResponse> {
+  chart(
+    name: string,
+    interval = '5minute',
+    depth: 'fast' | 'full' = 'full',
+  ): Observable<ChartResponse> {
+    const waitMs = depth === 'fast' ? 12_000 : 25_000;
     return this.http
       .get<ChartResponse>(`/api/board/chart/${encodeURIComponent(name)}`, {
-        params: { interval },
+        params: { interval, depth },
       })
-      .pipe(timeout(18_000));
+      .pipe(timeout(waitMs));
   }
 
   optionChart(

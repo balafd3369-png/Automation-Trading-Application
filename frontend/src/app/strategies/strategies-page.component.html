@@ -1,85 +1,226 @@
-<section class="strategies-page" aria-label="Live strategy recommendations">
-  <header class="strategies-hero">
-    <div>
-      <h1>Strategies</h1>
-      <p>Live 15m signals (09:20–15:10 IST). Zone strategies roll out in phases: monitor → paper auto → verify P&amp;L here before live.</p>
-    </div>
-    @if (feed?.updatedAt) {
-      <small class="feed-updated">Updated {{ feed!.updatedAt | date: 'HH:mm:ss':'+0530' }} IST</small>
-    }
-  </header>
-
+<section class="strategies-page twb-aurora-page" aria-label="Live strategy recommendations">
   @if (paperMessage) {
     <p class="paper-action-msg">{{ paperMessage }}</p>
   }
 
-  @if (zoneRollout) {
-    <section class="zone-rollout-board" aria-label="Zone strategy rollout">
-      <header class="zone-rollout-head">
-        <div>
-          <h2>Rollout policy</h2>
-          <p>
-            Based on {{ zoneRollout.lookbackDays }}d backtest (≥{{ zoneRollout.minWinRatePercent }}% win, ≥{{ zoneRollout.minSamples }} samples).
+  <details class="zone-rollout-board" aria-label="Strategies auto traded">
+    <summary class="zone-rollout-summary">
+      <span class="zone-rollout-summary-title">Strategies Auto Traded</span>
+      <span class="zone-rollout-summary-hint">
+        @if (zoneRollout) {
+          {{ autoTradedSummaryHint() }} · tap to expand
+        } @else {
+          Loading rollout policy…
+        }
+      </span>
+    </summary>
+    @if (zoneRollout) {
+      <div class="zone-rollout-body">
+        <header class="zone-rollout-head">
+          <p class="zone-rollout-intro">
+            Paper auto-admit is ON for the setups below. Zone board and index B1 are indices only; Ten AM runs on indices, options, and Nifty 50 stocks.
             {{ zoneRollout.liveTradingNote }}
           </p>
-        </div>
-        <small class="zone-rollout-version">Policy {{ zoneRollout.policyVersion }}</small>
-      </header>
-      <div class="strategy-pnl-table-wrap">
-        <table class="strategy-pnl-table zone-rollout-table">
-          <thead>
-            <tr>
-              <th scope="col">Strategy</th>
-              <th scope="col">Index</th>
-              <th scope="col">Phase</th>
-              <th scope="col">Why</th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (row of zoneRollout.rows; track row.strategyCode + row.index) {
+          <small class="zone-rollout-version">Policy {{ zoneRollout.policyVersion }}</small>
+        </header>
+
+        <h3 class="zone-rollout-subhead">Catalog strategies (paper auto)</h3>
+        <div class="strategy-pnl-table-wrap">
+          <table class="strategy-pnl-table zone-rollout-table zone-auto-table">
+            <colgroup>
+              <col class="col-strategy" />
+              <col class="col-universe" />
+              <col class="col-phase-sm" />
+            </colgroup>
+            <thead>
               <tr>
-                <td>{{ row.strategyLabel }}</td>
-                <td>{{ row.index }}</td>
-                <td>
-                  <span class="rollout-phase" [class.rollout-phase-auto]="row.phase === 'paper_auto'" [class.rollout-phase-monitor]="row.phase === 'monitor'">
-                    {{ rolloutPhaseLabel(row.phase) }}
-                  </span>
-                </td>
-                <td class="rollout-reason">{{ row.reason }}</td>
+                <th scope="col">Strategy</th>
+                <th scope="col">Universe</th>
+                <th scope="col">Status</th>
               </tr>
-            }
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              @for (entry of catalogPaperAutoEntries; track entry.id) {
+                <tr>
+                  <td>{{ entry.label }}</td>
+                  <td class="rollout-universe">{{ entry.universe }}</td>
+                  <td><span class="rollout-phase rollout-phase-auto">Paper auto</span></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="zone-rollout-subhead">Zone board (paper auto by index)</h3>
+        <div class="strategy-pnl-table-wrap">
+          <table class="strategy-pnl-table zone-rollout-table zone-auto-table">
+            <colgroup>
+              <col class="col-strategy" />
+              <col class="col-index" />
+              <col class="col-phase-sm" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Strategy</th>
+                <th scope="col">Index</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of zonePaperAutoRowsCache; track row.strategyCode + row.index) {
+                <tr>
+                  <td>{{ row.strategyLabel }}</td>
+                  <td class="rollout-index">{{ row.index }}</td>
+                  <td><span class="rollout-phase rollout-phase-auto">{{ rolloutPhaseLabel(row.phase) }}</span></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        @if (zoneMonitorRowsCache.length) {
+          <details class="zone-monitor-details">
+            <summary>Monitor only (not auto) — {{ zoneMonitorRowsCache.length }} zone setups</summary>
+            <div class="strategy-pnl-table-wrap">
+              <table class="strategy-pnl-table zone-rollout-table zone-auto-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Strategy</th>
+                    <th scope="col">Index</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Why</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (row of zoneMonitorRowsCache; track row.strategyCode + row.index) {
+                    <tr>
+                      <td>{{ row.strategyLabel }}</td>
+                      <td class="rollout-index">{{ row.index }}</td>
+                      <td><span class="rollout-phase rollout-phase-monitor">{{ rolloutPhaseLabel(row.phase) }}</span></td>
+                      <td class="rollout-reason">{{ row.reason }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </details>
+        }
       </div>
-    </section>
-  }
+    } @else {
+      <p class="zone-rollout-loading">Fetching which strategies are on paper auto…</p>
+    }
+  </details>
 
   <section class="strategy-pnl-board" aria-label="Profit and loss by strategy">
     <header class="strategy-pnl-head">
-      <div>
-        <h2>P&amp;L by strategy</h2>
-        <p>Paper trades grouped by the strategy that executed them. More analytics will be added here later.</p>
+      <div class="strategy-pnl-head-copy">
+        <div class="strategy-pnl-title-wrap">
+          <h2 class="strategy-pnl-title">P&amp;L by strategy</h2>
+          <span class="strategy-pnl-period">{{ pnlPeriodLabel() }}</span>
+        </div>
+        <p>All catalog strategies; 0 means no trades in this period. Paper auto setups are listed under Strategies Auto Traded above.</p>
       </div>
-      <div class="strategy-pnl-range" role="group" aria-label="Time range">
-        <button type="button" [class.active]="pnlRange === 'today'" (click)="setPnlRange('today')">1 Day</button>
-        <button type="button" [class.active]="pnlRange === '1w'" (click)="setPnlRange('1w')">1 Week</button>
-        <button type="button" [class.active]="pnlRange === '1m'" (click)="setPnlRange('1m')">1 Month</button>
+      <div class="strategy-pnl-range-block">
+        <div class="strategy-pnl-range" role="group" aria-label="Time range">
+          <button type="button" [class.active]="pnlRange === 'today' && !pnlDateFilterActive()" (click)="setPnlRange('today')">1 Day</button>
+          <button type="button" [class.active]="pnlRange === '1w' && !pnlDateFilterActive()" (click)="setPnlRange('1w')">1 Week</button>
+          <button type="button" [class.active]="pnlRange === '1m' && !pnlDateFilterActive()" (click)="setPnlRange('1m')">1 Month</button>
+          <button
+            type="button"
+            class="strategy-pnl-range-custom"
+            [class.active]="pnlCustomDateOpen || pnlDateFilterActive()"
+            (click)="openPnlCustomDate()"
+          >
+            Custom date
+          </button>
+        </div>
+        @if (pnlCustomDateOpen) {
+          <div class="strategy-pnl-date-bar">
+            <label class="strategy-pnl-date-field">
+              <span>From (IST)</span>
+              <input
+                type="date"
+                class="strategy-pnl-date-input"
+                data-pnl-from="1"
+                [ngModel]="pnlDateFrom"
+                (ngModelChange)="onPnlDateFromChange($event)"
+                [max]="pnlTodayIstYmd()"
+                aria-label="P and L start date"
+              />
+            </label>
+            <label class="strategy-pnl-date-field">
+              <span>To (optional)</span>
+              <input
+                type="date"
+                class="strategy-pnl-date-input"
+                [ngModel]="pnlDateTo"
+                (ngModelChange)="onPnlDateToChange($event)"
+                [min]="pnlDateFrom || ''"
+                [max]="pnlTodayIstYmd()"
+                aria-label="P and L end date"
+              />
+            </label>
+            @if (pnlDateFilterActive()) {
+              <span class="strategy-pnl-date-active">{{ pnlDateFilterLabel() }}</span>
+              <button type="button" class="strategy-pnl-date-clear" (click)="clearPnlDateFilter()">Clear dates</button>
+            } @else {
+              <span class="strategy-pnl-date-prompt">Choose a start date — totals and the table update for that IST range.</span>
+            }
+          </div>
+        }
       </div>
     </header>
-    <div class="strategy-pnl-summary">
-      <span>Realized P&amp;L <b [class.up]="strategyPnlSummary().realizedPnl >= 0" [class.down]="strategyPnlSummary().realizedPnl < 0">₹{{ strategyPnlSummary().realizedPnl | number: '1.2-2' }}</b></span>
-      <span>Closed <b>{{ strategyPnlSummary().closedTrades }}</b></span>
-      <span>Positive <b class="up">{{ strategyPnlSummary().winningTrades }}</b></span>
-      <span>Losses <b class="down">{{ strategyPnlSummary().losingTrades }}</b></span>
-      <span>Open <b>{{ strategyPnlSummary().openTrades }}</b></span>
+    @if (!pnlAwaitingCustomDate()) {
+    <div class="strategy-pnl-summary" role="group" aria-label="Period totals">
+      <div class="strategy-pnl-stat strategy-pnl-stat-primary">
+        <span class="strategy-pnl-stat-label">Realized P&amp;L</span>
+        <span
+          class="strategy-pnl-stat-value strategy-pnl-realized-total"
+          [class.up]="pnlSummary.realizedPnl > 0"
+          [class.down]="pnlSummary.realizedPnl < 0"
+          [class.flat]="pnlSummary.realizedPnl === 0"
+        >₹{{ pnlSummary.realizedPnl | number: '1.2-2' }}</span>
+      </div>
+      <div class="strategy-pnl-stat">
+        <span class="strategy-pnl-stat-label">Closed</span>
+        <span class="strategy-pnl-stat-value">{{ pnlSummary.closedTrades }}</span>
+      </div>
+      <div class="strategy-pnl-stat">
+        <span class="strategy-pnl-stat-label">Positive</span>
+        <span class="strategy-pnl-stat-value up">{{ pnlSummary.winningTrades }}</span>
+      </div>
+      <div class="strategy-pnl-stat">
+        <span class="strategy-pnl-stat-label">Losses</span>
+        <span class="strategy-pnl-stat-value down">{{ pnlSummary.losingTrades }}</span>
+      </div>
+      <div class="strategy-pnl-stat">
+        <span class="strategy-pnl-stat-label">Open</span>
+        <span class="strategy-pnl-stat-value">{{ pnlSummary.openTrades }}</span>
+      </div>
     </div>
-    @if (pnlLoading && !strategyPnlBreakdown().length) {
-      <p class="strategies-msg">Loading strategy P&amp;L…</p>
-    } @else if (!strategyPnlBreakdown().length) {
-      <p class="strategies-msg">No catalog strategy trades in this period.</p>
+    @if (pnlShowEmptyHint()) {
+      <div class="strategy-pnl-empty-hint" role="status">
+        <p>{{ pnlEmptyHint() }}</p>
+        @if (!pnlLoadError && (pnlRange === 'today' || pnlRange === '1w')) {
+          <button type="button" class="strategy-pnl-range-jump" (click)="showPnlQuickMonth()">Show 1 Month</button>
+        }
+      </div>
+    }
+    }
+    @if (pnlAwaitingCustomDate()) {
+      <p class="strategies-msg">Select a <strong>From</strong> date above to see strategy P&amp;L for that period.</p>
+    } @else if (pnlLoading && !pnlBreakdown.length) {
+      <p class="strategies-msg strategies-msg-inline" aria-busy="true">Updating strategy P&amp;L…</p>
+    } @else if (!pnlBreakdown.length) {
+      <p class="strategies-msg">No strategy data for this period.</p>
     } @else {
       <div class="strategy-pnl-table-wrap">
         <table class="strategy-pnl-table">
+          <colgroup>
+            <col class="col-strategy" />
+            <col class="col-metric" span="4" />
+            <col class="col-pnl" />
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">Strategy</th>
@@ -91,28 +232,40 @@
             </tr>
           </thead>
           <tbody>
-            @for (row of strategyPnlBreakdown(); track row.strategy) {
+            @for (row of pnlBreakdown; track row.strategy) {
               <tr
                 class="strategy-pnl-row"
-                [class.active]="strategyPnlFilter === row.strategy"
+                [class.active]="isStrategyFocusedInPaper(row.strategy)"
                 [class.strategy-pnl-row-win]="row.realizedPnl > 0"
                 [class.strategy-pnl-row-loss]="row.realizedPnl < 0"
+                [class.strategy-pnl-row-idle]="row.closed === 0 && row.open === 0"
               >
                 <td>
                   <button
                     type="button"
                     class="strategy-pnl-name"
                     [title]="row.strategy"
-                    (click)="toggleStrategyPnlFilter(row.strategy)"
+                    (click)="openStrategyInPaperTrading(row.strategy)"
                   >
                     {{ row.label }}
                   </button>
+                  @if (strategyRowPaperAutoLabel(row.strategy); as autoLabel) {
+                    <span
+                      class="strategy-pnl-auto-pill"
+                      [class.strategy-pnl-auto-pill-monitor]="autoLabel === 'Monitor only'"
+                    >{{ autoLabel }}</span>
+                  }
                 </td>
                 <td class="num">{{ row.closed }}</td>
                 <td class="num up">{{ row.wins }}</td>
                 <td class="num down">{{ row.losses }}</td>
                 <td class="num">{{ row.open }}</td>
-                <td class="num strategy-pnl-amount" [class.up]="row.realizedPnl > 0" [class.down]="row.realizedPnl < 0">
+                <td
+                  class="num strategy-pnl-amount"
+                  [class.up]="row.realizedPnl > 0"
+                  [class.down]="row.realizedPnl < 0"
+                  [class.flat]="row.realizedPnl === 0"
+                >
                   {{ row.realizedPnl | number: '1.2-2' }}
                 </td>
               </tr>
@@ -120,25 +273,7 @@
           </tbody>
         </table>
       </div>
-      @if (strategyPnlFilter) {
-        <div class="strategy-pnl-preview-head">
-          <strong>Trades · {{ strategyFilterLabel() }}</strong>
-          <button type="button" class="strategy-pnl-clear" (click)="clearStrategyPnlFilter()">Clear filter</button>
-        </div>
-        <ul class="strategy-pnl-preview">
-          @for (t of strategyPnlTradesPreview(); track t.id) {
-            <li>
-              <strong>{{ t.underlying }}</strong>
-              · {{ t.status }}
-              @if (t.pnl != null) {
-                · P&amp;L <span [class.up]="t.pnl > 0" [class.down]="t.pnl < 0">₹{{ t.pnl | number: '1.2-2' }}</span>
-              }
-              @if (t.exitReason) { · {{ t.exitReason }} }
-            </li>
-          }
-        </ul>
-        <p class="strategy-pnl-footnote">Full trade log with dates and qty is under <strong>Trade Details → Trade History</strong>.</p>
-      }
+      <p class="strategy-pnl-footnote">Click a strategy name to open its paper trades under <strong>Trade Details → Paper Trading</strong> (same period as above).</p>
     }
   </section>
 
@@ -149,11 +284,11 @@
   } @else {
     <section class="live-section" aria-label="Live recommendations">
       <h2>Live now</h2>
-      @if (liveRecommendations().length === 0) {
+      @if (liveRecommendationsCache.length === 0) {
         <p class="live-empty">No strategy is firing right now. This page refreshes every few seconds during the session.</p>
       } @else {
         <div class="live-grid">
-          @for (rec of liveRecommendations(); track rec.id) {
+          @for (rec of liveRecommendationsCache; track rec.id) {
             <article class="live-card">
               <header>
                 <span class="live-badge">Happening now</span>

@@ -5,6 +5,7 @@ import {
   brokerOtpSendSucceeded,
   preserveBrokerOtpEntry,
   syncLiveCandle,
+  symbolHasVerifiedQuote,
   tone,
 } from './trading-ui.util';
 
@@ -57,6 +58,13 @@ describe('trading-ui.util', () => {
     expect(synced!.isNew).toBeFalse();
   });
 
+  it('does not synthesize a lone intraday bar after the previous session day', () => {
+    const lastOct22 = Math.floor(Date.parse('2026-10-22T15:25:00+05:30') / 1000);
+    const oct23Morning = Math.floor(Date.parse('2026-10-23T10:05:00+05:30') / 1000);
+    const candles = [{ time: lastOct22, open: 22500, high: 22550, low: 22480, close: 22510 }];
+    expect(syncLiveCandle(candles, 22492.1, '5minute', oct23Morning)).toBeNull();
+  });
+
   it('does not append overnight candles before the next session open', () => {
     const lastSept29 = Math.floor(Date.parse('2026-09-29T15:25:00+05:30') / 1000);
     const midnightSept30 = Math.floor(Date.parse('2026-09-30T00:15:00+05:30') / 1000);
@@ -76,5 +84,16 @@ describe('trading-ui.util', () => {
   it('returns up tone when last is above base', () => {
     const upRow = { ...row, last: row.todayOpen + 10 };
     expect(tone(upRow)).toBe('up');
+  });
+
+  it('symbolHasVerifiedQuote rejects unverified broker rows', () => {
+    expect(
+      symbolHasVerifiedQuote({
+        ...row,
+        last: 100,
+        quoteVerified: false,
+      }),
+    ).toBeFalse();
+    expect(symbolHasVerifiedQuote({ ...row, last: 612, quoteVerified: true })).toBeTrue();
   });
 });

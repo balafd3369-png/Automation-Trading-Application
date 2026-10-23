@@ -60,6 +60,7 @@ public sealed class MStockOrderClientTests
             factory,
             new MStockOptions { ApiKey = "api-key", RestBaseUrl = "https://api.mstock.trade" },
             sessions,
+            new MStockLoginContext(),
             NullLogger<MStockOrderClient>.Instance);
     }
 

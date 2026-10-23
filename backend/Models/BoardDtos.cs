@@ -32,7 +32,8 @@ public sealed record SymbolSnapshot(
     decimal? Ask = null,
     long? Volume = null,
     long? OpenInterest = null,
-    DateTimeOffset? DataTimestamp = null);
+    DateTimeOffset? DataTimestamp = null,
+    bool QuoteVerified = true);
 
 public sealed record ChartBar(long Time, decimal Open, decimal High, decimal Low, decimal Close);
 
