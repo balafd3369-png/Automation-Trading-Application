@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { ChartResponse } from './board.models';
 
-const STORAGE_KEY = 'twb.chart.v1';
+const STORAGE_KEY = 'twb.chart.v2';
 const MAX_ENTRIES = 24;
 const MAX_BAR_COUNT = 3_000;
 const MAX_AGE_MS = 10 * 24 * 60 * 60 * 1000;

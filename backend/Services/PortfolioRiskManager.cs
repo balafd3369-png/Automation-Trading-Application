@@ -18,16 +18,7 @@ public sealed record RiskAssessment(
 
 public sealed class PortfolioRiskManager
 {
-    private static readonly IReadOnlyDictionary<string, int> Lots =
-        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["NIFTY"] = 65,
-            ["BANKNIFTY"] = 30,
-            ["FINNIFTY"] = 60,
-            ["SENSEX"] = 20,
-        };
-
-    public static int LotSize(string underlying) => Lots.TryGetValue(underlying, out var lot) ? lot : 1;
+    public static int LotSize(string underlying) => InstrumentLotMetadata.LotSize(underlying);
 
     public RiskAssessment Assess(
         StrategyCandidate candidate,
@@ -202,6 +193,26 @@ public sealed class PortfolioRiskManager
         }
         var riskPerLot = candidate.MaxRiskPerUnit * lot;
         var debitPerUnit = Math.Max(0, candidate.Legs.Sum(x => (x.Side == "BUY" ? 1m : -1m) * x.Price * x.Ratio));
+        if (paperTrading)
+        {
+            var entryPrice = debitPerUnit > 0 ? debitPerUnit : candidate.Legs[0].Price;
+            var totalQty = PaperTradeEconomics.SizeLegQuantity(capitalBudget, entryPrice, lot);
+            if (totalQty <= 0)
+            {
+                rejections.Add("insufficient capital for entry size");
+            }
+
+            var lotsFilled = lot > 1 ? totalQty / lot : totalQty;
+            var capitalRequired = PaperTradeEconomics.CapitalDeployed(totalQty, entryPrice);
+            return new(
+                rejections.Count == 0,
+                Math.Max(0, totalQty),
+                Math.Max(0, lotsFilled) * riskPerLot,
+                Math.Max(0, lotsFilled) * candidate.MaxRewardPerUnit * lot,
+                capitalRequired,
+                rejections);
+        }
+
         var capitalPerLot = Math.Max(riskPerLot, debitPerUnit * lot);
         var byRisk = riskPerLot > 0 ? (int)Math.Floor(riskBudget / riskPerLot) : 0;
         var byCapital = capitalPerLot > 0 ? (int)Math.Floor(capitalBudget / capitalPerLot) : 0;

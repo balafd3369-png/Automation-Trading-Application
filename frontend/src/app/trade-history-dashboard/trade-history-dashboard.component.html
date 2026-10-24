@@ -1,0 +1,539 @@
+@if (loading) {
+  <div class="thd-skeleton" aria-busy="true" aria-label="Loading performance analytics">
+    <div class="thd-skeleton-cards"></div>
+    <div class="thd-skeleton-charts"></div>
+    <div class="thd-skeleton-table"></div>
+  </div>
+} @else {
+  @if (analytics; as a) {
+  <div class="thd-root">
+    <div class="thd-source-bar">
+      <span class="thd-source-bar-label">Source</span>
+      <div class="thd-source-filter" role="group" aria-label="Trade source">
+        <button type="button" [class.active]="sourceFilter === 'all'" (click)="setSourceFilter('all')">All</button>
+        <button type="button" [class.active]="sourceFilter === 'paper'" (click)="setSourceFilter('paper')">Paper</button>
+        <button type="button" [class.active]="sourceFilter === 'live'" (click)="setSourceFilter('live')">Live</button>
+      </div>
+    </div>
+
+    <section
+      class="thd-overview thd-analytics-widget"
+      [class.thd-widget-transitioning]="widgetTransitioning"
+      aria-labelledby="thd-overview-title"
+    >
+      <div class="thd-widget-watermark" aria-hidden="true">
+        <svg class="thd-watermark-svg" viewBox="0 0 960 220" preserveAspectRatio="xMidYMid slice">
+          @for (c of [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]; track c) {
+            <g [attr.transform]="'translate(' + (c * 58) + ',0)'">
+              <line x1="20" x2="20" y1="40" y2="180" stroke="currentColor" stroke-width="1" />
+              <rect x="12" y="70" width="16" height="60" fill="currentColor" opacity="0.9" />
+              <rect x="12" y="50" width="16" height="25" fill="currentColor" opacity="0.5" />
+            </g>
+          }
+        </svg>
+      </div>
+
+      <div class="thd-overview-head thd-widget-head">
+        <div>
+          <h2 id="thd-overview-title" class="thd-section-title">Performance overview</h2>
+          <p class="thd-widget-sub">Last 30 days performance · {{ periodLabel || trendWindowLabel() }}</p>
+        </div>
+        <div class="thd-widget-head-stats">
+          <span [class.up]="a.summary.netRealizedPnl >= 0" [class.down]="a.summary.netRealizedPnl < 0">
+            Net <strong>₹{{ a.summary.netRealizedPnl | number: '1.0-0' }}</strong>
+          </span>
+          <span>{{ a.summary.closedTrades }} closed</span>
+        </div>
+      </div>
+
+      <dl class="thd-source-pnl" aria-label="Realized P and L by source">
+        @let pnlBySource = sourcePnlBreakdown();
+        <div>
+          <dt>Paper P&amp;L</dt>
+          <dd [class.up]="pnlBySource.paper > 0" [class.down]="pnlBySource.paper < 0">
+            ₹{{ pnlBySource.paper | number: '1.0-0' }}
+          </dd>
+        </div>
+        <div>
+          <dt>Live P&amp;L</dt>
+          <dd [class.up]="pnlBySource.live > 0" [class.down]="pnlBySource.live < 0">
+            ₹{{ pnlBySource.live | number: '1.0-0' }}
+          </dd>
+        </div>
+        <div class="combined">
+          <dt>Combined P&amp;L</dt>
+          <dd [class.up]="pnlBySource.combined > 0" [class.down]="pnlBySource.combined < 0">
+            ₹{{ pnlBySource.combined | number: '1.0-0' }}
+          </dd>
+        </div>
+      </dl>
+
+      <div class="thd-widget-body" [attr.data-anim]="widgetAnimKey">
+        <div class="thd-widget-left">
+          <div class="thd-widget-chart-wrap">
+            @if (equitySeriesWindow().length >= 2) {
+              <svg class="thd-widget-trend" viewBox="0 0 560 180" role="img" aria-label="Realized P and L trend, last 30 days">
+                <g class="thd-widget-grid">
+                  <line x1="0" y1="30" x2="560" y2="30" />
+                  <line x1="0" y1="75" x2="560" y2="75" />
+                  <line x1="0" y1="118" x2="560" y2="118" />
+                </g>
+                @for (bar of widgetDailyBarLayout(); track bar.x) {
+                  <rect
+                    class="thd-widget-day-bar"
+                    [class.up]="bar.up"
+                    [class.down]="!bar.up"
+                    [attr.x]="bar.x"
+                    [attr.y]="bar.y"
+                    [attr.width]="bar.w"
+                    [attr.height]="bar.h"
+                    rx="1"
+                  />
+                }
+                <path class="thd-widget-area" [attr.d]="widgetEquityAreaPath(560, 118)" />
+                <path class="thd-widget-line" [attr.d]="widgetEquityPath(560, 118)" />
+              </svg>
+            } @else {
+              <p class="thd-empty-chart">Close trades across more days to plot a 30-day trend.</p>
+            }
+          </div>
+          <p class="thd-widget-range-label">{{ trendWindowLabel() }}</p>
+        </div>
+
+        <div class="thd-widget-right">
+          <h3 class="thd-widget-right-title">Win rate</h3>
+          <div class="thd-donut-wrap thd-widget-donut">
+            <div class="thd-donut" [style.background]="winLossConic()"></div>
+            <div class="thd-donut-center">
+              <strong>{{ winLossCenterLabel() }}</strong>
+              <span>win rate</span>
+            </div>
+          </div>
+          <div class="thd-widget-wl">
+            <div class="thd-widget-wl-card up">
+              <span>Winners</span>
+              <strong>{{ a.winLoss.wins }}</strong>
+            </div>
+            <div class="thd-widget-wl-card down">
+              <span>Losers</span>
+              <strong>{{ a.winLoss.losses }}</strong>
+            </div>
+          </div>
+          <dl class="thd-widget-mini-metrics">
+            <div>
+              <dt>Avg profit</dt>
+              <dd class="up">{{ a.summary.avgProfitPerTrade != null ? '₹' + (a.summary.avgProfitPerTrade | number: '1.0-0') : '—' }}</dd>
+            </div>
+            <div>
+              <dt>Avg loss</dt>
+              <dd class="down">{{ a.summary.avgLossPerTrade != null ? '₹' + (a.summary.avgLossPerTrade | number: '1.0-0') : '—' }}</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+
+      <div class="thd-kpi-strip" aria-label="Quick metrics">
+        <button type="button" class="thd-kpi-chip" [class.active]="pnlChip === 'positive'" (click)="setPnlChip('positive')">
+          Winners <b>{{ a.summary.wins }}</b>
+        </button>
+        <button type="button" class="thd-kpi-chip" [class.active]="pnlChip === 'negative'" (click)="setPnlChip('negative')">
+          Losers <b>{{ a.summary.losses }}</b>
+        </button>
+        <span class="thd-kpi-chip static">Open <b>{{ a.summary.openTrades }}</b></span>
+        <span class="thd-kpi-chip static">Profit factor <b>{{ a.summary.profitFactor != null ? (a.summary.profitFactor | number: '1.2-2') : '—' }}</b></span>
+      </div>
+
+      @if (a.strategies.length) {
+        <div class="thd-strategy-panel thd-strategy-panel-compact">
+          <div class="thd-panel-head">
+            <h3>Strategy distribution</h3>
+            <span class="thd-panel-meta">Share of trades in range</span>
+          </div>
+          <ul class="thd-strategy-dist thd-strategy-dist-inline">
+            @for (row of a.strategies.slice(0, 5); track row.strategyId) {
+              <li>
+                <div class="thd-strategy-dist-top">
+                  <span [title]="row.label">{{ row.label }}</span>
+                  <span>{{ strategyTradeSharePct(row.trades) | number: '1.0-0' }}%</span>
+                </div>
+                <div class="thd-strategy-dist-track">
+                  <div class="thd-strategy-dist-fill" [style.width.%]="strategyTradeSharePct(row.trades)"></div>
+                </div>
+              </li>
+            }
+          </ul>
+        </div>
+      }
+
+      @if (a.insights.length) {
+        <ul class="thd-insight-strip" aria-label="Insights">
+          @for (line of a.insights.slice(0, 2); track line.text) {
+            <li [class]="line.tone">{{ line.text }}</li>
+          }
+        </ul>
+      }
+    </section>
+
+    <div class="thd-toolbar">
+      <div class="thd-toolbar-left">
+        <input
+          type="search"
+          class="thd-search"
+          placeholder="Search symbol, strategy, outcome…"
+          [(ngModel)]="searchQuery"
+          (ngModelChange)="onFilterChange()"
+          aria-label="Search trades"
+        />
+        <button type="button" class="thd-btn ghost" (click)="filtersOpen = !filtersOpen">
+          {{ filtersOpen ? 'Hide filters' : 'Advanced filters' }}
+        </button>
+        <button type="button" class="thd-btn ghost" (click)="columnsOpen = !columnsOpen">
+          Columns
+        </button>
+      </div>
+      <div class="thd-toolbar-right">
+        <button type="button" class="thd-btn" (click)="exportCsv()">Export CSV</button>
+      </div>
+    </div>
+
+    @if (filtersOpen) {
+      <div class="thd-filters" aria-label="Advanced filters">
+        <label>
+          <span>Strategy</span>
+          <select [(ngModel)]="strategyFilter" (ngModelChange)="onFilterChange()">
+            <option value="">All</option>
+            @for (s of strategyOptions; track s) {
+              <option [value]="s">{{ strategyLabel(s) }}</option>
+            }
+          </select>
+        </label>
+        <label>
+          <span>Symbol</span>
+          <select [(ngModel)]="symbolFilter" (ngModelChange)="onFilterChange()">
+            <option value="">All</option>
+            @for (sym of symbolOptions; track sym) {
+              <option [value]="sym">{{ sym }}</option>
+            }
+          </select>
+        </label>
+        <label>
+          <span>Direction</span>
+          <select [(ngModel)]="directionFilter" (ngModelChange)="onFilterChange()">
+            <option value="all">All</option>
+            <option value="bull">Bull</option>
+            <option value="bear">Bear</option>
+          </select>
+        </label>
+        <label>
+          <span>Status</span>
+          <select [(ngModel)]="statusFilter" (ngModelChange)="onFilterChange()">
+            <option value="">All</option>
+            @for (st of statusOptions; track st) {
+              <option [value]="st">{{ st }}</option>
+            }
+          </select>
+        </label>
+        <label>
+          <span>P&amp;L min (₹)</span>
+          <input type="number" [(ngModel)]="pnlMin" (ngModelChange)="onFilterChange()" />
+        </label>
+        <label>
+          <span>P&amp;L max (₹)</span>
+          <input type="number" [(ngModel)]="pnlMax" (ngModelChange)="onFilterChange()" />
+        </label>
+        <label>
+          <span>Capital min</span>
+          <input type="number" [(ngModel)]="capitalMin" (ngModelChange)="onFilterChange()" />
+        </label>
+        <label>
+          <span>Capital max</span>
+          <input type="number" [(ngModel)]="capitalMax" (ngModelChange)="onFilterChange()" />
+        </label>
+        <button type="button" class="thd-btn ghost thd-reset" (click)="resetFilters()">Reset filters</button>
+      </div>
+    }
+
+    @if (columnsOpen) {
+      <div class="thd-columns" role="group" aria-label="Visible columns">
+        @for (col of columnDefs; track col.key) {
+          <label class="thd-col-toggle">
+            <input type="checkbox" [checked]="colVisible(col.key)" (change)="toggleColumn(col.key)" />
+            {{ col.label }}
+          </label>
+        }
+      </div>
+    }
+
+    @if (filterSummaryChips().length) {
+      <ul class="thd-filter-chips" aria-label="Active filters">
+        @for (chip of filterSummaryChips(); track chip.label) {
+          <li><span class="thd-filter-chip-label">{{ chip.label }}:</span> {{ chip.value }}</li>
+        }
+      </ul>
+    }
+
+    <div class="thd-table-section">
+      <div class="thd-table-card">
+      <div class="thd-table-toolbar">
+        <span class="thd-table-title">Trades</span>
+        <div class="thd-table-filters" role="group" aria-label="Quick filter">
+          <button type="button" [class.active]="pnlChip === 'all'" (click)="setPnlChip('all')">All</button>
+          <button type="button" [class.active]="pnlChip === 'positive'" (click)="setPnlChip('positive')">Winners</button>
+          <button type="button" [class.active]="pnlChip === 'negative'" (click)="setPnlChip('negative')">Losers</button>
+        </div>
+      </div>
+      <dl class="thd-table-summary" aria-label="Filtered trade summary">
+        <div>
+          <dt>Total trades</dt>
+          <dd>{{ filteredSummary.total }}</dd>
+        </div>
+        <div>
+          <dt>Winners</dt>
+          <dd class="up">{{ filteredSummary.winners }}</dd>
+        </div>
+        <div>
+          <dt>Losers</dt>
+          <dd class="down">{{ filteredSummary.losers }}</dd>
+        </div>
+        <div>
+          <dt>Win rate</dt>
+          <dd>{{ filteredSummary.winRatePct != null ? (filteredSummary.winRatePct | number: '1.1-1') + '%' : '—' }}</dd>
+        </div>
+        <div>
+          <dt>Net P&amp;L</dt>
+          <dd [class.up]="filteredSummary.netPnl > 0" [class.down]="filteredSummary.netPnl < 0">
+            ₹{{ filteredSummary.netPnl | number: '1.2-2' }}
+          </dd>
+        </div>
+      </dl>
+    <div class="thd-table-wrap" tabindex="0" role="region" aria-label="Trade ledger">
+      <table class="thd-table">
+        <thead>
+          <tr>
+            @if (colVisible('source')) {
+              <th scope="col" (click)="setSort('source')" class="sortable">Source</th>
+            }
+            @if (colVisible('underlying')) {
+              <th scope="col" (click)="setSort('underlying')" class="sortable">Symbol</th>
+            }
+            @if (colVisible('direction')) {
+              <th scope="col" (click)="setSort('direction')" class="sortable">Dir</th>
+            }
+            @if (colVisible('entry')) {
+              <th scope="col" (click)="setSort('entry')" class="sortable">Entry</th>
+            }
+            @if (colVisible('exit')) {
+              <th scope="col" (click)="setSort('exit')" class="sortable">Exit</th>
+            }
+            @if (colVisible('entryPrice')) {
+              <th scope="col" (click)="setSort('entryPrice')" class="num sortable">Entry ₹</th>
+            }
+            @if (colVisible('exitPrice')) {
+              <th scope="col" (click)="setSort('exitPrice')" class="num sortable">Exit ₹</th>
+            }
+            @if (colVisible('qty')) {
+              <th scope="col" (click)="setSort('qty')" class="num sortable">Qty</th>
+            }
+            @if (colVisible('capital')) {
+              <th scope="col" (click)="setSort('capital')" class="num sortable">Capital</th>
+            }
+            @if (colVisible('gross')) {
+              <th scope="col" (click)="setSort('gross')" class="num sortable">Gross</th>
+            }
+            @if (colVisible('charges')) {
+              <th scope="col" class="num">Charges</th>
+            }
+            @if (colVisible('net')) {
+              <th scope="col" (click)="setSort('net')" class="num sortable">Net P&amp;L</th>
+            }
+            @if (colVisible('roi')) {
+              <th scope="col" (click)="setSort('roi')" class="num sortable">ROI %</th>
+            }
+            @if (colVisible('strategy')) {
+              <th scope="col" (click)="setSort('strategy')" class="sortable">Strategy</th>
+            }
+            @if (colVisible('status')) {
+              <th scope="col" (click)="setSort('status')" class="sortable">Status</th>
+            }
+            @if (colVisible('outcome')) {
+              <th scope="col">Outcome</th>
+            }
+            @if (colVisible('details')) {
+              <th scope="col">Details</th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (trade of pageTrades; track trade.id; let rowIndex = $index) {
+            <tr
+              class="thd-row"
+              [class.thd-row-alt]="rowIndex % 2 === 1"
+              [class.thd-row-up]="trade.status === 'CLOSED' && (trade.pnl ?? 0) > 0"
+              [class.thd-row-down]="trade.status === 'CLOSED' && (trade.pnl ?? 0) < 0"
+              (click)="toggleExpand(trade.id)"
+            >
+              @if (colVisible('source')) {
+                <td>
+                  <span
+                    class="thd-source-badge"
+                    [class.paper]="tradeExecutionSource(trade) === 'PAPER'"
+                    [class.live]="tradeExecutionSource(trade) === 'LIVE'"
+                  >
+                    {{ tradeExecutionSource(trade) }}
+                  </span>
+                </td>
+              }
+              @if (colVisible('underlying')) {
+                <td class="thd-td-symbol">{{ trade.underlying }}</td>
+              }
+              @if (colVisible('direction')) {
+                <td>
+                  @if (isBull(trade.direction) || isBear(trade.direction)) {
+                    <span class="thd-dir" [class.bull]="isBull(trade.direction)" [class.bear]="isBear(trade.direction)">
+                      <span class="thd-dir-icon" aria-hidden="true">{{ isBull(trade.direction) ? '▲' : '▼' }}</span>
+                      {{ directionShort(trade.direction) }}
+                    </span>
+                  } @else {
+                    —
+                  }
+                </td>
+              }
+              @if (colVisible('entry')) {
+                <td>
+                  @if (executedAt(trade); as e) {
+                    {{ e | date: 'dd MMM yy, HH:mm':'+0530' }}
+                  } @else {
+                    —
+                  }
+                </td>
+              }
+              @if (colVisible('exit')) {
+                <td>
+                  @if (closedAt(trade); as c) {
+                    {{ c | date: 'dd MMM yy, HH:mm':'+0530' }}
+                  } @else {
+                    —
+                  }
+                </td>
+              }
+              @if (colVisible('entryPrice')) {
+                <td class="num">{{ entryPrice(trade) != null ? (entryPrice(trade) | number: '1.2-2') : '—' }}</td>
+              }
+              @if (colVisible('exitPrice')) {
+                <td class="num">{{ exitPrice(trade) != null ? (exitPrice(trade) | number: '1.2-2') : '—' }}</td>
+              }
+              @if (colVisible('qty')) {
+                <td class="num" [title]="qtyTitle(trade)">{{ qtyLabel(trade) }}</td>
+              }
+              @if (colVisible('capital')) {
+                <td class="num">{{ capital(trade) > 0 ? (capital(trade) | number: '1.0-0') : '—' }}</td>
+              }
+              @if (colVisible('gross')) {
+                <td class="num" [class.up]="(trade.pnl ?? 0) > 0" [class.down]="(trade.pnl ?? 0) < 0">
+                  {{ trade.pnl != null ? (trade.pnl | number: '1.2-2') : '—' }}
+                </td>
+              }
+              @if (colVisible('charges')) {
+                <td class="num">0</td>
+              }
+              @if (colVisible('net')) {
+                <td class="num" [class.up]="(netPnl(trade) ?? 0) > 0" [class.down]="(netPnl(trade) ?? 0) < 0">
+                  {{ netPnl(trade) != null ? (netPnl(trade) | number: '1.2-2') : '—' }}
+                </td>
+              }
+              @if (colVisible('roi')) {
+                <td class="num" [class.up]="(roi(trade) ?? 0) > 0" [class.down]="(roi(trade) ?? 0) < 0">
+                  {{ roi(trade) != null ? (roi(trade) | number: '1.2-2') + '%' : '—' }}
+                </td>
+              }
+              @if (colVisible('strategy')) {
+                <td>
+                  <span class="thd-strategy-chip" [title]="strategyLabel(trade.strategy)">{{ strategyChipLabel(trade.strategy) }}</span>
+                </td>
+              }
+              @if (colVisible('status')) {
+                <td>
+                  @if (showStatusChip(trade.status)) {
+                    <span class="thd-status-chip" [class]="statusChip(trade.status).class">{{ statusChip(trade.status).label }}</span>
+                  } @else if (showOutcomeHint(trade)) {
+                    <span class="thd-state-hint">{{ outcome(trade).label }}</span>
+                  } @else {
+                    <span class="thd-state-muted">Filled</span>
+                  }
+                </td>
+              }
+              @if (colVisible('outcome')) {
+                <td>
+                  @if (showOutcomeHint(trade)) {
+                    <span class="thd-state-hint">{{ outcome(trade).label }}</span>
+                  } @else {
+                    —
+                  }
+                </td>
+              }
+              @if (colVisible('details')) {
+                <td class="thd-td-action">
+                  <button
+                    type="button"
+                    class="thd-row-action"
+                    [class.expanded]="isExpanded(trade.id)"
+                    [attr.aria-expanded]="isExpanded(trade.id)"
+                    (click)="toggleExpand(trade.id); $event.stopPropagation()"
+                  >
+                    {{ isExpanded(trade.id) ? 'Close' : 'Details' }}
+                  </button>
+                </td>
+              }
+            </tr>
+            @if (isExpanded(trade.id)) {
+              <tr class="thd-detail-row">
+                <td [attr.colspan]="visibleColumnCount()">
+                  <div class="thd-detail-panel">
+                    <section>
+                      <h4>Entry &amp; exit logic</h4>
+                      <p><strong>Entry:</strong> {{ trade.entryReason || '—' }}</p>
+                      <p><strong>Exit:</strong> {{ trade.exitReason || '—' }}</p>
+                      <p><strong>Strategy rules:</strong> {{ strategyLabel(trade.strategy) }}</p>
+                    </section>
+                    <section>
+                      <h4>Fills &amp; charges</h4>
+                      @if (entryFills(trade)) {
+                        <p>Entry — {{ entryFills(trade) }}</p>
+                      }
+                      @if (exitFills(trade)) {
+                        <p>Exit — {{ exitFills(trade) }}</p>
+                      }
+                      <p>Charges — paper mode (₹0)</p>
+                    </section>
+                    <section>
+                      <h4>Timeline</h4>
+                      @if (durationLabel(trade); as dur) {
+                        <p>Hold time: {{ dur }}</p>
+                      }
+                      <p class="muted">Screenshots &amp; agent logs — connect live chart capture in a future release.</p>
+                    </section>
+                  </div>
+                </td>
+              </tr>
+            }
+          } @empty {
+            <tr>
+              <td [attr.colspan]="visibleColumnCount()" class="thd-empty">{{ emptyStateMessage() }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    @if (filteredTrades.length > pageSize) {
+      <nav class="thd-pagination" aria-label="Pagination">
+        <button type="button" [disabled]="page <= 1" (click)="setPage(page - 1)">Previous</button>
+        <span>Page {{ page }} of {{ pageCount }} · {{ filteredTrades.length }} trades</span>
+        <button type="button" [disabled]="page >= pageCount" (click)="setPage(page + 1)">Next</button>
+      </nav>
+    }
+      </div>
+    </div>
+  </div>
+  }
+}

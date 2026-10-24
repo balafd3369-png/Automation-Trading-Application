@@ -14,6 +14,7 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
     private readonly IPaperProposalSource _paper;
     private readonly TradeHistoryStore _history;
     private readonly LiveExecutionOptions _options;
+    private readonly TradingPlatformOptions _platform;
     private readonly ILogger<LiveExecutionCoordinator> _log;
     private Timer? _timer;
     private DateTimeOffset? _armedUntil;
@@ -33,12 +34,14 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
         IPaperProposalSource paper,
         TradeHistoryStore history,
         LiveExecutionOptions options,
+        TradingPlatformOptions platform,
         ILogger<LiveExecutionCoordinator> log)
     {
         _brokers = brokers;
         _paper = paper;
         _history = history;
         _options = options;
+        _platform = platform;
         _log = log;
     }
 
@@ -224,6 +227,11 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
         if (!ValidateZoneLivePreflight(proposal, out var preflightReason))
         {
             lock (_gate) return WithStatusUnsafe(preflightReason);
+        }
+
+        if (!InstrumentExecutionPolicy.LiveBrokerRoutingAllowed(proposal, _platform.FuturesEnabled))
+        {
+            lock (_gate) return WithStatusUnsafe(InstrumentExecutionPolicy.FuturesDisabledLiveMessage);
         }
 
         _history.SaveLiveTrade(proposal, product);

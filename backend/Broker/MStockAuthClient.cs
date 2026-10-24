@@ -85,6 +85,13 @@ public sealed class MStockAuthClient : IBrokerMarketClient
                 "m.Stock user ID and password are required. Enter them in the Broker panel or set MStock:Username and MStock:Password in server config.");
         }
 
+        var resolvedApiKey = _login.ResolveApiKey(_options);
+        if (string.IsNullOrWhiteSpace(resolvedApiKey))
+        {
+            throw new InvalidOperationException(
+                "m.Stock Type A API key is missing. Generate one at trade.mstock.com → API, then set MStock:ApiKey in backend user secrets or paste it under One-time setup in the Broker panel.");
+        }
+
         _log.LogInformation("m.Stock login OTP request for user {Username}.", user);
 
         using var req = new HttpRequestMessage(HttpMethod.Post, "openapi/typea/connect/login");
@@ -491,6 +498,16 @@ public sealed class MStockAuthClient : IBrokerMarketClient
         }
 
         var json = await res.Content.ReadAsStringAsync(ct);
+        if (!res.IsSuccessStatusCode)
+        {
+            _log.LogWarning(
+                "m.Stock HTTP {Status} for {Method} {Path}: {Body}",
+                (int)res.StatusCode,
+                req.Method,
+                req.RequestUri?.PathAndQuery ?? "?",
+                json.Length > 500 ? json[..500] + "…" : json);
+        }
+
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
         return doc.RootElement.Clone();
     }

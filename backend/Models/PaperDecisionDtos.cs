@@ -130,7 +130,11 @@ public sealed record PaperTradeHistorySnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset? OpenedAt,
     DateTimeOffset? ClosedAt,
-    IReadOnlyList<PaperTradeHistoryLegSnapshot> Legs);
+    int Quantity,
+    decimal EntryPrice,
+    decimal? ExitPrice,
+    IReadOnlyList<PaperTradeHistoryLegSnapshot> Legs,
+    string TradeSource = TradeSourceWire.Strategy);
 
 public sealed record PaperTradeHistoryResponse(
     string UserId,

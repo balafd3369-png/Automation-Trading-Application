@@ -1,4 +1,15 @@
-export type AppCenterView = 'market' | 'trades' | 'strategies' | 'intelligence';
+export type AppCenterView = 'market' | 'trades' | 'strategies' | 'intelligence' | 'manual' | 'operations';
+export type AppOperationsTab =
+  | 'risk'
+  | 'emergency'
+  | 'orders'
+  | 'positions'
+  | 'holdings'
+  | 'journal'
+  | 'timeline'
+  | 'notifications'
+  | 'broker'
+  | 'reconciliation';
 export type AppTradePanelTab = 'paper' | 'live' | 'history' | 'agent';
 export type AppMarketKind = 'stocks' | 'options';
 export type AppMarketNavTab = 'dashboard' | 'options';
@@ -8,6 +19,8 @@ export interface AppNavigationState {
   tradePanelTab: AppTradePanelTab;
   marketKind: AppMarketKind;
   marketNavTab: AppMarketNavTab;
+  strategyDetailId: string | null;
+  operationsTab: AppOperationsTab;
 }
 
 const DEFAULT_NAV: AppNavigationState = {
@@ -15,9 +28,23 @@ const DEFAULT_NAV: AppNavigationState = {
   tradePanelTab: 'paper',
   marketKind: 'stocks',
   marketNavTab: 'dashboard',
+  strategyDetailId: null,
+  operationsTab: 'risk',
 };
 
 const TRADE_TABS = new Set<AppTradePanelTab>(['paper', 'live', 'history', 'agent']);
+const OPERATIONS_TABS = new Set<AppOperationsTab>([
+  'risk',
+  'emergency',
+  'orders',
+  'positions',
+  'holdings',
+  'journal',
+  'timeline',
+  'notifications',
+  'broker',
+  'reconciliation',
+]);
 export const APP_NAV_STORAGE_KEY = 'twb-app-navigation';
 
 function normalizeAppNavigationState(value: Partial<AppNavigationState> | null | undefined): AppNavigationState {
@@ -25,6 +52,8 @@ function normalizeAppNavigationState(value: Partial<AppNavigationState> | null |
     value?.centerView === 'trades' ||
     value?.centerView === 'strategies' ||
     value?.centerView === 'intelligence' ||
+    value?.centerView === 'manual' ||
+    value?.centerView === 'operations' ||
     value?.centerView === 'market'
       ? value.centerView
       : DEFAULT_NAV.centerView;
@@ -41,7 +70,14 @@ function normalizeAppNavigationState(value: Partial<AppNavigationState> | null |
         : marketKind === 'options'
           ? 'options'
           : DEFAULT_NAV.marketNavTab;
-  return { centerView, tradePanelTab, marketKind, marketNavTab };
+  const strategyDetailId =
+    typeof value?.strategyDetailId === 'string' && value.strategyDetailId.trim()
+      ? value.strategyDetailId.trim()
+      : null;
+  const operationsTab = OPERATIONS_TABS.has(value?.operationsTab as AppOperationsTab)
+    ? (value!.operationsTab as AppOperationsTab)
+    : DEFAULT_NAV.operationsTab;
+  return { centerView, tradePanelTab, marketKind, marketNavTab, strategyDetailId, operationsTab };
 }
 
 function readStoredNavigationState(): AppNavigationState | null {
@@ -66,6 +102,12 @@ export function buildAppNavigationHash(state: AppNavigationState): string {
   if (state.centerView === 'intelligence') {
     return '#/intelligence';
   }
+  if (state.centerView === 'manual') {
+    return '#/manual';
+  }
+  if (state.centerView === 'operations') {
+    return `#/operations/${state.operationsTab}`;
+  }
   if (state.centerView === 'trades') {
     return `#/trades/${state.tradePanelTab}`;
   }
@@ -80,11 +122,31 @@ export function parseRouterUrl(url: string): AppNavigationState {
   const segments = path.split('/').filter(Boolean);
 
   if (segments[0] === 'strategies') {
-    return { ...DEFAULT_NAV, centerView: 'strategies' };
+    if (segments[1]) {
+      return {
+        ...DEFAULT_NAV,
+        centerView: 'strategies',
+        strategyDetailId: decodeURIComponent(segments[1]),
+      };
+    }
+    return { ...DEFAULT_NAV, centerView: 'strategies', strategyDetailId: null };
   }
 
   if (segments[0] === 'intelligence') {
     return { ...DEFAULT_NAV, centerView: 'intelligence' };
+  }
+
+  if (segments[0] === 'manual') {
+    return { ...DEFAULT_NAV, centerView: 'manual' };
+  }
+
+  if (segments[0] === 'operations') {
+    const tab = segments[1] as AppOperationsTab;
+    return {
+      ...DEFAULT_NAV,
+      centerView: 'operations',
+      operationsTab: OPERATIONS_TABS.has(tab) ? tab : 'risk',
+    };
   }
 
   if (segments[0] === 'trades') {
@@ -127,10 +189,19 @@ export function readBootNavigationState(): AppNavigationState {
 
 export function routerPathForState(state: AppNavigationState): string {
   if (state.centerView === 'strategies') {
+    if (state.strategyDetailId) {
+      return `/strategies/${encodeURIComponent(state.strategyDetailId)}`;
+    }
     return '/strategies';
   }
   if (state.centerView === 'intelligence') {
     return '/intelligence';
+  }
+  if (state.centerView === 'manual') {
+    return '/manual';
+  }
+  if (state.centerView === 'operations') {
+    return `/operations/${state.operationsTab}`;
   }
   if (state.centerView === 'trades') {
     return `/trades/${state.tradePanelTab}`;

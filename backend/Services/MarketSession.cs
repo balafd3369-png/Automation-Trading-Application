@@ -21,6 +21,15 @@ public static class MarketSession
                 NextTradingOpenAfter(ist));
         }
 
+        if (!NseCashSession.IsTradingDay(DateOnly.FromDateTime(ist.Date)))
+        {
+            return new(
+                "HOLIDAY",
+                false,
+                "Market closed (NSE holiday).",
+                NextTradingOpenAfter(ist));
+        }
+
         var time = ist.TimeOfDay;
         if (time < Open)
         {
@@ -68,7 +77,7 @@ public static class MarketSession
         }
 
         date = date.AddDays(1);
-        while (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+        while (!NseCashSession.IsTradingDay(DateOnly.FromDateTime(date)))
         {
             date = date.AddDays(1);
         }

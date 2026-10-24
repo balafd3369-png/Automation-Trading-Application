@@ -1,11 +1,18 @@
 import { SymbolSnapshot } from './board.models';
 import { istSessionBucketStart } from './chart-ui.util';
+import { PaperTradeHistoryItem } from './board.models';
+import { LiveExecutionSnapshot } from './board.models';
 import {
   brokerConnectedFromFeed,
+  brokerLoginRejectedMessage,
   brokerOtpSendSucceeded,
+  filterExecutedPaperHistoryTrades,
+  paperTradeCapitalUsed,
   preserveBrokerOtpEntry,
+  shouldReplaceLiveAgent,
   syncLiveCandle,
   symbolHasVerifiedQuote,
+  boardSymbolDisplayLast,
   tone,
 } from './trading-ui.util';
 
@@ -32,6 +39,11 @@ describe('trading-ui.util', () => {
     expect(brokerOtpSendSucceeded({ status: 'success' })).toBeTrue();
     expect(brokerOtpSendSucceeded({ status: 'error', message: 'OTP sent to registered mobile' })).toBeTrue();
     expect(brokerOtpSendSucceeded({ status: 'error', message: 'Invalid credentials' })).toBeFalse();
+  });
+
+  it('treats invalid username or password as login rejection', () => {
+    expect(brokerLoginRejectedMessage('Invalid username or password (3)')).toBeTrue();
+    expect(brokerLoginRejectedMessage('m.Stock Type A API key is missing')).toBeTrue();
   });
 
   it('keeps OTP entry active while board feed says session expired', () => {
@@ -86,6 +98,22 @@ describe('trading-ui.util', () => {
     expect(tone(upRow)).toBe('up');
   });
 
+  it('boardSymbolDisplayLast uses previous close instead of placeholder 100', () => {
+    expect(
+      boardSymbolDisplayLast({
+        ...row,
+        name: 'MARUTI',
+        last: 12450,
+        todayOpen: 100,
+        yesterdayHigh: 12500,
+        yesterdayLow: 12380,
+        previousClose: 12450,
+        quoteVerified: true,
+        quoteQuality: 'VerifiedClose',
+      }),
+    ).toBe(12450);
+  });
+
   it('symbolHasVerifiedQuote rejects unverified broker rows', () => {
     expect(
       symbolHasVerifiedQuote({
@@ -95,5 +123,97 @@ describe('trading-ui.util', () => {
       }),
     ).toBeFalse();
     expect(symbolHasVerifiedQuote({ ...row, last: 612, quoteVerified: true })).toBeTrue();
+  });
+
+  it('filterExecutedPaperHistoryTrades drops non-executed statuses', () => {
+    const base: PaperTradeHistoryItem = {
+      id: 't1',
+      underlying: 'NIFTY',
+      strategy: 'zone-b1-break-b2',
+      direction: 'BULLISH',
+      pnl: null,
+      openedAt: null,
+      closedAt: null,
+      createdAt: '2026-10-23T10:00:00+05:30',
+      status: 'OPEN',
+      maxRisk: 0,
+      maxReward: 0,
+      exitReason: null,
+      legs: [],
+    };
+    const trades = [
+      { ...base, id: 'open', status: 'OPEN' as const },
+      { ...base, id: 'closed', status: 'CLOSED' as const, pnl: 100 },
+      { ...base, id: 'exp', status: 'EXPIRED' as const },
+      { ...base, id: 'rej', status: 'REJECTED' as const },
+    ] as PaperTradeHistoryItem[];
+    const kept = filterExecutedPaperHistoryTrades(trades);
+    expect(kept.map((t) => t.id)).toEqual(['open', 'closed']);
+  });
+
+  it('paperTradeCapitalUsed uses backend capitalRequired and qty×entry', () => {
+    const trade: PaperTradeHistoryItem = {
+      id: 't1',
+      status: 'CLOSED',
+      strategy: 'bala-10am-high-fade',
+      underlying: 'LT',
+      direction: 'BEARISH',
+      maxRisk: 500,
+      maxReward: 1000,
+      quantity: 175,
+      entryPrice: 4000,
+      capitalRequired: 700_000,
+      pnl: 35_000,
+      exitReason: 'hard stop',
+      createdAt: '2026-10-23T11:46:00+05:30',
+      openedAt: '2026-10-23T11:46:00+05:30',
+      closedAt: '2026-10-23T12:17:00+05:30',
+      legs: [
+        {
+          id: 'l1',
+          symbol: 'LT',
+          instrumentType: 'STOCK',
+          side: 'SELL',
+          quantity: 175,
+          proposedPrice: 4000,
+          entryPrice: 4000,
+          currentPrice: null,
+          exitPrice: 3800,
+          pnl: null,
+          strike: null,
+          optionRight: null,
+          expiry: null,
+        },
+      ],
+    };
+    expect(paperTradeCapitalUsed(trade)).toBe(700_000);
+  });
+
+  it('shouldReplaceLiveAgent detects broker PnL changes with same updatedAt', () => {
+    const base: LiveExecutionSnapshot = {
+      featureEnabled: true,
+      brokerConnected: true,
+      marketSession: { phase: 'OPEN', isOpen: true, message: '', nextEventAt: null },
+      armed: false,
+      armedUntil: null,
+      zoneAutoLiveArmed: false,
+      zoneAutoLiveProduct: 'MIS',
+      state: 'IDLE',
+      pendingProposal: null,
+      trades: [],
+      brokerPositions: [],
+      brokerOrders: [],
+      brokerPnl: { totalPnl: 100, realisedPnl: 0, unrealisedPnl: 100, unrealisedPercent: 1 },
+      events: [],
+      eodPrompts: [],
+      reconciliationStatus: 'OK',
+      updatedAt: '2026-10-24T10:00:00+05:30',
+    };
+    const moved = {
+      ...base,
+      brokerPnl: { totalPnl: 150, realisedPnl: 0, unrealisedPnl: 150, unrealisedPercent: 1.5 },
+    };
+    expect(shouldReplaceLiveAgent(moved, base)).toBe(true);
+    expect(shouldReplaceLiveAgent(base, base)).toBe(false);
   });
 });

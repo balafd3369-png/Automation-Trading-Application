@@ -13,11 +13,12 @@ public sealed class PaperTradeRulesTests
     }
 
     [Fact]
-    public void CalculateQuantity_respects_both_capital_and_loss_budgets()
+    public void CalculateQuantity_uses_floor_capital_over_entry()
     {
-        Assert.Equal(50, PaperTradeRules.CalculateQuantity(100m, 98m, 10_000m, 100m));
-        Assert.Equal(10, PaperTradeRules.CalculateQuantity(1_000m, 990m, 10_000m, 1_000m));
-        Assert.Equal(0, PaperTradeRules.CalculateQuantity(100m, 100m, 10_000m, 100m));
+        Assert.Equal(100, PaperTradeRules.CalculateQuantity(100m, 10_000m));
+        Assert.Equal(10, PaperTradeRules.CalculateQuantity(1_000m, 10_000m));
+        Assert.Equal(0, PaperTradeRules.CalculateQuantity(0m, 10_000m));
+        Assert.Equal(0, PaperTradeRules.CalculateQuantity(100m, 0m));
     }
 
     [Theory]

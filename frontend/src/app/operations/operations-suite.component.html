@@ -1,0 +1,674 @@
+<section class="ops-suite">
+  <header class="ops-header">
+    <div class="ops-header__copy">
+      <p class="ops-eyebrow">Mission control</p>
+      <h1>Operations</h1>
+      <p class="ops-sub">Live risk, broker sync, orders, and emergency controls</p>
+    </div>
+    @if (risk) {
+      <div class="ops-header__meta">
+        <span class="ops-updated">Updated {{ risk.updatedAt | date: 'HH:mm:ss' }}</span>
+        @if (brokerHealth) {
+          <div class="broker-pill" [class]="brokerHealthClass()">
+            m.Stock · {{ brokerHealth.statusLabel }}
+          </div>
+        }
+      </div>
+    }
+  </header>
+
+  @if (risk) {
+    <section class="ops-kpis" aria-label="Account summary">
+      <article class="ops-kpi ops-kpi--health" [ngClass]="'ops-kpi--' + riskHealthTier()">
+        <span class="ops-kpi__label">Account health</span>
+        <strong class="ops-kpi__value">{{ riskHealthHeadline() }}</strong>
+        <span class="ops-kpi__hint">{{ risk.healthLabel }}</span>
+      </article>
+      <article
+        class="ops-kpi ops-kpi--pnl"
+        [class.ops-kpi--up]="risk.account.dailyPnl >= 0"
+        [class.ops-kpi--down]="risk.account.dailyPnl < 0"
+      >
+        <span class="ops-kpi__label">Daily P&amp;L</span>
+        <strong class="ops-kpi__value">₹{{ risk.account.dailyPnl | number: '1.2-2' }}</strong>
+        <span class="ops-kpi__hint">Realized ₹{{ risk.account.realizedPnl | number: '1.0-0' }}</span>
+      </article>
+      <article class="ops-kpi ops-kpi--positions">
+        <span class="ops-kpi__label">Open positions</span>
+        <strong class="ops-kpi__value">{{ positionsOpenCount() }}</strong>
+        <span class="ops-kpi__hint">Max {{ risk.limits.maxOpenPositions }}</span>
+      </article>
+      <article class="ops-kpi ops-kpi--risk">
+        <span class="ops-kpi__label">Open risk</span>
+        <strong class="ops-kpi__value">₹{{ risk.positionRisk.openRisk | number: '1.0-0' }}</strong>
+        <span class="ops-kpi__hint">Cap ₹{{ risk.positionRisk.maxRisk | number: '1.0-0' }}</span>
+      </article>
+      <article class="ops-kpi ops-kpi--capital">
+        <span class="ops-kpi__label">Available capital</span>
+        <strong class="ops-kpi__value">₹{{ risk.account.availableCapital | number: '1.0-0' }}</strong>
+        <span class="ops-kpi__hint">{{ capitalUsagePercent() | number: '1.0-0' }}% deployed</span>
+      </article>
+      <article class="ops-kpi ops-kpi--broker" [ngClass]="brokerHealthClass()">
+        <span class="ops-kpi__label">Broker status</span>
+        <strong class="ops-kpi__value">{{ brokerHealth?.statusLabel ?? '—' }}</strong>
+        <span class="ops-kpi__hint">{{ brokerHealth?.connected ? 'Connected' : 'Offline' }}</span>
+      </article>
+    </section>
+
+    <section class="ops-deck" aria-label="Risk and sync overview">
+      <article class="ops-deck-card ops-deck-card--risk" [ngClass]="'ops-deck-card--' + riskHealthTier()">
+        <header class="ops-deck-card__head">
+          <h2>Risk health</h2>
+          <span class="ops-deck-pill">{{ riskHealthHeadline() }}</span>
+        </header>
+        <div class="ops-meter">
+          <div class="ops-meter__row">
+            <span>Daily loss used</span>
+            <strong>{{ dailyLossUsedPercent() | number: '1.0-0' }}%</strong>
+          </div>
+          <div class="ops-meter__track">
+            <div
+              class="ops-meter__fill ops-meter__fill--loss"
+              [style.width.%]="dailyLossUsedPercent()"
+            ></div>
+          </div>
+        </div>
+        <div class="ops-meter">
+          <div class="ops-meter__row">
+            <span>Capital usage</span>
+            <strong>{{ capitalUsagePercent() | number: '1.0-0' }}%</strong>
+          </div>
+          <div class="ops-meter__track">
+            <div class="ops-meter__fill ops-meter__fill--cap" [style.width.%]="capitalUsagePercent()"></div>
+          </div>
+        </div>
+        <ul class="ops-deck-stats">
+          <li><span>Open risk</span><strong>₹{{ risk.positionRisk.openRisk | number: '1.0-0' }}</strong></li>
+          <li><span>Max daily loss</span><strong>₹{{ risk.limits.maxDailyLoss | number: '1.0-0' }}</strong></li>
+          <li><span>Remaining capacity</span><strong>₹{{ risk.limits.remainingCapacity | number: '1.0-0' }}</strong></li>
+        </ul>
+      </article>
+
+      <article class="ops-deck-card ops-deck-card--recon" [class]="reconciliationHealthClass()">
+        <header class="ops-deck-card__head">
+          <h2>Reconciliation</h2>
+          @if (reconciliation) {
+            <span class="ops-deck-pill">{{ reconciliation.health === 'Healthy' ? 'In sync' : reconciliation.healthLabel }}</span>
+          }
+        </header>
+        @if (reconciliation) {
+          <p class="ops-recon-status" [class.ops-recon-status--ok]="reconciliation.health === 'Healthy'">
+            @if (reconciliation.health === 'Healthy') {
+              Positions and orders match the broker.
+            } @else {
+              {{ reconciliation.healthLabel }}
+            }
+          </p>
+          <ul class="ops-deck-stats">
+            <li><span>Position mismatches</span><strong>{{ reconciliation.positionMismatches }}</strong></li>
+            <li><span>Order mismatches</span><strong>{{ reconciliation.orderMismatches }}</strong></li>
+            <li>
+              <span>Last scan</span>
+              <strong>{{ reconciliation.lastRunAt ? (reconciliation.lastRunAt | date: 'HH:mm:ss') : '—' }}</strong>
+            </li>
+          </ul>
+          <button type="button" class="ops-deck-link" (click)="selectTab('reconciliation')">Open reconciliation</button>
+        } @else {
+          <p class="ops-empty-inline">Reconciliation data loading…</p>
+        }
+      </article>
+
+      <article class="ops-deck-card ops-deck-card--modes">
+        <header class="ops-deck-card__head">
+          <h2>Trading mode</h2>
+          <span class="ops-deck-pill ops-deck-pill--muted">{{ risk.tradingModeLabel }}</span>
+        </header>
+        <ul class="ops-mode-grid">
+          <li [class.on]="isLiveTradingOn()">
+            <span>Live trading</span>
+            <strong>{{ isLiveTradingOn() ? 'ON' : 'OFF' }}</strong>
+          </li>
+          <li [class.on]="isStrategyAutoOn()">
+            <span>Strategy auto</span>
+            <strong>{{ isStrategyAutoOn() ? 'ON' : 'OFF' }}</strong>
+          </li>
+          <li [class.on]="isManualTradingOn()">
+            <span>Manual trading</span>
+            <strong>{{ isManualTradingOn() ? 'ON' : 'OFF' }}</strong>
+          </li>
+          <li [class.on]="isZoneAutoOn()">
+            <span>Zone auto</span>
+            <strong>{{ isZoneAutoOn() ? 'ON' : 'OFF' }}</strong>
+          </li>
+        </ul>
+      </article>
+    </section>
+  } @else if (coreLoading) {
+    <section class="ops-kpis ops-kpis--loading" aria-busy="true">
+      @for (i of [1, 2, 3, 4, 5, 6]; track i) {
+        <div class="ops-kpi ops-kpi--skel"></div>
+      }
+    </section>
+  }
+
+  <section class="ops-widgets" aria-label="Activity">
+    <article class="ops-widget">
+      <header class="ops-widget__head">
+        <h3>Recent alerts</h3>
+        <button type="button" class="ops-widget__link" (click)="selectTab('notifications')">All</button>
+      </header>
+      @if (recentAlerts().length) {
+        <ul class="ops-widget-list">
+          @for (n of recentAlerts(); track n.id) {
+            <li [class.unread]="!n.read">
+              <span class="ops-widget-msg">{{ n.message }}</span>
+              <time>{{ n.at | date: 'HH:mm' }}</time>
+            </li>
+          }
+        </ul>
+      } @else {
+        <div class="ops-widget-empty">
+          <span class="ops-widget-empty__icon" aria-hidden="true">◎</span>
+          <p>No alerts right now.</p>
+          <small>Risk and broker events will show here.</small>
+        </div>
+      }
+    </article>
+
+    <article class="ops-widget">
+      <header class="ops-widget__head">
+        <h3>Recent activity</h3>
+        <button type="button" class="ops-widget__link" (click)="selectTab('timeline')">Timeline</button>
+      </header>
+      @if (recentTimeline.length) {
+        <ul class="ops-widget-list">
+          @for (e of recentTimeline; track e.id) {
+            <li>
+              <span class="ops-widget-msg"><strong>{{ e.title }}</strong> {{ e.detail }}</span>
+              <time>{{ e.at | date: 'HH:mm' }}</time>
+            </li>
+          }
+        </ul>
+      } @else {
+        <div class="ops-widget-empty">
+          <span class="ops-widget-empty__icon" aria-hidden="true">↺</span>
+          <p>No recent events.</p>
+          <small>Orders, fills, and risk actions appear on the timeline.</small>
+        </div>
+      }
+    </article>
+
+    <article class="ops-widget">
+      <header class="ops-widget__head">
+        <h3>Broker health</h3>
+        <button type="button" class="ops-widget__link" (click)="selectTab('broker')">Details</button>
+      </header>
+      @if (brokerHealth) {
+        <ul class="ops-deck-stats ops-deck-stats--tight">
+          <li><span>Status</span><strong>{{ brokerHealth.statusLabel }}</strong></li>
+          <li><span>Open orders</span><strong>{{ brokerHealth.openOrdersCount }}</strong></li>
+          <li><span>Failed today</span><strong>{{ brokerHealth.failedOrdersCount }}</strong></li>
+          <li><span>Latency</span><strong>{{ brokerHealth.latencyMs ?? '—' }} ms</strong></li>
+        </ul>
+      } @else {
+        <div class="ops-widget-empty">
+          <span class="ops-widget-empty__icon" aria-hidden="true">⎈</span>
+          <p>Broker metrics loading…</p>
+        </div>
+      }
+    </article>
+
+    <article class="ops-widget">
+      <header class="ops-widget__head">
+        <h3>Reconciliation log</h3>
+        <button type="button" class="ops-widget__link" (click)="selectTab('reconciliation')">History</button>
+      </header>
+      @if (recentReconciliationEvents().length) {
+        <ul class="ops-widget-list">
+          @for (h of recentReconciliationEvents(); track h.id) {
+            <li>
+              <span class="ops-widget-msg">{{ h.resultLabel }} · {{ h.issueCount }} issues</span>
+              <time>{{ h.at | date: 'HH:mm' }}</time>
+            </li>
+          }
+        </ul>
+      } @else {
+        <div class="ops-widget-empty">
+          <span class="ops-widget-empty__icon" aria-hidden="true">✓</span>
+          <p>No scans yet.</p>
+          <small>Runs automatically when the broker is connected.</small>
+        </div>
+      }
+    </article>
+  </section>
+
+  <nav class="ops-tabs" aria-label="Operations sections">
+    @for (t of tabs; track t.id) {
+      <button type="button" [class.active]="tab === t.id" (click)="selectTab(t.id)">{{ tabLabel(t) }}</button>
+    }
+  </nav>
+
+  @if (tab === 'risk') {
+    <div class="ops-grid">
+      @if (risk) {
+        <div class="card">
+          <h2>Account</h2>
+          <ul class="metric-list">
+            <li><span>Total capital</span><strong>₹{{ risk.account.totalCapital | number: '1.0-0' }}</strong></li>
+            <li><span>Capital used</span><strong>₹{{ risk.account.capitalUsed | number: '1.0-0' }}</strong></li>
+            <li><span>Margin available</span><strong>{{ risk.account.marginAvailable | number: '1.0-0' }}</strong></li>
+            <li><span>Margin used</span><strong>{{ risk.account.marginUsed | number: '1.0-0' }}</strong></li>
+            <li><span>Unrealized P&amp;L</span><strong>₹{{ risk.account.unrealizedPnl | number: '1.2-2' }}</strong></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h2>Exposure</h2>
+          <ul class="metric-list">
+            <li><span>Total</span><strong>₹{{ risk.exposure.totalExposure | number: '1.0-0' }}</strong></li>
+            <li><span>Stocks</span><strong>₹{{ risk.exposure.stockExposure | number: '1.0-0' }}</strong></li>
+            <li><span>Options</span><strong>₹{{ risk.exposure.optionExposure | number: '1.0-0' }}</strong></li>
+            <li><span>Futures</span><strong>₹{{ risk.exposure.futureExposure | number: '1.0-0' }}</strong></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h2>Position risk</h2>
+          <ul class="metric-list">
+            <li><span>Largest position</span><strong>{{ risk.positionRisk.largestPositionSymbol || '—' }}</strong></li>
+            <li><span>Largest loser</span><strong>{{ risk.positionRisk.largestLosingPositionSymbol || '—' }}</strong></li>
+            <li><span>Allocation limit</span><strong>₹{{ risk.limits.capitalAllocation | number: '1.0-0' }}</strong></li>
+          </ul>
+        </div>
+      } @else {
+        <div class="ops-panel-empty card">
+          <span class="ops-panel-empty__icon" aria-hidden="true">◉</span>
+          <h2>Risk dashboard</h2>
+          <p>Loading account risk metrics…</p>
+        </div>
+      }
+    </div>
+  }
+
+  @if (tab === 'emergency') {
+    <div class="card emergency">
+      <h2>Emergency controls</h2>
+      <p class="warn">All actions require typing: <code>{{ emergencyConfirmHint() }}</code></p>
+      <label>
+        Confirmation phrase
+        <input [(ngModel)]="emergencyConfirm" name="emergencyConfirm" />
+      </label>
+      <div class="emergency-grid">
+        <button type="button" (click)="runEmergency('STOP_STRATEGY')">Stop all strategy trading</button>
+        <button type="button" (click)="runEmergency('PAUSE_AUTO')">Pause auto trading</button>
+        <button type="button" (click)="runEmergency('DISARM_LIVE')">Disarm live trading</button>
+        <button type="button" (click)="runEmergency('EXIT_ALL_PAPER')">Exit all paper positions</button>
+        <button type="button" (click)="runEmergency('EXIT_ALL_LIVE')">Exit all live positions</button>
+        <button type="button" (click)="runEmergency('CANCEL_OPEN_ORDERS')">Cancel open orders</button>
+      </div>
+      @if (emergencyMessage) {
+        <p class="status">{{ emergencyMessage }}</p>
+      }
+    </div>
+  }
+
+  @if (tab === 'orders') {
+    <div class="card">
+      <div class="sub-tabs">
+        <button type="button" [class.active]="orderTab === 'open'" (click)="orderTab = 'open'">Open ({{ ordersOpenCount() }})</button>
+        <button type="button" [class.active]="orderTab === 'completed'" (click)="orderTab = 'completed'">Completed</button>
+        <button type="button" [class.active]="orderTab === 'cancelled'" (click)="orderTab = 'cancelled'">Cancelled</button>
+        <button type="button" [class.active]="orderTab === 'rejected'" (click)="orderTab = 'rejected'">Rejected</button>
+      </div>
+      @if (orders) {
+        @if ((orderTab === 'open' ? orders.open : orderTab === 'completed' ? orders.completed : orderTab === 'cancelled' ? orders.cancelled : orders.rejected).length === 0) {
+          <div class="ops-panel-empty">
+            <span class="ops-panel-empty__icon" aria-hidden="true">▢</span>
+            <h3>No {{ orderTab }} orders</h3>
+            <p>Order book is clear. New manual and strategy orders will appear here.</p>
+          </div>
+        } @else {
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Type</th><th>Status</th><th>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (o of (orderTab === 'open' ? orders.open : orderTab === 'completed' ? orders.completed : orderTab === 'cancelled' ? orders.cancelled : orders.rejected); track o.orderId) {
+                <tr>
+                  <td>{{ o.orderId }}</td>
+                  <td>{{ o.symbol }}</td>
+                  <td>{{ o.side }}</td>
+                  <td>{{ o.quantity }}</td>
+                  <td>{{ o.price | number: '1.2-2' }}</td>
+                  <td>{{ o.orderType }}</td>
+                  <td>{{ o.status }}</td>
+                  <td>{{ o.source }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      } @else {
+        <p class="empty">Loading orders…</p>
+      }
+    </div>
+  }
+
+  @if (tab === 'positions') {
+    <div class="card">
+      <div class="sub-tabs">
+        <button type="button" [class.active]="positionTab === 'open'" (click)="positionTab = 'open'">Open ({{ positionsOpenCount() }})</button>
+        <button type="button" [class.active]="positionTab === 'closed'" (click)="positionTab = 'closed'">Closed</button>
+      </div>
+      @if (positions) {
+        @if ((positionTab === 'open' ? positions.open : positions.closed).length === 0) {
+          <div class="ops-panel-empty">
+            <span class="ops-panel-empty__icon" aria-hidden="true">◉</span>
+            <h3>No {{ positionTab }} positions</h3>
+            <p>{{ positionsOpenCount() }} open · Use Trade desk or strategies to open positions.</p>
+          </div>
+        } @else {
+          <table>
+            <thead>
+              <tr><th>Symbol</th><th>Type</th><th>Qty</th><th>Entry</th><th>Current</th><th>P&amp;L</th><th>Source</th><th></th></tr>
+            </thead>
+            <tbody>
+              @for (p of (positionTab === 'open' ? positions.open : positions.closed); track p.id) {
+                <tr>
+                  <td>{{ p.symbol }}</td>
+                  <td>{{ p.instrumentType }}</td>
+                  <td>{{ p.quantity }}</td>
+                  <td>{{ p.entryPrice | number: '1.2-2' }}</td>
+                  <td>{{ p.currentPrice | number: '1.2-2' }}</td>
+                  <td>{{ p.pnl | number: '1.2-2' }}</td>
+                  <td>{{ p.source }}</td>
+                  <td>
+                    @if (positionTab === 'open') {
+                      <button type="button" class="link" (click)="openPositionTicket(p)">Trade</button>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      } @else {
+        <p class="empty">Loading positions…</p>
+      }
+    </div>
+  }
+
+  @if (tab === 'holdings') {
+    <div class="card">
+      @if (!holdings.length) {
+        <div class="ops-panel-empty">
+          <span class="ops-panel-empty__icon" aria-hidden="true">▣</span>
+          <h3>Holdings</h3>
+          <p>Delivery holdings from paper and broker sync will list here.</p>
+        </div>
+      } @else {
+        <table>
+          <thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Value</th><th>P&amp;L</th><th>Source</th></tr></thead>
+          <tbody>
+            @for (h of holdings; track h.symbol) {
+              <tr>
+                <td>{{ h.symbol }}</td>
+                <td>{{ h.quantity }}</td>
+                <td>{{ h.averagePrice | number: '1.2-2' }}</td>
+                <td>{{ h.currentValue | number: '1.0-0' }}</td>
+                <td>{{ h.pnl | number: '1.2-2' }}</td>
+                <td>{{ h.source }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  }
+
+  @if (tab === 'journal') {
+    <div class="card">
+      <div class="filters">
+        <input placeholder="Symbol" [(ngModel)]="journalSymbol" name="journalSymbol" />
+        <select [(ngModel)]="journalSource" name="journalSource">
+          <option value="">All sources</option>
+          <option value="STRATEGY">Strategy</option>
+          <option value="MANUAL">Manual</option>
+        </select>
+        <button type="button" (click)="loadJournal()">Filter</button>
+      </div>
+      @if (!journal.length) {
+        <div class="ops-panel-empty">
+          <span class="ops-panel-empty__icon" aria-hidden="true">📓</span>
+          <h3>Trade journal</h3>
+          <p>Closed trades with notes will appear after you filter or execute trades.</p>
+        </div>
+      } @else {
+        <table>
+          <thead>
+            <tr><th>Source</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            @for (j of journal; track j.id) {
+              <tr>
+                <td>{{ j.tradeSource }}</td>
+                <td>{{ j.strategyName }}</td>
+                <td>{{ j.symbol }}</td>
+                <td>{{ j.side }}</td>
+                <td>{{ j.entryPrice | number: '1.2-2' }}</td>
+                <td>{{ j.exitPrice | number: '1.2-2' }}</td>
+                <td>{{ j.pnl | number: '1.2-2' }}</td>
+                <td>{{ j.status }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  }
+
+  @if (tab === 'timeline') {
+    <div class="card">
+      <div class="filters">
+        <select [(ngModel)]="timelineFilter" name="timelineFilter">
+          <option value="">All</option>
+          <option value="STRATEGY">Strategy</option>
+          <option value="PAPER">Paper</option>
+          <option value="LIVE">Live</option>
+          <option value="BROKER">Broker</option>
+          <option value="RISK">Risk</option>
+        </select>
+        <button type="button" (click)="loadTimeline()">Apply</button>
+      </div>
+      @if (!timeline.length) {
+        <div class="ops-panel-empty">
+          <span class="ops-panel-empty__icon" aria-hidden="true">↺</span>
+          <h3>Timeline</h3>
+          <p>No events for this filter. Activity streams in as you trade.</p>
+        </div>
+      } @else {
+        <ul class="timeline">
+          @for (e of timeline; track e.id) {
+            <li>
+              <time>{{ e.at | date: 'HH:mm' }}</time>
+              <strong>{{ e.title }}</strong>
+              <span>{{ e.detail }}</span>
+              <em>{{ e.category }}</em>
+            </li>
+          }
+        </ul>
+      }
+    </div>
+  }
+
+  @if (tab === 'notifications') {
+    <div class="ops-grid">
+      <div class="card">
+        <h2>Notifications <span class="tab-inline-count">({{ notifications.length }})</span></h2>
+        @if (!notifications.length) {
+          <div class="ops-panel-empty ops-panel-empty--compact">
+            <p>No alerts stored.</p>
+          </div>
+        } @else {
+          <ul class="note-list">
+            @for (n of notifications; track n.id) {
+              <li [class.unread]="!n.read"><strong>{{ n.eventType }}</strong> {{ n.message }}</li>
+            }
+          </ul>
+        }
+      </div>
+      <div class="card">
+        <h2>Audit log</h2>
+        @if (!audit.length) {
+          <div class="ops-panel-empty ops-panel-empty--compact">
+            <p>No audit entries yet.</p>
+          </div>
+        } @else {
+          <ul class="note-list">
+            @for (a of audit; track a.id) {
+              <li><time>{{ a.at | date: 'short' }}</time> [{{ a.category }}] {{ a.message }}</li>
+            }
+          </ul>
+        }
+      </div>
+    </div>
+  }
+
+  @if (tab === 'reconciliation') {
+    <div class="ops-grid">
+      @if (reconciliation) {
+        <div class="card">
+          <h2>Reconciliation</h2>
+          <p class="health-badge" [class]="reconciliationHealthClass()">
+            @if (reconciliation.health === 'Healthy') {
+              {{ reconciliation.healthLabel }}
+            } @else if (reconciliation.health === 'IssuesFound') {
+              {{ reconciliation.healthLabel }}
+            } @else {
+              {{ reconciliation.healthLabel }}
+            }
+          </p>
+          @if (reconciliation.brokerFetchMessage) {
+            <p class="status">{{ reconciliation.brokerFetchMessage }}</p>
+          }
+          <ul class="metric-list">
+            <li><span>Broker connected</span><strong>{{ reconciliation.brokerConnected ? 'Yes' : 'No' }}</strong></li>
+            <li><span>Position matches</span><strong>{{ reconciliation.positionMatches }}</strong></li>
+            <li><span>Position mismatches</span><strong>{{ reconciliation.positionMismatches }}</strong></li>
+            <li><span>Order matches</span><strong>{{ reconciliation.orderMatches }}</strong></li>
+            <li><span>Order mismatches</span><strong>{{ reconciliation.orderMismatches }}</strong></li>
+            <li><span>Last run</span><strong>{{ reconciliation.lastRunAt | date: 'medium' }}</strong></li>
+          </ul>
+          @if (reconciliation.suggestedActions.length) {
+            <h3>Suggested actions</h3>
+            <ul class="note-list">
+              @for (action of reconciliation.suggestedActions; track action) {
+                <li>{{ action }}</li>
+              }
+            </ul>
+          }
+        </div>
+        <div class="card span-2">
+          <h2>Mismatch details</h2>
+          @if (!reconciliation.mismatches.length) {
+            <div class="ops-panel-empty ops-panel-empty--success">
+              <span class="ops-panel-empty__icon" aria-hidden="true">✓</span>
+              <h3>In sync</h3>
+              <p>Application state aligns with the broker.</p>
+            </div>
+          } @else {
+            <table class="ops-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Application</th>
+                  <th>Broker</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (m of reconciliation.mismatches; track m.symbol + m.reason + m.kind) {
+                  <tr>
+                    <td>{{ m.symbol }} <span class="muted">({{ m.kind }})</span></td>
+                    <td>{{ m.applicationState }}</td>
+                    <td>{{ m.brokerState }}</td>
+                    <td>{{ m.reason }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        </div>
+        <div class="card span-2">
+          <h2>History</h2>
+          @if (!reconciliationHistory.length) {
+            <p class="empty">No reconciliation history yet.</p>
+          } @else {
+            <table class="ops-table compact">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Result</th>
+                  <th>Issues</th>
+                  <th>Positions</th>
+                  <th>Orders</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (h of reconciliationHistory; track h.id) {
+                  <tr>
+                    <td>{{ h.at | date: 'short' }}</td>
+                    <td>{{ h.resultLabel }}</td>
+                    <td>{{ h.issueCount }}</td>
+                    <td>{{ h.positionMatches }}/{{ h.positionMismatches }}</td>
+                    <td>{{ h.orderMatches }}/{{ h.orderMismatches }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        </div>
+      } @else {
+        <p class="empty">Loading reconciliation…</p>
+      }
+    </div>
+  }
+
+  @if (tab === 'broker') {
+    <div class="ops-grid">
+      @if (brokerHealth) {
+        <div class="card">
+          <h2>Broker health</h2>
+          <p class="health-badge" [class]="brokerHealthClass()">{{ brokerHealth.statusLabel }}</p>
+          <ul class="metric-list">
+            <li><span>Connected</span><strong>{{ brokerHealth.connected ? 'Yes' : 'No' }}</strong></li>
+            <li><span>Open orders</span><strong>{{ brokerHealth.openOrdersCount }}</strong></li>
+            <li><span>Failed today</span><strong>{{ brokerHealth.failedOrdersCount }}</strong></li>
+            <li><span>Orders today</span><strong>{{ brokerHealth.todaysOrdersCount }}</strong></li>
+            <li><span>Latency</span><strong>{{ brokerHealth.latencyMs ?? '—' }} ms</strong></li>
+          </ul>
+        </div>
+      } @else {
+        <div class="ops-panel-empty card">
+          <p>Loading broker health…</p>
+        </div>
+      }
+      @if (brokerPortfolio) {
+        <div class="card">
+          <h2>Portfolio sync</h2>
+          <ul class="metric-list">
+            <li><span>Status</span><strong>{{ brokerPortfolio.connected ? 'Connected' : 'Disconnected' }}</strong></li>
+            <li><span>Sync health</span><strong>{{ brokerPortfolio.syncHealth }}</strong></li>
+            <li><span>Available funds</span><strong>{{ brokerPortfolio.availableFunds | number: '1.0-0' }}</strong></li>
+            <li><span>Used margin</span><strong>{{ brokerPortfolio.usedMargin | number: '1.0-0' }}</strong></li>
+            <li><span>Last sync</span><strong>{{ brokerPortfolio.lastSyncAt | date: 'medium' }}</strong></li>
+          </ul>
+        </div>
+      }
+    </div>
+  }
+
+  <footer class="ops-footer">
+    <button type="button" class="link" (click)="openStrategies()">Strategy Command Center →</button>
+  </footer>
+</section>

@@ -1,0 +1,248 @@
+<section class="scc-page twb-aurora-page" aria-label="Strategy command center">
+  <header class="scc-header">
+    <nav class="scc-breadcrumb" aria-label="Breadcrumb">
+      <button type="button" class="scc-crumb-link" (click)="navigateStrategies()">Strategies</button>
+      <span class="scc-crumb-sep" aria-hidden="true">&gt;</span>
+      <span class="scc-crumb-current">{{ strategyTitle() }}</span>
+    </nav>
+    <div class="scc-header-main">
+      <div>
+        <h1>{{ strategyTitle() }}</h1>
+        <p class="scc-meta">
+          <span>{{ strategyTypeLabel() }}</span>
+          <span class="scc-dot" aria-hidden="true">·</span>
+          <span>Period: {{ periodLabel() }}</span>
+          @if (sourceFilter !== 'all') {
+            <span class="scc-dot" aria-hidden="true">·</span>
+            <span>Source: {{ sourceFilter }}</span>
+          }
+        </p>
+      </div>
+      <div class="scc-badges">
+        <span class="scc-pill scc-pill-status" [class.inactive]="statusBadge() === 'INACTIVE'">{{ statusBadge() }}</span>
+        @if (paperAutoBadge(); as auto) {
+          <span class="scc-pill scc-pill-auto">{{ auto }}</span>
+        }
+        @if (zoneAutoBadge()) {
+          <span class="scc-pill scc-pill-zone-live">ZONE AUTO ELIGIBLE</span>
+        }
+      </div>
+    </div>
+  </header>
+
+  @if (loadError) {
+    <p class="scc-msg scc-error">{{ loadError }}</p>
+  }
+
+  @if (loading && !paperAgent) {
+    <p class="scc-msg" aria-busy="true">Loading strategy intelligence…</p>
+  } @else {
+    @let summary = analytics().summary;
+    @let risk = analytics().risk;
+
+    <section class="scc-kpi-grid" aria-label="Strategy overview">
+      <article class="scc-kpi">
+        <span>Total trades</span>
+        <strong>{{ strategyTrades().length }}</strong>
+      </article>
+      <article class="scc-kpi">
+        <span>Wins</span>
+        <strong class="up">{{ summary.wins }}</strong>
+      </article>
+      <article class="scc-kpi">
+        <span>Losses</span>
+        <strong class="down">{{ summary.losses }}</strong>
+      </article>
+      <article class="scc-kpi">
+        <span>Win rate</span>
+        <strong>{{ summary.winRatePct != null ? (summary.winRatePct | number: '1.1-1') + '%' : '—' }}</strong>
+      </article>
+      <article class="scc-kpi">
+        <span>Net P&amp;L</span>
+        <strong [class.up]="summary.netRealizedPnl > 0" [class.down]="summary.netRealizedPnl < 0">
+          ₹{{ summary.netRealizedPnl | number: '1.2-2' }}
+        </strong>
+      </article>
+      <article class="scc-kpi">
+        <span>Profit factor</span>
+        <strong>{{ summary.profitFactor != null ? (summary.profitFactor | number: '1.2-2') : '—' }}</strong>
+      </article>
+    </section>
+
+    <div class="scc-mid-grid">
+      <section class="scc-panel" aria-label="Performance analytics">
+        <header class="scc-panel-head">
+          <h2>Performance</h2>
+          <div class="scc-chip-row" role="tablist" aria-label="Equity curve period">
+            <button type="button" class="scc-chip" [class.active]="equityWindow === 'today'" (click)="setEquityWindow('today')">Day</button>
+            <button type="button" class="scc-chip" [class.active]="equityWindow === '1w'" (click)="setEquityWindow('1w')">Week</button>
+            <button type="button" class="scc-chip" [class.active]="equityWindow === '1m'" (click)="setEquityWindow('1m')">Month</button>
+            <button type="button" class="scc-chip" [class.active]="equityWindow === 'all'" (click)="setEquityWindow('all')">All</button>
+          </div>
+        </header>
+        @if (equityCurveSvg(); as curve) {
+          <svg class="scc-equity" viewBox="0 0 640 140" aria-label="Cumulative P and L">
+            <path class="scc-equity-area" [class.up]="curve.positive" [class.down]="!curve.positive" [attr.d]="curve.areaPath" />
+            <path class="scc-equity-line" [class.up]="curve.positive" [class.down]="!curve.positive" [attr.d]="curve.linePath" />
+          </svg>
+        } @else {
+          <p class="scc-muted">Not enough closed trades for an equity curve in this window.</p>
+        }
+        <dl class="scc-stat-row">
+          <div>
+            <dt>Max drawdown</dt>
+            <dd>₹{{ risk.maxDrawdown | number: '1.2-2' }}</dd>
+          </div>
+          <div>
+            <dt>Avg profit</dt>
+            <dd class="up">₹{{ summary.avgProfitPerTrade != null ? (summary.avgProfitPerTrade | number: '1.2-2') : '—' }}</dd>
+          </div>
+          <div>
+            <dt>Avg loss</dt>
+            <dd class="down">₹{{ summary.avgLossPerTrade != null ? (summary.avgLossPerTrade | number: '1.2-2') : '—' }}</dd>
+          </div>
+          <div>
+            <dt>Avg hold</dt>
+            <dd>{{ avgHoldMinutes() != null ? (avgHoldMinutes() | number: '1.0-0') + ' min' : '—' }}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="scc-panel" aria-label="Current status">
+        <header class="scc-panel-head">
+          <h2>Current status</h2>
+          <span class="scc-status-pill">{{ operationalStatusLabel() }}</span>
+        </header>
+        <p class="scc-muted scc-eval">
+          Last evaluation:
+          @if (lastEvaluationTime(); as t) {
+            <time [dateTime]="t">{{ t | date: 'shortTime' }}</time>
+          } @else {
+            —
+          }
+        </p>
+        <h3 class="scc-subhead">Market context</h3>
+        <ul class="scc-context-list">
+          @for (row of marketContextLines(); track row.symbol) {
+            <li>
+              <span class="scc-context-symbol">{{ row.symbol }}</span>
+              <span class="scc-context-pressure">{{ row.pressure }}</span>
+            </li>
+          }
+        </ul>
+        @if (liveAgent?.armed) {
+          <p class="scc-live-armed">Live execution armed{{ liveAgent?.zoneAutoLiveArmed ? ' (zone auto)' : '' }}.</p>
+        }
+      </section>
+    </div>
+
+    <div class="scc-mid-grid">
+      <section class="scc-panel" aria-label="Recent signals">
+        <header class="scc-panel-head"><h2>Recent signals</h2></header>
+        @if (recentSignals().length === 0) {
+          <p class="scc-muted">No recent decisions for this strategy.</p>
+        } @else {
+          <ul class="scc-signal-list">
+            @for (sig of recentSignals(); track sig.id) {
+              <li [class.rejected]="!sig.accepted">
+                <time [dateTime]="sig.evaluatedAt">{{ sig.evaluatedAt | date: 'shortTime' }}</time>
+                <span class="scc-signal-headline">{{ signalHeadline(sig) }}</span>
+                <span class="scc-signal-score" title="Deterministic rule evidence (not probability)">{{ signalConfidenceLabel(sig) }}</span>
+                <span class="scc-signal-outcome">{{ signalDecisionLabel(sig) }}</span>
+                <span class="scc-signal-underlying">{{ sig.underlying }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </section>
+
+      <section class="scc-panel" aria-label="Rollout status">
+        <header class="scc-panel-head"><h2>Rollout status</h2></header>
+        @if (rollout?.liveTradingNote) {
+          <p class="scc-rollout-note">{{ rollout!.liveTradingNote }}</p>
+        }
+        <table class="scc-rollout-table">
+          <thead>
+            <tr>
+              <th scope="col">Index</th>
+              <th scope="col">Phase</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of rolloutMatrix(); track row.index) {
+              <tr>
+                <td>{{ row.index }}</td>
+                <td>
+                  <span class="scc-rollout-phase" [class.auto]="row.phase === 'PAPER AUTO' || row.phase === 'ZONE AUTO ELIGIBLE'">{{ row.phase }}</span>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </section>
+    </div>
+
+    <div class="scc-bottom-grid">
+      <section class="scc-panel scc-panel-compact" aria-label="Paper trading">
+        <header class="scc-panel-head"><h2>Paper trading</h2></header>
+        <dl class="scc-mini-metrics">
+          <div><dt>Trades</dt><dd>{{ paperTradesOnly().length }}</dd></div>
+          <div><dt>P&amp;L</dt><dd [class.up]="paperPnl() > 0" [class.down]="paperPnl() < 0">₹{{ paperPnl() | number: '1.2-2' }}</dd></div>
+          <div><dt>Open</dt><dd>{{ paperOpenCount() }}</dd></div>
+          <div><dt>Closed</dt><dd>{{ paperClosedCount() }}</dd></div>
+        </dl>
+        <button type="button" class="scc-action-btn" (click)="viewAllPaperTrades()">View all paper trades</button>
+      </section>
+
+      <section class="scc-panel scc-panel-compact" aria-label="Live trading">
+        <header class="scc-panel-head"><h2>Live trading</h2></header>
+        <dl class="scc-mini-metrics">
+          <div><dt>Trades</dt><dd>{{ liveTrades().length }}</dd></div>
+          <div><dt>Open positions</dt><dd>{{ liveOpenCount() }}</dd></div>
+          <div><dt>Book P&amp;L</dt><dd>₹{{ livePnl() | number: '1.2-2' }}</dd></div>
+          <div><dt>Realized</dt><dd>₹{{ liveRealizedPnl() | number: '1.2-2' }}</dd></div>
+        </dl>
+        <button type="button" class="scc-action-btn" (click)="viewLiveTrades()">View live trades</button>
+      </section>
+
+      <section class="scc-panel scc-panel-compact" aria-label="Risk view">
+        <header class="scc-panel-head">
+          <h2>Risk</h2>
+          <span class="scc-risk-health" [class]="riskHealth()">{{ riskHealth() | titlecase }}</span>
+        </header>
+        <dl class="scc-mini-metrics">
+          <div>
+            <dt>Capital allocated</dt>
+            <dd>₹{{ (paperAgent?.config?.allocatedCapital ?? 0) | number: '1.0-0' }}</dd>
+          </div>
+          <div><dt>Open risk</dt><dd>₹{{ openRisk() | number: '1.2-2' }}</dd></div>
+          <div><dt>Max risk</dt><dd>₹{{ proposalMaxRisk() | number: '1.2-2' }}</dd></div>
+          <div><dt>Reward / risk</dt><dd>{{ proposalRewardRisk() != null ? (proposalRewardRisk() | number: '1.2-2') : '—' }}</dd></div>
+          <div><dt>Positions</dt><dd>{{ paperAgent?.positions?.length ?? 0 }} / {{ paperAgent?.config?.maxOpenPositions ?? '—' }}</dd></div>
+        </dl>
+        @if (pendingProposal(); as pending) {
+          <p class="scc-pending">
+            Pending proposal · R/R {{ pending.rewardRisk | number: '1.2-2' }} · max risk ₹{{ pending.maxRisk | number: '1.0-0' }}
+          </p>
+        }
+      </section>
+    </div>
+
+    <section class="scc-panel scc-activity" aria-label="Activity feed">
+      <header class="scc-panel-head"><h2>Activity</h2></header>
+      @if (activityFeed().length === 0) {
+        <p class="scc-muted">No activity yet for this strategy in the current session.</p>
+      } @else {
+        <ul class="scc-activity-list">
+          @for (item of activityFeed(); track item.at + item.title) {
+            <li [class]="item.tone">
+              <time [dateTime]="item.at">{{ item.at | date: 'shortTime' }}</time>
+              <strong>{{ item.title }}</strong>
+              <span>{{ item.detail }}</span>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+  }
+</section>

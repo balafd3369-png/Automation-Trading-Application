@@ -1,6 +1,31 @@
 import { ChartBar } from './board.models';
 
-export type IndicatorKind = 'sma20' | 'sma50' | 'ema9' | 'ema21';
+export type IndicatorKind = 'sma20' | 'sma50' | 'ema9' | 'ema21' | 'bb20' | 'rsi14';
+
+export const CHART_INDICATOR_PREFS_KEY = 'twb-chart-indicators';
+
+const INDICATOR_KINDS: IndicatorKind[] = ['sma20', 'sma50', 'ema9', 'ema21', 'bb20', 'rsi14'];
+
+export function loadChartIndicatorPrefs(): Set<IndicatorKind> {
+  try {
+    const raw = localStorage.getItem(CHART_INDICATOR_PREFS_KEY);
+    if (!raw) {
+      return new Set<IndicatorKind>(['sma20', 'ema9']);
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return new Set<IndicatorKind>(['sma20', 'ema9']);
+    }
+    const kinds = parsed.filter((k): k is IndicatorKind => INDICATOR_KINDS.includes(k as IndicatorKind));
+    return kinds.length ? new Set(kinds) : new Set<IndicatorKind>(['sma20', 'ema9']);
+  } catch {
+    return new Set<IndicatorKind>(['sma20', 'ema9']);
+  }
+}
+
+export function saveChartIndicatorPrefs(active: Set<IndicatorKind>): void {
+  localStorage.setItem(CHART_INDICATOR_PREFS_KEY, JSON.stringify([...active].sort()));
+}
 
 export interface ChartDrawing {
   id: string;
@@ -72,8 +97,48 @@ export function isSessionOpen(time: number): boolean {
   return value.hour === 9 && value.minute === 15;
 }
 
-/** NSE cash session window for live intraday candle updates (09:15–15:30 IST). */
+/** Weekday in IST (Sat/Sun excluded). Exchange holidays are stripped on the server chart API. */
+export function isIstTradingWeekday(timeSec: number): boolean {
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'short',
+  }).format(new Date(timeSec * 1000));
+  return weekday !== 'Sat' && weekday !== 'Sun';
+}
+
+/** NSE cash session: Mon–Fri + 09:15–15:30 IST (holidays filtered server-side on history). */
+const MAX_INDEX_BOARD_DEVIATION = 0.035;
+const MAX_STOCK_BOARD_DEVIATION = 0.12;
+
+/** Prefer chart close when board LTP diverges (stale/corrupt broker quote). */
+export function boardDisplayLast(
+  boardLast: number,
+  chartClose: number,
+  isIndex: boolean,
+  sessionOpen: boolean,
+): number | null {
+  if (boardLast <= 0 && chartClose <= 0) {
+    return null;
+  }
+  if (!sessionOpen && chartClose > 0) {
+    return chartClose;
+  }
+  if (boardLast <= 0) {
+    return chartClose > 0 ? chartClose : null;
+  }
+  if (chartClose <= 0) {
+    return boardLast;
+  }
+  const anchor = chartClose;
+  const deviation = Math.abs(boardLast - anchor) / anchor;
+  const max = isIndex ? MAX_INDEX_BOARD_DEVIATION : MAX_STOCK_BOARD_DEVIATION;
+  return deviation > max ? chartClose : boardLast;
+}
+
 export function isIstCashSessionOpen(timeSec: number): boolean {
+  if (!isIstTradingWeekday(timeSec)) {
+    return false;
+  }
   const value = istParts(timeSec);
   const minutes = value.hour * 60 + value.minute;
   const open = 9 * 60 + 15;
@@ -137,6 +202,92 @@ export function movingAverage(
   return result;
 }
 
+export interface BollingerBandPoint {
+  time: number;
+  middle: number;
+  upper: number;
+  lower: number;
+}
+
+/** Bollinger bands (SMA ± multiplier × σ) on close. */
+export function bollingerBands(
+  candles: ChartBar[],
+  period = 20,
+  multiplier = 2,
+): BollingerBandPoint[] {
+  if (period <= 1 || candles.length < period) {
+    return [];
+  }
+  const result: BollingerBandPoint[] = [];
+  for (let i = period - 1; i < candles.length; i++) {
+    const window = candles.slice(i - period + 1, i + 1);
+    const mean = window.reduce((sum, bar) => sum + bar.close, 0) / period;
+    const variance = window.reduce((sum, bar) => sum + (bar.close - mean) ** 2, 0) / period;
+    const std = Math.sqrt(variance);
+    result.push({
+      time: candles[i].time,
+      middle: mean,
+      upper: mean + multiplier * std,
+      lower: mean - multiplier * std,
+    });
+  }
+  return result;
+}
+
+/** Wilder RSI on close (0–100). */
+export function relativeStrengthIndex(candles: ChartBar[], period = 14): Array<{ time: number; value: number }> {
+  if (period <= 0 || candles.length <= period) {
+    return [];
+  }
+  const result: Array<{ time: number; value: number }> = [];
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = candles[i].close - candles[i - 1].close;
+    if (change >= 0) {
+      avgGain += change;
+    } else {
+      avgLoss -= change;
+    }
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  const firstRs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  result.push({ time: candles[period].time, value: 100 - 100 / (1 + firstRs) });
+
+  for (let i = period + 1; i < candles.length; i++) {
+    const change = candles[i].close - candles[i - 1].close;
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? -change : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    result.push({ time: candles[i].time, value: 100 - 100 / (1 + rs) });
+  }
+  return result;
+}
+
+/** Extend a trend segment across the visible candle time range (ray). */
+export function extendTrendSegment(
+  from: { time: number; value: number },
+  to: { time: number; value: number },
+  timeMin: number,
+  timeMax: number,
+): Array<{ time: number; value: number }> {
+  if (timeMin > timeMax) {
+    return [];
+  }
+  if (from.time === to.time) {
+    return [{ time: timeMin, value: from.value }, { time: timeMax, value: to.value }];
+  }
+  const slope = (to.value - from.value) / (to.time - from.time);
+  const valueAt = (t: number) => from.value + slope * (t - from.time);
+  return [
+    { time: timeMin, value: valueAt(timeMin) },
+    { time: timeMax, value: valueAt(timeMax) },
+  ];
+}
+
 export function drawingStorageKey(symbol: string, interval: string): string {
   return `twb-chart-drawings:${symbol.toUpperCase()}:${interval}`;
 }
@@ -160,6 +311,47 @@ export function parseDrawings(raw: string | null): ChartDrawing[] {
   } catch {
     return [];
   }
+}
+
+/** Remove Sat/Sun intraday bars (phantom candles when the app still receives broker LTP). */
+export function filterIntradayToTradingWeekdays(candles: ChartBar[]): ChartBar[] {
+  return candles.filter((c) => isIstTradingWeekday(c.time));
+}
+
+/** Clamp corrupt API wicks (matches server ChartBarSanitizer). */
+export function clampIntradayBarWicks(bar: ChartBar, interval = '5minute'): ChartBar {
+  const open = bar.open > 0 ? bar.open : bar.close;
+  const close = bar.close > 0 ? bar.close : open;
+  const bodyHigh = Math.max(open, close);
+  const bodyLow = Math.min(open, close);
+  const mid = (bodyHigh + bodyLow) / 2;
+  if (mid <= 0) {
+    return bar;
+  }
+  const maxPct =
+    interval === 'minute'
+      ? 0.0035
+      : interval === '15minute'
+        ? 0.01
+        : interval === '60minute'
+          ? 0.02
+          : interval === 'day'
+            ? 0.05
+            : 0.007;
+  const limit = Math.max(mid * maxPct, 2);
+  const high = Math.min(bar.high > 0 ? bar.high : bodyHigh, bodyHigh + limit);
+  const low = Math.max(bar.low > 0 ? bar.low : bodyLow, bodyLow - limit);
+  if (high <= low) {
+    return { ...bar, open, close, high: bodyHigh + 0.05, low: bodyLow - 0.05 };
+  }
+  return { time: bar.time, open, high, low, close };
+}
+
+/** Calendar filter + OHLC normalize + wick clamp (no live LTP on closed sessions). */
+export function sanitizeChartCandles(candles: ChartBar[], interval = '5minute'): ChartBar[] {
+  return filterIntradayToTradingWeekdays(normalizeChartCandles(candles)).map((bar) =>
+    clampIntradayBarWicks(bar, interval),
+  );
 }
 
 /** Sort ascending, drop invalid OHLC, collapse duplicate timestamps (keep last). */

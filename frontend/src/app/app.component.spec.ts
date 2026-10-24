@@ -193,13 +193,25 @@ describe('AppComponent trade details', () => {
       tightRange: false,
       previousClose: 23980,
     };
+    const boardPayload = {
+      counts: { buying: 0, selling: 0, rangeBound: 0 },
+      symbols: [boardSymbol],
+      updatedAt: '',
+      feed: 'test',
+    };
     const board = {
-      watch: () =>
+      watch: () => of(boardPayload),
+      fetchBoard: () => of(boardPayload),
+      chart: () =>
         of({
-          counts: { buying: 0, selling: 0, rangeBound: 0 },
-          symbols: [boardSymbol],
-          updatedAt: '',
-          feed: 'test',
+          name: 'NIFTY',
+          candles: [],
+          last: 24000,
+          b2: 23900,
+          b1: 23950,
+          s: 24050,
+          s1: 24100,
+          s2: 24150,
         }),
       paperAgent: () => of(snapshot),
       liveAgent: () => of(live),
@@ -207,6 +219,30 @@ describe('AppComponent trade details', () => {
       zoneRejectionBacktest: () => of({ result: { symbol: 'X', pattern: 'STOCK_B1_REJECTION_TO_S2', samples: 0, wins: 0, losses: 0, winRatePercent: 0, avgRewardPoints: 0, avgRiskPoints: 0 }, qualifies: false, minWinRate: 90, minSamples: 8 }),
       optionChain: () => EMPTY,
       sendPaperAgentCommand: () => of(snapshot),
+      strategyFeed: () => of({ updatedAt: '', liveNow: [], strategies: [], monthlyStats: [] }),
+      strategyTrackRecord: () =>
+        of({
+          monthLabel: 'Test',
+          from: '',
+          to: '',
+          overall: {
+            strategyId: '',
+            strategyName: '',
+            trades: 0,
+            closedTrades: 0,
+            openTrades: 0,
+            winningTrades: 0,
+            losingTrades: 0,
+            winRatePercent: 0,
+            realizedPnl: 0,
+            totalMaxRisk: 0,
+            totalMaxReward: 0,
+            peakLiveCapital: 0,
+          },
+          byStrategy: [],
+          trades: [],
+        }),
+      strategyRollout: () => of({ rows: [] }),
     };
     TestBed.configureTestingModule({
       imports: [AppComponent],

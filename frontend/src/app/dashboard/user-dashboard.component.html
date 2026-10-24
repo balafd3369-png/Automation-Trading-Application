@@ -1,0 +1,136 @@
+<section class="dash">
+  <header class="dash-head">
+    <div>
+      <h1>My dashboard</h1>
+      <p class="dash-welcome">
+        Welcome, <strong>{{ auth.user?.displayName }}</strong>
+        <span class="dash-email">{{ auth.user?.email }}</span>
+      </p>
+    </div>
+    <button type="button" class="dash-logout" (click)="logout()">Logout</button>
+  </header>
+
+  <nav class="dash-quick" aria-label="Quick actions">
+    <a routerLink="/market" class="dash-quick-btn dash-quick-btn--primary">Open Market</a>
+    <a routerLink="/manual" class="dash-quick-btn">Manual Trades</a>
+    <a routerLink="/trades/history" class="dash-quick-btn">Trade History</a>
+  </nav>
+
+  @if (loadError) {
+    <p class="dash-banner dash-banner--err">{{ loadError }}</p>
+  }
+
+  @if (!summary && !loadError) {
+    <p class="dash-loading">Loading your dashboard…</p>
+  }
+
+  @if (summary) {
+    <div class="dash-kpis">
+      <article class="dash-kpi">
+        <span>Paper capital</span>
+        <strong>₹{{ summary.paperCapital | number: '1.0-0' }}</strong>
+      </article>
+      <article class="dash-kpi">
+        <span>Available</span>
+        <strong>₹{{ summary.availableCapital | number: '1.0-0' }}</strong>
+      </article>
+      <article class="dash-kpi">
+        <span>Open positions</span>
+        <strong>{{ summary.openPositions }}</strong>
+      </article>
+      <article class="dash-kpi">
+        <span>All-time P&amp;L</span>
+        <strong [class.pos]="summary.realizedPnL + summary.unrealizedPnL > 0" [class.neg]="summary.realizedPnL + summary.unrealizedPnL < 0">
+          ₹{{ summary.realizedPnL + summary.unrealizedPnL | number: '1.2-2' }}
+        </strong>
+      </article>
+    </div>
+
+    <section class="dash-card" aria-labelledby="today-summary-title">
+      <h2 id="today-summary-title">Today&apos;s summary</h2>
+      <div class="dash-today-grid">
+        <div class="dash-today-item">
+          <span>Today&apos;s trades</span>
+          <strong>{{ todayStats.tradeCount }}</strong>
+        </div>
+        <div class="dash-today-item">
+          <span>Today&apos;s P&amp;L</span>
+          <strong [class.pos]="todayStats.pnl > 0" [class.neg]="todayStats.pnl < 0">
+            ₹{{ todayStats.pnl | number: '1.2-2' }}
+          </strong>
+        </div>
+        <div class="dash-today-item">
+          <span>Win rate</span>
+          <strong>{{ todayStats.winRate | number: '1.0-0' }}%</strong>
+        </div>
+        <div class="dash-today-item">
+          <span>Best trade</span>
+          <strong>{{ todayStats.best != null ? ('₹' + (todayStats.best | number: '1.2-2')) : '—' }}</strong>
+        </div>
+        <div class="dash-today-item">
+          <span>Worst trade</span>
+          <strong>{{ todayStats.worst != null ? ('₹' + (todayStats.worst | number: '1.2-2')) : '—' }}</strong>
+        </div>
+      </div>
+      @if (todayStats.tradeCount === 0) {
+        <p class="dash-hint">No trades closed today yet. Intraday activity will show here once you trade.</p>
+      }
+    </section>
+
+    <div class="dash-columns">
+      <section class="dash-card" aria-labelledby="recent-trades-title">
+        <h2 id="recent-trades-title">Recent trades</h2>
+        @if (recentTrades.length) {
+          <ul class="dash-trade-list">
+            @for (t of recentTrades; track t.id) {
+              <li>
+                <div class="dash-trade-main">
+                  <span class="dash-trade-symbol">{{ t.underlying }}</span>
+                  <span class="dash-trade-meta">{{ t.direction }} · {{ t.status }}</span>
+                </div>
+                <div class="dash-trade-side">
+                  @if (t.pnl != null) {
+                    <span [class.pos]="t.pnl > 0" [class.neg]="t.pnl < 0">₹{{ t.pnl | number: '1.2-2' }}</span>
+                  } @else {
+                    <span class="muted">Open</span>
+                  }
+                  <time>{{ tradeTimeLabel(t) }}</time>
+                </div>
+              </li>
+            }
+          </ul>
+        } @else {
+          <p class="dash-empty">No recent trades.</p>
+        }
+      </section>
+
+      <section class="dash-card" aria-labelledby="recent-activity-title">
+        <h2 id="recent-activity-title">Recent activity</h2>
+        @if (activityItems.length) {
+          <ul class="dash-activity-list">
+            @for (item of activityItems; track item.id) {
+              <li>
+                <span class="dash-activity-type">{{ item.label }}</span>
+                <span class="dash-activity-text">{{ item.text }}</span>
+                <time>{{ item.at | date: 'd MMM, HH:mm' }}</time>
+              </li>
+            }
+          </ul>
+        } @else {
+          <div class="dash-empty dash-empty--rich">
+            <p>No trades yet.</p>
+            <p>
+              Open the Market page or create a Manual Paper Trade to get started.
+            </p>
+            <div class="dash-empty-actions">
+              <a routerLink="/market" class="dash-quick-btn dash-quick-btn--small">Open Market</a>
+              <a routerLink="/manual" class="dash-quick-btn dash-quick-btn--small">Manual Paper Trade</a>
+            </div>
+          </div>
+        }
+      </section>
+    </div>
+
+    <p class="dash-meta">Updated {{ summary.updatedAt | date: 'medium' }}</p>
+  }
+</section>

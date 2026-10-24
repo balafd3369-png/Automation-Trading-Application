@@ -118,7 +118,11 @@
           <h2 class="strategy-pnl-title">P&amp;L by strategy</h2>
           <span class="strategy-pnl-period">{{ pnlPeriodLabel() }}</span>
         </div>
-        <p>All catalog strategies; 0 means no trades in this period. Paper auto setups are listed under Strategies Auto Traded above.</p>
+        <p>
+          <span class="strategy-scope-badge strategy-scope-badge--personal" title="Your account only">MY ACCOUNT</span>
+          Strategy paper trades linked to <strong>your</strong> login for the selected period (separate from the platform GLOBAL track record further down).
+          Zero means you had no strategy paper trades in this range.
+        </p>
       </div>
       <div class="strategy-pnl-range-block">
         <div class="strategy-pnl-range" role="group" aria-label="Time range">
@@ -171,6 +175,24 @@
       </div>
     </header>
     @if (!pnlAwaitingCustomDate()) {
+    <div class="strategy-perf-widgets" aria-label="Strategy performance highlights">
+      @if (bestPerformingStrategy(); as best) {
+        <article class="strategy-perf-widget strategy-perf-widget-best">
+          <span class="strategy-perf-widget-label">Best performing</span>
+          <strong class="strategy-perf-widget-name">{{ best.label }}</strong>
+          <span class="strategy-perf-widget-pnl up">₹{{ best.realizedPnl | number: '1.2-2' }}</span>
+          <span class="strategy-perf-widget-meta">{{ best.closed }} closed · {{ pnlRowWinRate(best) | number: '1.0-1' }}% win</span>
+        </article>
+      }
+      @if (worstPerformingStrategy(); as worst) {
+        <article class="strategy-perf-widget strategy-perf-widget-worst">
+          <span class="strategy-perf-widget-label">Worst performing</span>
+          <strong class="strategy-perf-widget-name">{{ worst.label }}</strong>
+          <span class="strategy-perf-widget-pnl down">₹{{ worst.realizedPnl | number: '1.2-2' }}</span>
+          <span class="strategy-perf-widget-meta">{{ worst.closed }} closed · {{ pnlRowWinRate(worst) | number: '1.0-1' }}% win</span>
+        </article>
+      }
+    </div>
     <div class="strategy-pnl-summary" role="group" aria-label="Period totals">
       <div class="strategy-pnl-stat strategy-pnl-stat-primary">
         <span class="strategy-pnl-stat-label">Realized P&amp;L</span>
@@ -219,6 +241,7 @@
           <colgroup>
             <col class="col-strategy" />
             <col class="col-metric" span="4" />
+            <col class="col-winrate" />
             <col class="col-pnl" />
           </colgroup>
           <thead>
@@ -228,6 +251,7 @@
               <th scope="col" class="num">Wins</th>
               <th scope="col" class="num">Losses</th>
               <th scope="col" class="num">Open</th>
+              <th scope="col">Win rate</th>
               <th scope="col" class="num">Realized P&amp;L (₹)</th>
             </tr>
           </thead>
@@ -245,10 +269,13 @@
                     type="button"
                     class="strategy-pnl-name"
                     [title]="row.strategy"
-                    (click)="openStrategyInPaperTrading(row.strategy)"
+                    (click)="openStrategyCommandCenter(row.strategy)"
                   >
                     {{ row.label }}
                   </button>
+                  <span class="strategy-status-pill strategy-status-pill-inline" [class]="strategyStatusForCanonicalId(row.strategy)">
+                    {{ strategyStatusLabel(strategyStatusForCanonicalId(row.strategy)) }}
+                  </span>
                   @if (strategyRowPaperAutoLabel(row.strategy); as autoLabel) {
                     <span
                       class="strategy-pnl-auto-pill"
@@ -260,6 +287,16 @@
                 <td class="num up">{{ row.wins }}</td>
                 <td class="num down">{{ row.losses }}</td>
                 <td class="num">{{ row.open }}</td>
+                <td class="strategy-winrate-cell">
+                  @if (row.closed > 0) {
+                    <div class="strategy-winrate-bar" role="img" [attr.aria-label]="'Win rate ' + (pnlRowWinRate(row) | number: '1.0-1') + ' percent'">
+                      <div class="strategy-winrate-fill" [style.width.%]="pnlRowWinRate(row)"></div>
+                    </div>
+                    <span class="strategy-winrate-pct">{{ pnlRowWinRate(row) | number: '1.0-1' }}%</span>
+                  } @else {
+                    <span class="strategy-winrate-na">—</span>
+                  }
+                </td>
                 <td
                   class="num strategy-pnl-amount"
                   [class.up]="row.realizedPnl > 0"
@@ -273,7 +310,7 @@
           </tbody>
         </table>
       </div>
-      <p class="strategy-pnl-footnote">Click a strategy name to open its paper trades under <strong>Trade Details → Paper Trading</strong> (same period as above).</p>
+      <p class="strategy-pnl-footnote">Click a strategy name to open its <strong>Strategy Command Center</strong> (same period as above).</p>
     }
   </section>
 
@@ -282,12 +319,50 @@
   } @else if (error && !feed) {
     <p class="strategies-msg strategies-error">{{ error }}</p>
   } @else {
-    <section class="live-section" aria-label="Live recommendations">
-      <h2>Live now</h2>
+    <section class="live-section live-section-compact" aria-label="Live recommendations">
+      <header class="live-section-head">
+        <h2>Live now</h2>
+        <span class="live-section-meta">Updated {{ feedUpdatedLabel() }} · {{ liveRecommendationsCache.length }} signal{{ liveRecommendationsCache.length === 1 ? '' : 's' }}</span>
+      </header>
       @if (liveRecommendationsCache.length === 0) {
-        <p class="live-empty">No strategy is firing right now. This page refreshes every few seconds during the session.</p>
+        <div class="live-monitor-dashboard" aria-label="Live monitoring">
+          <div class="live-monitor-stats">
+            <div class="live-monitor-stat">
+              <span>Session</span>
+              <strong>Scanning</strong>
+            </div>
+            <div class="live-monitor-stat">
+              <span>Auto setups</span>
+              <strong>{{ zonePaperAutoRowsCache.length + catalogPaperAutoEntries.length }}</strong>
+            </div>
+            <div class="live-monitor-stat">
+              <span>Active signals</span>
+              <strong>0</strong>
+            </div>
+            <div class="live-monitor-stat">
+              <span>Open paper</span>
+              <strong>{{ pnlSummary.openTrades }}</strong>
+            </div>
+          </div>
+          <p class="live-monitor-wait">Waiting for strategy signal…</p>
+          <div class="live-monitor-indices">
+            @for (index of liveMonitorIndices; track index) {
+              <span class="live-monitor-chip">{{ index }}</span>
+            }
+          </div>
+          <svg class="live-monitor-spark" viewBox="0 0 400 48" aria-hidden="true">
+            <defs>
+              <linearGradient id="liveMonitorGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--accent, #2563eb)" stop-opacity="0.2" />
+                <stop offset="100%" stop-color="var(--accent, #2563eb)" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+            <path fill="url(#liveMonitorGrad)" d="M0,40 L50,32 L100,36 L150,22 L200,28 L250,18 L300,24 L350,14 L400,20 L400,48 L0,48 Z" />
+            <path fill="none" stroke="var(--accent, #2563eb)" stroke-width="1.5" stroke-opacity="0.55" d="M0,40 L50,32 L100,36 L150,22 L200,28 L250,18 L300,24 L350,14 L400,20" />
+          </svg>
+        </div>
       } @else {
-        <div class="live-grid">
+        <div class="live-grid live-grid-compact">
           @for (rec of liveRecommendationsCache; track rec.id) {
             <article class="live-card">
               <header>
@@ -311,14 +386,19 @@
                 <span class="up">{{ rec.ifTargetHit[0] }}</span>
                 <span class="down">{{ rec.ifStopHit[0] }}</span>
               </div>
-              <button
-                type="button"
-                class="paper-trade-btn"
-                [disabled]="paperBusy || !rec.canPaperTrade"
-                (click)="takePaperTrade(rec)"
-              >
-                Execute paper trade
-              </button>
+              <div class="live-rec-actions">
+                <button type="button" class="paper-trade-btn paper-trade-btn--ticket" (click)="openTradeTicket(rec)">
+                  Trade ticket
+                </button>
+                <button
+                  type="button"
+                  class="paper-trade-btn"
+                  [disabled]="paperBusy || !rec.canPaperTrade || !auth.isAdmin"
+                  (click)="takePaperTrade(rec)"
+                >
+                  Execute paper trade
+                </button>
+              </div>
             </article>
           }
         </div>
@@ -326,15 +406,20 @@
     </section>
 
     @if (trackRecord) {
-      <section class="month-track" aria-label="Monthly paper track record">
+      <section class="month-track month-track--global" aria-label="Platform strategy track record">
         <header class="month-track-head">
-          <h2>{{ trackRecord.monthLabel }} — paper track record</h2>
-          <p>
-            Every auto or manual strategy paper trade is logged with strategy, reason, live capital estimate,
-            max profit, and max loss so you can review performance after a full month.
+          <div class="month-track-title-row">
+            <h2>Platform strategy track record</h2>
+            <span class="strategy-scope-badge strategy-scope-badge--global" title="Not your personal account">GLOBAL</span>
+          </div>
+          <p class="month-track-period">{{ trackRecord.monthLabel }} · automated strategy paper engine</p>
+          <p class="month-track-disclaimer">
+            These results represent <strong>platform-wide</strong> strategy performance from the shared paper
+            strategy engine. They are <strong>not</strong> your personal trades, P&amp;L, or paper account.
+            For your activity, use <a routerLink="/dashboard">My dashboard</a>, Manual trading, or Trade history.
           </p>
         </header>
-        <div class="month-overall">
+        <div class="month-overall" aria-label="Platform-wide strategy totals for the month">
           <span>Trades <b>{{ trackRecord.overall.trades }}</b></span>
           <span>Closed <b>{{ trackRecord.overall.closedTrades }}</b></span>
           <span>Win rate <b>{{ trackRecord.overall.winRatePercent | number: '1.0-1' }}%</b></span>
@@ -365,7 +450,9 @@
         </div>
         @if (catalogTradesThisMonth().length) {
           <details class="month-trades-log">
-            <summary>Catalog strategy trades this month ({{ catalogTradesThisMonth().length }})</summary>
+            <summary>
+              Platform strategy trades this month ({{ catalogTradesThisMonth().length }}) · GLOBAL
+            </summary>
             <ul>
               @for (t of catalogTradesThisMonth(); track t.id) {
                 <li>
@@ -385,35 +472,83 @@
     }
 
     <section class="strategy-tracker" aria-label="Strategy list">
-      <h2>Your strategies</h2>
-      @for (item of feed?.strategies ?? []; track item.id) {
-        <details class="strategy-row" [open]="statsExpanded(item.id)">
-          <summary (click)="toggleStats(item.id); $event.preventDefault()">
-            <span class="strategy-row-name">{{ item.name }}</span>
-            <span class="strategy-row-meta">{{ item.timeframe }} · {{ item.session }}</span>
-            <span class="strategy-row-count">This month: {{ monthlyCount(item.id) }} trades</span>
-          </summary>
-          <div class="strategy-row-body">
-            <p>{{ item.summary }}</p>
-            @if (monthlyStat(item.id); as stat) {
-              @if (stat.tradesThisMonth > 0) {
-                <p class="strategy-row-stats">
-                  Win {{ stat.winRatePercent | number: '1.0-1' }}%
-                  · P&amp;L ₹{{ stat.realizedPnl | number: '1.0-0' }}
-                  · peak live capital ₹{{ stat.peakLiveCapital | number: '1.0-0' }}
-                </p>
-              }
+      <header class="strategy-tracker-head">
+        <h2>Your strategies</h2>
+        <span>{{ feed?.strategies?.length ?? 0 }} in catalog</span>
+      </header>
+      <div class="strategy-card-grid">
+        @for (item of feed?.strategies ?? []; track item.id) {
+          @let status = strategyOperationalStatus(item);
+          @let periodRow = pnlBreakdownRow(item.id);
+          @let spark = strategySparkline(item.id);
+          <article class="strategy-rich-card" [class.strategy-rich-card-active]="status === 'active'">
+            <header class="strategy-rich-card-head">
+              <div>
+                <button type="button" class="strategy-rich-card-name" (click)="openStrategyCommandCenter(item.id)">{{ item.name }}</button>
+                <span class="strategy-rich-card-type">{{ strategyTypeLabel(item) }}</span>
+              </div>
+              <span class="strategy-status-pill" [class]="status">{{ strategyStatusLabel(status) }}</span>
+            </header>
+            @if (spark) {
+              <svg class="strategy-rich-sparkline" viewBox="0 0 120 36" aria-hidden="true">
+                <path class="strategy-spark-area" [class.up]="spark.positive" [class.down]="!spark.positive" [attr.d]="spark.areaPath" />
+                <path class="strategy-spark-line" [class.up]="spark.positive" [class.down]="!spark.positive" [attr.d]="spark.linePath" />
+              </svg>
+            }
+            <dl class="strategy-rich-metrics">
+              <div>
+                <dt>Trades (period)</dt>
+                <dd>{{ strategyTradeCountInPeriod(item.id) }}</dd>
+              </div>
+              <div>
+                <dt>This month</dt>
+                <dd>{{ monthlyCount(item.id) }}</dd>
+              </div>
+              <div>
+                <dt>Realized P&amp;L</dt>
+                <dd [class.up]="(periodRow?.realizedPnl ?? 0) > 0" [class.down]="(periodRow?.realizedPnl ?? 0) < 0">
+                  ₹{{ (periodRow?.realizedPnl ?? 0) | number: '1.0-0' }}
+                </dd>
+              </div>
+            </dl>
+            @if (periodRow && periodRow.closed > 0) {
+              <div class="strategy-rich-winrate">
+                <span>Win rate</span>
+                <div class="strategy-winrate-bar">
+                  <div class="strategy-winrate-fill" [style.width.%]="pnlRowWinRate(periodRow)"></div>
+                </div>
+                <b>{{ pnlRowWinRate(periodRow) | number: '1.0-1' }}%</b>
+              </div>
             }
             @if (liveForStrategy(item.id).length) {
-              <p class="strategy-row-live">Active on:
-                @for (r of liveForStrategy(item.id); track r.id) {
-                  <b>{{ r.symbol }}</b>
-                }
+              <p class="strategy-rich-live">
+                Live: @for (r of liveForStrategy(item.id); track r.id) { <b>{{ r.symbol }}</b> }
               </p>
             }
-          </div>
-        </details>
-      }
+            <div class="strategy-rich-actions">
+              <button type="button" class="strategy-action-btn" (click)="openStrategyCommandCenter(item.id)">Command center</button>
+              <button type="button" class="strategy-action-btn subtle" (click)="openStrategyPlaybook(item)">
+                {{ statsExpanded(item.id) ? 'Hide details' : 'Details' }}
+              </button>
+            </div>
+            @if (statsExpanded(item.id)) {
+              <div class="strategy-rich-details">
+                <p>{{ item.summary }}</p>
+                <span class="strategy-rich-meta">{{ item.timeframe }} · {{ item.session }}</span>
+                @if (monthlyStat(item.id); as stat) {
+                  @if (stat.tradesThisMonth > 0) {
+                    <p class="strategy-row-stats">
+                      Month win {{ stat.winRatePercent | number: '1.0-1' }}%
+                      · P&amp;L ₹{{ stat.realizedPnl | number: '1.0-0' }}
+                      · peak capital ₹{{ stat.peakLiveCapital | number: '1.0-0' }}
+                    </p>
+                  }
+                }
+              </div>
+            }
+          </article>
+        }
+      </div>
     </section>
   }
 </section>

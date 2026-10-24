@@ -1,0 +1,162 @@
+@if (ctx) {
+  <div class="trade-ticket-backdrop" (click)="close()" role="presentation"></div>
+  <div
+    class="trade-ticket-modal"
+    [class.trade-ticket-modal--buy]="isBuyTheme()"
+    [class.trade-ticket-modal--sell]="!isBuyTheme()"
+    role="dialog"
+    aria-modal="true"
+    [attr.aria-label]="transactionType + ' ' + ctx.displayName"
+    (click)="$event.stopPropagation()"
+  >
+    <header class="trade-ticket-header">
+      <div class="trade-ticket-header__main">
+        <h2 class="trade-ticket-title">{{ ctx.displayName }}</h2>
+        <div class="trade-ticket-meta">
+          <span class="trade-ticket-exchange">{{ ctx.exchange }}</span>
+          <span class="trade-ticket-ltp">{{ ctx.ltp != null ? (ctx.ltp | number: '1.2-2') : '—' }}</span>
+          @if (changeDisplay(); as ch) {
+            <span class="trade-ticket-chg" [class.up]="ch.points >= 0" [class.down]="ch.points < 0">
+              {{ ch.points >= 0 ? '+' : '' }}{{ ch.points | number: '1.2-2' }}
+              ({{ ch.percent >= 0 ? '+' : '' }}{{ ch.percent | number: '1.2-2' }}%)
+            </span>
+          }
+        </div>
+      </div>
+      <div class="trade-ticket-mode" role="tablist">
+        <button type="button" [class.active]="executionMode === 'PAPER'" (click)="setMode('PAPER')">Paper</button>
+        <button type="button" [class.active]="executionMode === 'LIVE'" (click)="setMode('LIVE')">Live</button>
+      </div>
+      <button type="button" class="trade-ticket-close" aria-label="Close" (click)="close()">×</button>
+    </header>
+
+    <div class="trade-ticket-side-toggle">
+      <button type="button" [class.active]="transactionType === 'BUY'" (click)="setSide('BUY')">Buy</button>
+      <button type="button" [class.active]="transactionType === 'SELL'" (click)="setSide('SELL')">Sell</button>
+    </div>
+
+    @if (step === 'form') {
+      <div class="trade-ticket-body">
+        @if (transactionType === 'SELL' && matchedPosition) {
+          <section class="trade-ticket-panel trade-ticket-position">
+            <h3>Open position</h3>
+            <dl class="trade-ticket-dl">
+              <div><dt>Entry</dt><dd>{{ matchedPosition.entryPrice | number: '1.2-2' }}</dd></div>
+              <div><dt>Current</dt><dd>{{ matchedPosition.currentPrice | number: '1.2-2' }}</dd></div>
+              <div>
+                <dt>P&amp;L</dt>
+                <dd [class.up]="matchedPosition.pnl >= 0" [class.down]="matchedPosition.pnl < 0">
+                  ₹{{ matchedPosition.pnl | number: '1.2-2' }}
+                </dd>
+              </div>
+              <div><dt>Open qty</dt><dd>{{ matchedPosition.quantity }}</dd></div>
+            </dl>
+            <div class="trade-ticket-close-modes">
+              <button type="button" [class.active]="!closePartial" (click)="setCloseFull()">Close full position</button>
+              <button type="button" [class.active]="closePartial" (click)="closePartial = true">Close partial</button>
+            </div>
+          </section>
+        }
+
+        <section class="trade-ticket-panel">
+          <h3>Quantity</h3>
+          @if (!usesLots()) {
+            <div class="trade-ticket-stepper">
+              <button type="button" aria-label="Decrease quantity" (click)="bumpStockQty(-1)">−</button>
+              <input
+                type="number"
+                class="trade-ticket-qty-input"
+                min="1"
+                step="1"
+                [(ngModel)]="stockQty"
+                name="stockQty"
+                (ngModelChange)="onStockQtyChange()"
+              />
+              <button type="button" aria-label="Increase quantity" (click)="bumpStockQty(1)">+</button>
+            </div>
+            <p class="trade-ticket-lot-line">Quantity: <strong>{{ quantity() }}</strong> Shares</p>
+          } @else {
+            <div class="trade-ticket-stepper trade-ticket-stepper--lots">
+              <button type="button" aria-label="Decrease lots" (click)="bumpLots(-1)">−</button>
+              <span class="trade-ticket-stepper-value">{{ lots }} Lots</span>
+              <button type="button" aria-label="Increase lots" (click)="bumpLots(1)">+</button>
+            </div>
+            <p class="trade-ticket-lot-line">Quantity: <strong>{{ quantity() }}</strong></p>
+            <p class="trade-ticket-lot-line">Lot Size: <strong>{{ lotSize() }}</strong></p>
+          }
+        </section>
+
+        <section class="trade-ticket-panel">
+          <h3>Order type</h3>
+          <div class="trade-ticket-segmented">
+            <button type="button" [class.active]="orderType === 'MARKET'" (click)="orderType = 'MARKET'">Market</button>
+            <button type="button" [class.active]="orderType === 'LIMIT'" (click)="orderType = 'LIMIT'">Limit</button>
+          </div>
+          @if (orderType === 'LIMIT') {
+            <label class="trade-ticket-field">
+              Limit price
+              <input type="number" step="0.05" [(ngModel)]="limitPrice" name="limitPrice" />
+            </label>
+          }
+        </section>
+
+        @if (executionMode === 'PAPER') {
+          <section class="trade-ticket-panel trade-ticket-capital">
+            <h3>Paper capital</h3>
+            <ul>
+              <li><span>Available capital</span><strong>₹{{ paperAvailable() | number: '1.0-0' }}</strong></li>
+              <li><span>Required capital</span><strong>₹{{ paperRequired() | number: '1.0-0' }}</strong></li>
+              <li><span>After trade capital</span><strong>₹{{ paperAfter() | number: '1.0-0' }}</strong></li>
+            </ul>
+          </section>
+        } @else {
+          <section class="trade-ticket-panel trade-ticket-capital">
+            <h3>Live funds</h3>
+            <ul>
+              <li><span>Available funds</span><strong>₹{{ liveAvailable() | number: '1.0-0' }}</strong></li>
+              <li><span>Required margin</span><strong>₹{{ liveMargin() | number: '1.0-0' }}</strong></li>
+            </ul>
+          </section>
+        }
+
+        @if (statusMessage) {
+          <p class="trade-ticket-status">{{ statusMessage }}</p>
+        }
+
+        <footer class="trade-ticket-footer">
+          <button type="button" class="trade-ticket-secondary" (click)="close()">Cancel</button>
+          <button type="button" class="trade-ticket-primary" (click)="goPreview()">Preview order</button>
+        </footer>
+      </div>
+    } @else {
+      <div class="trade-ticket-body trade-ticket-preview">
+        <h3>Order preview</h3>
+        <dl class="trade-ticket-preview-dl">
+          <div><dt>Side</dt><dd>{{ transactionType }}</dd></div>
+          <div><dt>Instrument</dt><dd>{{ ctx.displayName }}</dd></div>
+          <div><dt>Instrument type</dt><dd>{{ instrumentTypeLabel() }}</dd></div>
+          @if (usesLots()) {
+            <div><dt>Lot size</dt><dd>{{ lotSize() }}</dd></div>
+            <div><dt>Lots</dt><dd>{{ lots }}</dd></div>
+          }
+          <div><dt>Final quantity</dt><dd>{{ quantity() }} @if (!usesLots()) { shares }</div>
+          <div><dt>Order type</dt><dd>{{ orderType }}</dd></div>
+          <div><dt>Est. trade value</dt><dd>₹{{ estimatedTradeValue() | number: '1.2-2' }}</dd></div>
+          <div><dt>Required capital</dt><dd>₹{{ paperRequired() | number: '1.2-2' }}</dd></div>
+          @if (executionMode === 'PAPER') {
+            <div><dt>Resulting capital</dt><dd>₹{{ paperAfter() | number: '1.0-0' }}</dd></div>
+          }
+        </dl>
+        @if (statusMessage) {
+          <p class="trade-ticket-status">{{ statusMessage }}</p>
+        }
+        <footer class="trade-ticket-footer">
+          <button type="button" class="trade-ticket-secondary" (click)="backToForm()">Back</button>
+          <button type="button" class="trade-ticket-primary" [disabled]="loading" (click)="confirmOrder()">
+            {{ loading ? 'Submitting…' : 'Confirm ' + transactionType }}
+          </button>
+        </footer>
+      </div>
+    }
+  </div>
+}

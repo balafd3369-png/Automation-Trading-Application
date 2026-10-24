@@ -1,25 +1,29 @@
 using Microsoft.AspNetCore.Mvc;
 using TradeWithBeast.Broker;
+using TradeWithBeast.Models;
 using TradeWithBeast.Services;
 
 namespace TradeWithBeast.Controllers;
 
 [ApiController]
 [Route("api/broker")]
-public sealed class BrokerAuthController : ControllerBase
-{
+    public sealed class BrokerAuthController : ControllerBase
+    {
     private readonly BrokerConnectionManager _brokers;
     private readonly MStockAuthClient _mstock;
     private readonly MockMarketService _market;
+    private readonly TradingPlatformOptions _platform;
 
     public BrokerAuthController(
         BrokerConnectionManager brokers,
         MStockAuthClient mstock,
-        MockMarketService market)
+        MockMarketService market,
+        TradingPlatformOptions platform)
     {
         _brokers = brokers;
         _mstock = mstock;
         _market = market;
+        _platform = platform;
     }
 
     public sealed record OtpBody(string Otp, string? ApiKey);
@@ -33,6 +37,8 @@ public sealed class BrokerAuthController : ControllerBase
             version = 2,
             mstockOtp = true,
             apiKeyConfigured = _mstock.IsApiKeyConfigured(),
+            futuresEnabled = _platform.FuturesEnabled,
+            defaultInstrumentType = InstrumentTypeNormalizer.DefaultApiValue(),
         });
 
     [HttpGet("providers")]
@@ -55,7 +61,17 @@ public sealed class BrokerAuthController : ControllerBase
             deadline.CancelAfter(TimeSpan.FromSeconds(28));
             var result = await _mstock.SendOtpAsync(body?.Username, body?.Password, body?.ApiKey, deadline.Token);
             var ok = MStockJson.IsOtpSendAcknowledged(result);
-            var message = result.TryGetProperty("message", out var msg) ? msg.GetString() : null;
+            var message = MStockJson.ReadMessage(result);
+            if (!ok && string.IsNullOrWhiteSpace(message))
+            {
+                message = "m.Stock did not confirm OTP delivery. Check user ID, password, and API key.";
+            }
+
+            if (ok && string.IsNullOrWhiteSpace(message))
+            {
+                message = "OTP sent to your m.Stock registered mobile number.";
+            }
+
             return Ok(new { status = ok ? "success" : "error", message, provider = BrokerIds.MStock });
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -64,6 +80,15 @@ public sealed class BrokerAuthController : ControllerBase
             {
                 status = "success",
                 message = "OTP request is taking longer than usual. If SMS arrived on your phone, enter it below.",
+                provider = BrokerIds.MStock,
+            });
+        }
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return Ok(new
+            {
+                status = "success",
+                message = "m.Stock is slow to respond. If SMS arrived on your phone, enter the OTP below and click Submit.",
                 provider = BrokerIds.MStock,
             });
         }

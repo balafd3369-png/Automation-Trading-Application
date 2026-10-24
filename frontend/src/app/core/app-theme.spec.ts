@@ -1,6 +1,7 @@
 import {
   APP_THEME_PRESETS,
   applyThemePalette,
+  buildSemanticThemeTokens,
   CHART_READABILITY_SURFACE,
   initializeAppTheme,
   lightweightChartDisplayOptions,
@@ -15,9 +16,18 @@ describe('app-theme', () => {
     localStorage.clear();
   });
 
-  it('resolves default preset', () => {
+  it('resolves TradingView dark preset', () => {
     const palette = resolveThemePalette({ presetId: 'default' });
-    expect(palette.bg).toBe('#1e1e1e');
+    expect(palette.bg).toBe('#131722');
+  });
+
+  it('resolves Arctic Light preset with readable dark text', () => {
+    const palette = resolveThemePalette({ presetId: 'white' });
+    expect(palette.bg).toBe('#eef6fc');
+    expect(palette.fg).toBe('#0c1a2e');
+    applyThemePalette(palette, 'white');
+    expect(document.documentElement.dataset['twbTheme']).toBe('white');
+    expect(document.documentElement.style.colorScheme).toBe('light');
   });
 
   it('persists custom selection', () => {
@@ -37,6 +47,16 @@ describe('app-theme', () => {
     expect(document.documentElement.style.getPropertyValue('--bg').trim()).toBe(palette.bg);
     expect(document.documentElement.style.getPropertyValue('--accent').trim()).toBe(palette.accent);
     expect(document.documentElement.style.getPropertyValue('--chart-bg').trim()).toBe(palette.chartBg);
+    expect(document.documentElement.style.getPropertyValue('--color-bg').trim()).toBe(palette.bg);
+    expect(document.documentElement.style.getPropertyValue('--color-text-primary').trim()).toBe(palette.fg);
+    expect(document.documentElement.style.getPropertyValue('--font-size-body').trim()).toBe('14px');
+  });
+
+  it('buildSemanticThemeTokens keeps badge contrast on custom dark bg', () => {
+    const palette = resolveThemePalette({ presetId: 'custom', customBg: '#0d1117' });
+    const tokens = buildSemanticThemeTokens(palette);
+    expect(tokens.badgeSuccess.fg).toBeTruthy();
+    expect(tokens.textPrimary).toBe(palette.fg);
   });
 
   it('resolveChartSurface uses fixed light readability palette', () => {

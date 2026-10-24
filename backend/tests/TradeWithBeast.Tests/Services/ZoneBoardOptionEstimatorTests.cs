@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
 
@@ -5,6 +6,17 @@ namespace TradeWithBeast.Tests.Services;
 
 public sealed class ZoneBoardOptionEstimatorTests
 {
+    static ZoneBoardOptionEstimatorTests()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["InstrumentLots:Index:NIFTY"] = "75",
+            })
+            .Build();
+        InstrumentLotMetadata.Configure(config);
+    }
+
     [Fact]
     public void Long_trade_recommends_ce_with_itm_and_otm_strikes()
     {
@@ -36,6 +48,6 @@ public sealed class ZoneBoardOptionEstimatorTests
         Assert.Equal("CE", est.OptionRight);
         Assert.True(est.Itm.Strike < est.AtmStrike);
         Assert.True(est.Otm.Strike > est.AtmStrike);
-        Assert.Equal(65, est.LotSize);
+        Assert.Equal(75, est.LotSize);
     }
 }

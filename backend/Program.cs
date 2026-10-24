@@ -1,7 +1,6 @@
 using TradeWithBeast.Broker;
-
+using TradeWithBeast.Middleware;
 using TradeWithBeast.Models;
-
 using TradeWithBeast.Services;
 
 
@@ -9,6 +8,8 @@ using TradeWithBeast.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Configuration.AddUserSecrets(typeof(Program).Assembly, optional: true);
+
+InstrumentLotMetadata.Configure(builder.Configuration);
 
 
 
@@ -48,7 +49,7 @@ builder.Services.AddSingleton<MStockSessionStore>();
 
 builder.Services.AddSingleton<MStockLoginContext>();
 
-builder.Services.AddHttpClient("mstock", client => client.Timeout = TimeSpan.FromSeconds(18));
+builder.Services.AddHttpClient("mstock", client => client.Timeout = TimeSpan.FromSeconds(35));
 
 builder.Services.AddSingleton<MStockAuthClient>();
 
@@ -70,12 +71,26 @@ var liveTrading = builder.Configuration.GetSection(LiveExecutionOptions.Section)
 
 builder.Services.AddSingleton(liveTrading);
 
-
+var tradingPlatform = builder.Configuration.GetSection(TradingPlatformOptions.Section).Get<TradingPlatformOptions>()
+    ?? new TradingPlatformOptions();
+builder.Services.AddSingleton(tradingPlatform);
 
 builder.Services.AddSingleton<EquitySymbolCatalog>();
 builder.Services.AddSingleton<MockMarketService>();
 
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MockMarketService>());
+
+var systemIdentity = builder.Configuration.GetSection(SystemIdentityOptions.Section).Get<SystemIdentityOptions>()
+    ?? new SystemIdentityOptions();
+builder.Services.AddSingleton(systemIdentity);
+builder.Services.AddSingleton<ICurrentUserAccessor, CurrentUserAccessor>();
+
+builder.Services.AddSingleton<UserIdentityStore>();
+builder.Services.AddSingleton<AuthService>();
+builder.Services.AddSingleton<MarketDataDistributor>();
+builder.Services.AddSingleton<UserDashboardService>();
+builder.Services.AddSingleton<AdminPlatformService>();
+builder.Services.AddSingleton<DeploymentReadinessService>();
 
 builder.Services.AddSingleton<TradeHistoryStore>();
 
@@ -113,6 +128,18 @@ builder.Services.AddSingleton<IPaperProposalSource>(sp => sp.GetRequiredService<
 
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PaperTradingAgent>());
 
+builder.Services.AddSingleton<ManualOrderCapitalValidator>();
+
+builder.Services.AddSingleton<ManualTradingService>();
+
+builder.Services.AddSingleton<OperationsStore>();
+
+builder.Services.AddSingleton<BrokerReconciliationService>();
+
+builder.Services.AddHostedService(sp => sp.GetRequiredService<BrokerReconciliationService>());
+
+builder.Services.AddSingleton<OperationsSuiteService>();
+
 builder.Services.AddSingleton<LiveExecutionCoordinator>();
 
 builder.Services.AddSingleton<Lazy<IZoneLiveAutoGateway>>(sp =>
@@ -135,7 +162,18 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Deployment");
+DeploymentStartupValidator.ValidateForStartup(
+    app.Environment,
+    systemIdentity,
+    liveTrading,
+    startupLogger);
+var readiness = app.Services.GetRequiredService<DeploymentReadinessService>();
+DeploymentStartupValidator.LogReadinessSummary(readiness.BuildReport(), startupLogger);
+
 app.UseCors();
+app.UseMiddleware<SessionAuthenticationMiddleware>();
+app.UseMiddleware<RequireAuthenticationMiddleware>();
 app.UseOutputCache();
 
 app.MapControllers();

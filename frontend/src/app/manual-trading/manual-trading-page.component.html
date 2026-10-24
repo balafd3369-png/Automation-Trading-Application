@@ -1,0 +1,448 @@
+<section class="terminal-manual twb-aurora-page">
+  <header class="terminal-bar">
+    <div class="terminal-bar__left">
+      <h1 class="terminal-title">Trade desk</h1>
+      <span class="terminal-tag">MANUAL</span>
+      @if (boardData?.feed) {
+        <span class="feed-pill">{{ boardData!.feed }}</span>
+      }
+    </div>
+    <div class="mode-toggle" role="tablist" aria-label="Execution mode">
+      <button type="button" [class.active]="executionMode === 'PAPER'" (click)="setMode('PAPER')">Paper</button>
+      <button type="button" [class.active]="executionMode === 'LIVE'" (click)="setMode('LIVE')">Live</button>
+    </div>
+  </header>
+
+  @if (snapshot) {
+    <div class="terminal-kpis">
+      @if (executionMode === 'PAPER') {
+        <div class="kpi-card kpi-card--blue">
+          <span class="kpi-icon" aria-hidden="true">₹</span>
+          <span class="kpi-label">Available capital</span>
+          <strong class="kpi-value">₹{{ snapshot.capital.availableCapital | number: '1.0-0' }}</strong>
+        </div>
+        <div class="kpi-card kpi-card--orange">
+          <span class="kpi-icon" aria-hidden="true">◆</span>
+          <span class="kpi-label">Deployed capital</span>
+          <strong class="kpi-value">₹{{ snapshot.capital.deployedCapital | number: '1.0-0' }}</strong>
+        </div>
+        <div class="kpi-card kpi-card--indigo">
+          <span class="kpi-icon" aria-hidden="true">◎</span>
+          <span class="kpi-label">Allocated capital</span>
+          <strong class="kpi-value">₹{{ snapshot.capital.allocatedCapital | number: '1.0-0' }}</strong>
+        </div>
+      } @else {
+        <div class="kpi-card kpi-card--blue">
+          <span class="kpi-icon" aria-hidden="true">₹</span>
+          <span class="kpi-label">Broker funds</span>
+          <strong class="kpi-value">₹{{ snapshot.capital.brokerAvailableFunds | number: '1.0-0' }}</strong>
+        </div>
+      }
+      <div
+        class="kpi-card kpi-card--pnl"
+        [class.kpi-card--up]="openPnl() >= 0"
+        [class.kpi-card--down]="openPnl() < 0"
+      >
+        <span class="kpi-icon" aria-hidden="true">{{ openPnl() >= 0 ? '▲' : '▼' }}</span>
+        <span class="kpi-label">Open P&amp;L</span>
+        <strong class="kpi-value">₹{{ openPnl() | number: '1.2-2' }}</strong>
+      </div>
+      <div class="kpi-card kpi-card--purple">
+        <span class="kpi-icon" aria-hidden="true">◉</span>
+        <span class="kpi-label">Positions</span>
+        <strong class="kpi-value">{{ positionsCount() }}</strong>
+      </div>
+    </div>
+  }
+
+  <div class="terminal-layout">
+    <aside class="desk-watchlist" aria-label="Watchlist">
+      <header class="panel-head">
+        <h2>Watchlist</h2>
+        <button type="button" class="panel-head-link" (click)="openMarketChart()">Market</button>
+      </header>
+      <ul class="desk-watchlist__list">
+        @for (row of watchlistRows(); track row.trackId) {
+          <app-watchlist-hover-row
+            [label]="row.label"
+            (chart)="openWatchlistChart(row)"
+            (buy)="openWatchlistTicket(row, 'BUY')"
+            (sell)="openWatchlistTicket(row, 'SELL')"
+          >
+            <button
+              type="button"
+              class="desk-watchlist__row"
+              [class.selected]="symbol === row.underlying || symbol === row.label"
+              (click)="selectWatchlistRow(row)"
+            >
+              <span class="desk-watchlist__name">{{ row.label }}</span>
+              <span class="desk-watchlist__px" [class.up]="rowTone(row) === 'up'" [class.down]="rowTone(row) === 'down'">
+                {{ rowLtp(row) != null ? (rowLtp(row) | number: '1.2-2') : '—' }}
+              </span>
+            </button>
+          </app-watchlist-hover-row>
+        }
+      </ul>
+    </aside>
+
+    <aside class="terminal-order-panel">
+      <div class="instrument-card">
+        <div class="instrument-card__top">
+          <input
+            class="instrument-card__symbol"
+            [(ngModel)]="symbol"
+            name="symbolQuick"
+            (ngModelChange)="onSymbolEdited()"
+            aria-label="Symbol"
+          />
+          <span class="instrument-card__ex">{{ quoteExchange() }}</span>
+        </div>
+        <div class="instrument-card__price" [class.up]="quoteTone() === 'up'" [class.down]="quoteTone() === 'down'">
+          ₹{{ quoteLtp() != null ? (quoteLtp() | number: '1.2-2') : '—' }}
+        </div>
+        @if (quoteChange(); as ch) {
+          <div class="instrument-card__chg" [class.up]="ch.points >= 0" [class.down]="ch.points < 0">
+            {{ ch.points >= 0 ? '+' : '' }}{{ ch.percent | number: '1.2-2' }}%
+          </div>
+        } @else {
+          <div class="instrument-card__chg">—</div>
+        }
+        @if (quoteSnap) {
+          <dl class="instrument-card__stats">
+            <div>
+              <dt>Prev close</dt>
+              <dd>{{ quoteSnap.previousClose | number: '1.2-2' }}</dd>
+            </div>
+            <div>
+              <dt>Today open</dt>
+              <dd>{{ quoteSnap.todayOpen | number: '1.2-2' }}</dd>
+            </div>
+          </dl>
+        }
+        <div class="instrument-card__actions">
+          <button type="button" class="terminal-btn terminal-btn--buy terminal-btn--sm" (click)="openTradeTicket('BUY')">Buy</button>
+          <button type="button" class="terminal-btn terminal-btn--sell terminal-btn--sm" (click)="openTradeTicket('SELL')">Sell</button>
+        </div>
+      </div>
+
+      <details class="terminal-advanced">
+        <summary>Instrument &amp; advanced order</summary>
+        <div class="quote-widget__meta">
+          <button type="button" class="chip-btn" [class.active]="instrumentType === 'STOCK'" (click)="setInstrumentType('STOCK')">Stock</button>
+          <button type="button" class="chip-btn" [class.active]="instrumentType === 'OPTION'" (click)="setInstrumentType('OPTION')">Option</button>
+          <button type="button" class="chip-btn" [class.active]="instrumentType === 'FUTURE'" (click)="setInstrumentType('FUTURE')">Future</button>
+        </div>
+        <form class="order-form" (ngSubmit)="placeOrder()">
+          <label>
+            Symbol
+            <input [(ngModel)]="symbol" name="symbol" required (ngModelChange)="onSymbolEdited()" />
+          </label>
+          @if (instrumentType !== 'STOCK') {
+            <label>
+              Underlying
+              <input [(ngModel)]="underlying" name="underlying" (ngModelChange)="onSymbolEdited()" />
+            </label>
+          }
+          @if (instrumentType === 'OPTION') {
+            <div class="row">
+              <label>
+                Strike
+                <input type="number" [(ngModel)]="strike" name="strike" />
+              </label>
+              <label>
+                Side
+                <select [(ngModel)]="optionRight" name="optionRight">
+                  <option value="CE">CE</option>
+                  <option value="PE">PE</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              Expiry
+              <input [(ngModel)]="expiry" name="expiry" placeholder="2026-10-30" />
+            </label>
+          }
+          <div class="row">
+            <label>
+              Side
+              <select [(ngModel)]="transactionType" name="transactionType">
+                <option value="BUY">Buy</option>
+                <option value="SELL">Sell</option>
+              </select>
+            </label>
+            <label>
+              Type
+              <select [(ngModel)]="orderType" name="orderType">
+                <option value="MARKET">Market</option>
+                <option value="LIMIT">Limit</option>
+              </select>
+            </label>
+          </div>
+          @if (orderType === 'LIMIT') {
+            <label>
+              Limit
+              <input type="number" step="0.05" [(ngModel)]="limitPrice" name="limitPrice" required />
+            </label>
+          }
+          <div class="row">
+            <label>
+              Qty
+              <input type="number" min="1" [(ngModel)]="quantity" name="quantity" required />
+            </label>
+            <label>
+              Product
+              <select [(ngModel)]="product" name="product">
+                <option value="MIS">MIS</option>
+                <option value="NRML">NRML</option>
+                <option value="CNC">CNC</option>
+              </select>
+            </label>
+          </div>
+          <button type="submit" class="submit-secondary" [disabled]="loading">
+            {{ loading ? 'Submitting…' : 'Submit via form' }}
+          </button>
+        </form>
+      </details>
+
+      @if (statusMessage) {
+        <p class="status-toast" role="status">{{ statusMessage }}</p>
+      }
+    </aside>
+
+    <main class="terminal-main">
+      <section class="market-pulse" aria-label="Market summary">
+        <span class="market-pulse__title">Market</span>
+        <div class="market-pulse__indices">
+          @for (idx of indexSnapshots(); track idx.name) {
+            <div class="index-chip">
+              <span class="index-chip__name">{{ idx.name }}</span>
+              <span class="index-chip__px">{{ idx.last | number: '1.2-2' }}</span>
+              @if (indexChange(idx); as ch) {
+                <span class="index-chip__chg" [class.up]="ch.points >= 0" [class.down]="ch.points < 0">
+                  {{ ch.points >= 0 ? '+' : '' }}{{ ch.percent | number: '1.2-2' }}%
+                </span>
+              }
+            </div>
+          }
+          @if (!indexSnapshots().length) {
+            <span class="market-pulse__muted">Index quotes loading…</span>
+          }
+        </div>
+        @if (boardData?.updatedAt) {
+          <time class="market-pulse__time">{{ boardData!.updatedAt | date: 'HH:mm:ss' }}</time>
+        }
+      </section>
+
+      <section class="today-strip" aria-label="Today summary">
+        <div class="today-cell">
+          <span class="today-label">Today&apos;s trades</span>
+          <strong>{{ todayTradesCount() }}</strong>
+        </div>
+        <div class="today-cell">
+          <span class="today-label">Win rate</span>
+          <strong>{{ todayWinRate() != null ? (todayWinRate()! | number: '1.0-0') + '%' : '—' }}</strong>
+        </div>
+        <div class="today-cell" [class.up]="todayRealizedPnl() >= 0" [class.down]="todayRealizedPnl() < 0">
+          <span class="today-label">Realized P&amp;L</span>
+          <strong>₹{{ todayRealizedPnl() | number: '1.2-2' }}</strong>
+        </div>
+        <div class="today-cell" [class.up]="openPnl() >= 0" [class.down]="openPnl() < 0">
+          <span class="today-label">Unrealized P&amp;L</span>
+          <strong>₹{{ openPnl() | number: '1.2-2' }}</strong>
+        </div>
+        <div class="today-cell">
+          <span class="today-label">Open orders</span>
+          <strong>{{ openOrdersCount() }}</strong>
+        </div>
+        <div class="today-cell">
+          <span class="today-label">Open positions</span>
+          <strong>{{ positionsCount() }}</strong>
+        </div>
+      </section>
+
+      <div class="terminal-book">
+        <nav class="book-tabs" aria-label="Blotter sections">
+          <button type="button" [class.active]="bookTab === 'positions'" (click)="setBookTab('positions')">
+            Positions <span class="tab-count">({{ positionsCount() }})</span>
+          </button>
+          <button type="button" [class.active]="bookTab === 'orders'" (click)="setBookTab('orders')">
+            Orders <span class="tab-count">({{ ordersCount() }})</span>
+          </button>
+          <button type="button" [class.active]="bookTab === 'holdings'" (click)="setBookTab('holdings')">
+            Holdings <span class="tab-count">({{ holdingsCount() }})</span>
+          </button>
+          <button type="button" [class.active]="bookTab === 'history'" (click)="setBookTab('history')">
+            History <span class="tab-count">({{ historyCount() }})</span>
+          </button>
+        </nav>
+
+        @if (bookTab === 'positions') {
+          <section class="book-panel">
+            @if (!snapshot?.positions?.length) {
+              <div class="empty-dashboard">
+                <div class="empty-dashboard__icon" aria-hidden="true">◉</div>
+                <h3>Open positions</h3>
+                <div class="empty-metrics">
+                  <div><span>Open positions</span><strong>{{ positionsCount() }}</strong></div>
+                  <div><span>Today&apos;s trades</span><strong>{{ todayTradesCount() }}</strong></div>
+                  <div><span>Open orders</span><strong>{{ openOrdersCount() }}</strong></div>
+                  <div><span>Current P&amp;L</span><strong>₹{{ openPnl() | number: '1.2-2' }}</strong></div>
+                </div>
+                <p class="empty-dashboard__hint">Use <strong>Buy</strong> or <strong>Sell</strong> on the watchlist to open the trade ticket.</p>
+              </div>
+            } @else {
+              <div class="position-cards">
+                @for (p of snapshot!.positions; track p.tradeId) {
+                  <article class="position-card" [class.position-card--up]="p.pnl >= 0" [class.position-card--down]="p.pnl < 0">
+                    <header class="position-card__head">
+                      <div>
+                        <strong class="position-card__symbol">{{ p.symbol }}</strong>
+                        <span class="position-card__meta">{{ p.instrumentType }} · {{ p.direction }}</span>
+                      </div>
+                      <span class="position-card__pnl">₹{{ p.pnl | number: '1.2-2' }}</span>
+                    </header>
+                    <dl class="position-card__stats">
+                      <div><dt>Qty</dt><dd>{{ p.quantity }}</dd></div>
+                      <div><dt>Entry</dt><dd>{{ p.entryPrice | number: '1.2-2' }}</dd></div>
+                      <div><dt>LTP</dt><dd>{{ p.currentPrice | number: '1.2-2' }}</dd></div>
+                    </dl>
+                    <div class="position-card__actions">
+                      <button type="button" class="mini-btn mini-btn--sell" (click)="openTicketFromPosition(p, 'SELL')">Sell</button>
+                      <button type="button" class="mini-btn mini-btn--buy" (click)="openTicketFromPosition(p, 'BUY')">Buy</button>
+                      @if (executionMode === 'PAPER') {
+                        <button type="button" class="mini-btn mini-btn--ghost" (click)="closePosition(p.tradeId)">Close</button>
+                      }
+                    </div>
+                  </article>
+                }
+              </div>
+            }
+          </section>
+        }
+
+        @if (bookTab === 'orders') {
+          <section class="book-panel">
+            @if (!snapshot?.orders?.length) {
+              <div class="empty-dashboard empty-dashboard--compact">
+                <div class="empty-dashboard__icon" aria-hidden="true">◎</div>
+                <h3>Orders</h3>
+                <p class="empty-dashboard__hint">No open orders · {{ openOrdersCount() }} pending</p>
+              </div>
+            } @else {
+              <div class="table-wrap">
+                <table class="terminal-table">
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Qty</th>
+                      <th>Type</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (o of snapshot!.orders; track o.id) {
+                      <tr>
+                        <td><span class="status-pill">{{ o.status }}</span></td>
+                        <td>{{ o.symbol }}</td>
+                        <td [class.side-buy]="o.transactionType === 'BUY'" [class.side-sell]="o.transactionType === 'SELL'">{{ o.transactionType }}</td>
+                        <td>{{ o.filledQuantity }}/{{ o.quantity }}</td>
+                        <td>{{ o.orderType }}</td>
+                        <td>
+                          @if (o.status === 'PENDING' || o.status === 'SUBMITTED') {
+                            <button type="button" class="link" (click)="cancelOrder(o.id)">Cancel</button>
+                          }
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
+            @if (executionMode === 'LIVE' && liveBook && liveBook.brokerOrders.length) {
+              <h3 class="sub-panel-title">Broker orders</h3>
+              <div class="table-wrap">
+                <table class="terminal-table">
+                  <thead>
+                    <tr><th>Status</th><th>Symbol</th><th>Side</th><th>Qty</th></tr>
+                  </thead>
+                  <tbody>
+                    @for (o of liveBook.brokerOrders; track o.orderId) {
+                      <tr>
+                        <td>{{ o.status }}</td>
+                        <td>{{ o.tradingSymbol }}</td>
+                        <td>{{ o.transactionType }}</td>
+                        <td>{{ o.filledQuantity }}/{{ o.quantity }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
+          </section>
+        }
+
+        @if (bookTab === 'holdings') {
+          <section class="book-panel">
+            @if (!snapshot?.holdings?.length) {
+              <div class="empty-dashboard empty-dashboard--compact">
+                <div class="empty-dashboard__icon" aria-hidden="true">▣</div>
+                <h3>Holdings</h3>
+                <p class="empty-dashboard__hint">Delivery holdings appear here ({{ holdingsCount() }}).</p>
+              </div>
+            } @else {
+              <div class="table-wrap">
+                <table class="terminal-table">
+                  <thead>
+                    <tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Value</th></tr>
+                  </thead>
+                  <tbody>
+                    @for (h of snapshot!.holdings; track h.symbol) {
+                      <tr>
+                        <td>{{ h.symbol }}</td>
+                        <td>{{ h.quantity }}</td>
+                        <td>{{ h.averagePrice | number: '1.2-2' }}</td>
+                        <td>₹{{ h.marketValue | number: '1.0-0' }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
+          </section>
+        }
+
+        @if (bookTab === 'history') {
+          <section class="book-panel">
+            @if (!snapshot?.tradeHistory?.length) {
+              <div class="empty-dashboard empty-dashboard--compact">
+                <div class="empty-dashboard__icon" aria-hidden="true">↺</div>
+                <h3>History</h3>
+                <p class="empty-dashboard__hint">Closed manual trades in the last 3 months ({{ historyCount() }}).</p>
+              </div>
+            } @else {
+              <div class="table-wrap">
+                <table class="terminal-table">
+                  <thead>
+                    <tr><th>Closed</th><th>Symbol</th><th>P&amp;L</th><th>Reason</th></tr>
+                  </thead>
+                  <tbody>
+                    @for (t of snapshot!.tradeHistory; track t.id) {
+                      <tr>
+                        <td class="cell-dim">{{ t.closedAt || t.createdAt }}</td>
+                        <td>{{ t.underlying }}</td>
+                        <td [class.up]="(t.pnl ?? 0) >= 0" [class.down]="(t.pnl ?? 0) < 0">{{ t.pnl | number: '1.2-2' }}</td>
+                        <td class="cell-dim">{{ t.exitReason }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
+          </section>
+        }
+      </div>
+    </main>
+  </div>
+</section>

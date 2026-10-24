@@ -18,6 +18,10 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
         builder.UseEnvironment("Development");
         builder.UseSetting("TradeHistory:DatabasePath", _historyPath);
         builder.UseSetting("LiveTrading:Enabled", "false");
+        builder.UseSetting("SystemIdentity:RequireAuthentication", "false");
+        builder.UseSetting("SystemIdentity:AllowAnonymousLocalUser", "true");
+        builder.UseSetting("SystemIdentity:AdminEmail", "admin@test.local");
+        builder.UseSetting("SystemIdentity:AdminPassword", TestAuthHelper.DefaultAdminPassword);
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<MStockSessionStore>();

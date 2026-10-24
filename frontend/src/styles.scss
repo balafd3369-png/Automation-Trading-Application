@@ -1,6 +1,36 @@
 @use 'twb-glass' as glass;
+@use 'theme-white';
+@use 'theme-semantic';
 
 :root {
+  --color-bg: var(--bg);
+  --color-surface: var(--sidebar);
+  --color-card: var(--title);
+  --color-text-primary: var(--fg);
+  --color-text-secondary: var(--muted);
+  --color-border: var(--border);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-info: var(--accent);
+  --color-hover: color-mix(in srgb, var(--accent) 12%, var(--activity));
+  --color-table-header-bg: var(--activity);
+  --color-table-row-hover: color-mix(in srgb, var(--accent) 10%, var(--editor));
+  --color-table-border: var(--border);
+
+  --font-size-page-title: 32px;
+  --font-size-section-title: 20px;
+  --font-size-card-label: 13px;
+  --font-size-body: 14px;
+  --font-size-table: 14px;
+  --font-size-value-lg: 24px;
+  --font-size-value-md: 18px;
+  --font-size-min: 13px;
+  --line-height-body: 1.5;
+  --font-weight-page-title: 800;
+  --font-weight-section-title: 700;
+  --font-weight-value: 700;
+
   --bg: #1e1e1e;
   --title: #3c3c3c;
   --activity: #333333;
@@ -24,7 +54,7 @@
   --warning: #d29922;
   --warning-muted: rgba(210, 153, 34, 0.14);
 
-  --font-sans: "DM Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-sans: "Inter", "DM Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --radius-xs: 4px;
@@ -46,6 +76,16 @@
   --fg-on-accent-band: #f5f5f5;
   --muted-on-title: var(--muted);
   --muted-on-sidebar: var(--muted);
+
+  --titlebar-search-bg: color-mix(in srgb, var(--surface-inset) 58%, var(--title) 42%);
+  --titlebar-search-bg-focus: color-mix(in srgb, var(--surface-inset) 72%, var(--title) 28%);
+  --titlebar-search-fg: var(--fg-on-title);
+  --titlebar-search-muted: var(--muted-on-title);
+  --titlebar-search-border: color-mix(in srgb, var(--border) 70%, var(--accent) 30%);
+  --titlebar-search-kbd-bg: color-mix(in srgb, var(--activity) 68%, var(--title) 32%);
+  --titlebar-search-kbd-border: color-mix(in srgb, var(--border) 80%, var(--accent-border) 20%);
+  --titlebar-search-inset: color-mix(in srgb, var(--fg-on-title) 12%, transparent);
+  --titlebar-search-focus-glow: 0 0 0 4px var(--accent-muted);
   --ambient-ce: rgb(63 185 80 / 18%);
   --ambient-pe: rgb(248 81 73 / 16%);
   --glass-panel: var(--sidebar);
@@ -61,7 +101,7 @@
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 
   /* Uppercase column / section labels (tables, grids) */
-  --twb-table-head-size: 14px;
+  --twb-table-head-size: var(--font-size-min);
   --twb-table-head-weight: 800;
   --twb-table-head-tracking: 0.04em;
   --twb-table-head-color: var(--muted);
@@ -104,6 +144,48 @@ app-root {
   color: var(--fg);
 }
 
+.sentiment-empty-shell {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.sentiment-empty-shell--rail {
+  min-height: 108px;
+}
+
+.sentiment-empty-shell--pane {
+  min-height: 220px;
+}
+
+.sentiment-empty-shell--live {
+  min-height: 280px;
+}
+
+.sentiment-empty-shell--paper {
+  min-height: 100px;
+}
+
+.sentiment-empty-shell--monitor {
+  min-height: 200px;
+}
+
+.sentiment-empty-shell--strategy {
+  min-height: 120px;
+  margin-top: 8px;
+}
+
+.sentiment-empty-shell > :not(app-market-sentiment-ambient) {
+  position: relative;
+  z-index: 1;
+}
+
+html.twb-theme-instant .ide,
+html.twb-theme-instant body,
+html.twb-theme-instant app-root {
+  transition: none !important;
+}
+
 .ide {
   color: var(--fg);
   transition:
@@ -125,7 +207,7 @@ app-root {
 
 body {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--font-size-body, 14px);
   font-feature-settings: "ss01", "cv01";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using TradeWithBeast.Authorization;
 using TradeWithBeast.Broker;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
@@ -30,6 +31,7 @@ public sealed class PaperAgentController : ControllerBase
     public IActionResult Get() => Ok(_agent.Snapshot());
 
     [HttpPost("command")]
+    [AdminAuthorize]
     public async Task<IActionResult> Command(
         [FromBody] PaperAgentCommandRequest request,
         CancellationToken ct)
@@ -38,6 +40,7 @@ public sealed class PaperAgentController : ControllerBase
     }
 
     [HttpPost("take-strategy")]
+    [AdminAuthorize]
     public IActionResult TakeStrategy([FromBody] TakeStrategyPaperTradeRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Strategy) || string.IsNullOrWhiteSpace(request.Underlying))
@@ -84,12 +87,13 @@ public sealed class PaperAgentController : ControllerBase
     [HttpGet("trades")]
     public IActionResult Trades([FromQuery] string range = "1m", [FromQuery] string? from = null, [FromQuery] string? to = null)
     {
+        var capitalPerTrade = _agent.AllocatedCapitalPerTrade();
         if (!string.IsNullOrWhiteSpace(from))
         {
-            return Ok(_history.QueryPaperTradesForIstDates(from, to, DateTimeOffset.UtcNow));
+            return Ok(_history.QueryPaperTradesForIstDates(from, to, DateTimeOffset.UtcNow, capitalPerTrade));
         }
 
-        return Ok(_history.QueryPaperTrades(range, DateTimeOffset.UtcNow));
+        return Ok(_history.QueryPaperTrades(range, DateTimeOffset.UtcNow, capitalPerTrade));
     }
 
     [HttpGet("strategy-track-record")]

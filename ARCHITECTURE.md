@@ -119,7 +119,7 @@ MockMarketService (IHostedService timer)
           → symbols[] with zones + mark + counts
 ```
 
-Frontend polls `GET /api/board` every 1s via `BoardService.watch()`.
+Frontend polls `GET /api/board` via `BoardPollStore` (interval from `environment.boardPollMs`: **1000** dev, **3000** QA, **6000** production). Polling survives single-request failures and auto-recovers when the backend returns.
 
 ### 2. Chart request
 

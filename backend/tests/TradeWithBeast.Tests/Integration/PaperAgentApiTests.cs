@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
@@ -27,9 +28,11 @@ public sealed class PaperAgentApiTests : IClassFixture<TestWebApplicationFactory
     [Fact]
     public async Task Confirm_without_pending_trade_does_not_execute()
     {
-        var response = await _client.PostAsJsonAsync(
-            "/api/paper-agent/command",
-            new PaperAgentCommandRequest("confirm"));
+        var token = await TestAuthHelper.LoginAdminAsync(_client, "admin@test.local", TestAuthHelper.DefaultAdminPassword);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/paper-agent/command");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        request.Content = JsonContent.Create(new PaperAgentCommandRequest("confirm"));
+        var response = await _client.SendAsync(request);
         var snapshot = await response.Content.ReadFromJsonAsync<PaperAgentSnapshot>();
 
         Assert.NotNull(snapshot);
@@ -41,9 +44,16 @@ public sealed class PaperAgentApiTests : IClassFixture<TestWebApplicationFactory
     [Fact]
     public async Task Configuration_starts_scanning_but_does_not_open_unapproved_trade()
     {
-        var response = await _client.PostAsJsonAsync(
-            "/api/paper-agent/command",
-            new PaperAgentCommandRequest("use 1 lakh, target 5000, max loss 1500"));
+        var token = await TestAuthHelper.LoginAdminAsync(_client, "admin@test.local", TestAuthHelper.DefaultAdminPassword);
+        async Task<HttpResponseMessage> PostCommandAsync(string message)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/paper-agent/command");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            request.Content = JsonContent.Create(new PaperAgentCommandRequest(message));
+            return await _client.SendAsync(request);
+        }
+
+        var response = await PostCommandAsync("use 1 lakh, target 5000, max loss 1500");
         var snapshot = await response.Content.ReadFromJsonAsync<PaperAgentSnapshot>();
 
         Assert.NotNull(snapshot);
@@ -51,9 +61,7 @@ public sealed class PaperAgentApiTests : IClassFixture<TestWebApplicationFactory
         Assert.Empty(snapshot.Positions);
         Assert.Null(snapshot.PendingTrade);
 
-        await _client.PostAsJsonAsync(
-            "/api/paper-agent/command",
-            new PaperAgentCommandRequest("stop paper agent"));
+        await PostCommandAsync("stop paper agent");
     }
 
     [Fact]
@@ -93,10 +101,6 @@ public sealed class PaperAgentApiTests : IClassFixture<TestWebApplicationFactory
         using var response = await _client.PostAsJsonAsync(
             "/api/live-agent/arm",
             new ArmLiveRequest(LiveExecutionCoordinator.ArmAcknowledgement));
-        response.EnsureSuccessStatusCode();
-        var after = await response.Content.ReadFromJsonAsync<LiveExecutionSnapshot>();
-        Assert.NotNull(after);
-        Assert.False(after!.Armed);
-        Assert.Contains("disabled", after.ReconciliationStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 }

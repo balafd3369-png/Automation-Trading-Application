@@ -1,0 +1,118 @@
+<section
+  class="strategy-status"
+  [class.strategy-status--compact]="isCompact()"
+  [class.strategy-status--desk]="!isCompact()"
+  [attr.aria-label]="isCompact() ? 'Platform status' : 'Strategy status'"
+>
+  @if (isCompact()) {
+    <header class="strategy-status__head strategy-status__head--tight">
+      <h2 class="strategy-status__title">Platform status</h2>
+      <span class="strategy-status__platform-pill">{{ platformStatusLabel() }}</span>
+    </header>
+
+    <ul class="status-rows" aria-label="Today at a glance">
+      <li class="status-row">
+        <span class="status-row__label">Strategies</span>
+        <strong class="status-row__value">{{ runningStrategiesCount() }}</strong>
+      </li>
+      <li class="status-row">
+        <span class="status-row__label">Signals</span>
+        <strong class="status-row__value">{{ todaySignalsCount() }}</strong>
+      </li>
+      <li class="status-row">
+        <span class="status-row__label">Paper trades</span>
+        <strong class="status-row__value">{{ todayPaperTradesCount() }}</strong>
+      </li>
+      <li class="status-row">
+        <span class="status-row__label">Win rate</span>
+        <strong class="status-row__value">
+          @if (todayWinRate() != null) {
+            {{ todayWinRate()! | number: '1.0-0' }}%
+          } @else {
+            —
+          }
+        </strong>
+      </li>
+      <li class="status-row status-row--muted">
+        <span class="status-row__label">Activity</span>
+        <strong class="status-row__value status-row__value--time">
+          @if (lastActivityIso(); as at) {
+            {{ at | date: 'HH:mm' }}
+          } @else {
+            —
+          }
+        </strong>
+      </li>
+    </ul>
+
+    <div class="status-block">
+      <h3 class="status-block__title">System health</h3>
+      <ul class="status-rows status-rows--health" aria-label="System health">
+        <li class="status-row" [class.status-row--ok]="brokerConnected()" [class.status-row--neutral]="!brokerConnected()">
+          <span class="status-row__label">
+            <span class="status-dot" aria-hidden="true"></span>
+            Broker
+          </span>
+          <strong class="status-row__value">{{ brokerConnected() ? 'Connected' : 'Offline' }}</strong>
+        </li>
+        <li
+          class="status-row"
+          [class.status-row--ok]="feedStatusOk()"
+          [class.status-row--warn]="feedStatusLabel() === 'Waiting'"
+          [class.status-row--bad]="feedStatusLabel() === 'Issue'"
+        >
+          <span class="status-row__label">
+            <span class="status-dot" aria-hidden="true"></span>
+            Market feed
+          </span>
+          <strong class="status-row__value">{{ feedStatusLabel() }}</strong>
+        </li>
+        <li
+          class="status-row"
+          [class.status-row--ok]="reconciliationStatusOk()"
+          [class.status-row--warn]="reconciliation?.health === 'IssuesFound'"
+          [class.status-row--bad]="reconciliation?.health === 'BrokerError'"
+        >
+          <span class="status-row__label">
+            <span class="status-dot" aria-hidden="true"></span>
+            Reconciliation
+          </span>
+          <strong class="status-row__value">{{ reconciliationStatusLabel() }}</strong>
+        </li>
+      </ul>
+    </div>
+  } @else {
+    <header class="strategy-status__head">
+      <h2 class="strategy-status__title">Strategy status</h2>
+    </header>
+    <div class="strategy-status__grid">
+      <div class="strategy-status__cell strategy-status__cell--run">
+        <span class="strategy-status__label">Strategies running</span>
+        <strong class="strategy-status__value">{{ runningStrategiesCount() }}</strong>
+        <span class="strategy-status__hint">paper auto</span>
+      </div>
+      <div class="strategy-status__cell strategy-status__cell--time">
+        <span class="strategy-status__label">Last activity</span>
+        <strong class="strategy-status__value strategy-status__value--time">
+          @if (lastActivityIso(); as at) {
+            {{ at | date: 'HH:mm:ss' }}
+          } @else {
+            —
+          }
+        </strong>
+        <span class="strategy-status__hint">strategy feed</span>
+      </div>
+    </div>
+    @if (indexSnapshots().length) {
+      <div class="strategy-status__indices" aria-label="Index quotes">
+        @for (idx of indexSnapshots(); track idx.name) {
+          <div class="strategy-status__index">
+            <span class="strategy-status__index-name">{{ idx.name }}</span>
+            <span class="strategy-status__index-px">{{ idx.last | number: '1.2-2' }}</span>
+          </div>
+        }
+      </div>
+    }
+  }
+</section>
+

@@ -12,6 +12,7 @@ import {
 } from '@angular/core';
 import { PaperTradeHistoryItem } from '../core/board.models';
 import {
+  filterExecutedPaperHistoryTrades,
   paperTradeCapitalPrice,
   paperTradeClosedAt,
   paperTradeDirectionShort,
@@ -41,6 +42,7 @@ export class StrategyTradesPanelComponent implements OnChanges {
   @Input() trades: PaperTradeHistoryItem[] = [];
   @Input() periodHint =
     'Change the period on Strategies (1 Day / 1 Week / 1 Month / Custom date), then click the strategy again.';
+  @Input() contextMode = false;
 
   @Output() closed = new EventEmitter<void>();
 
@@ -65,7 +67,7 @@ export class StrategyTradesPanelComponent implements OnChanges {
   }
 
   filteredTrades(): PaperTradeHistoryItem[] {
-    let items = [...this.trades]
+    let items = filterExecutedPaperHistoryTrades([...this.trades])
       .filter((t) => tradeMatchesCatalogStrategy(t, this.strategyId))
       .sort((a, b) => {
         const at = Date.parse(a.closedAt ?? a.openedAt ?? a.createdAt ?? '') || 0;
@@ -76,14 +78,7 @@ export class StrategyTradesPanelComponent implements OnChanges {
     if (this.outcomeFilter === 'positive') {
       items = items.filter((t) => t.status === 'CLOSED' && (paperTradeRealizedPnl(t) ?? 0) > 0);
     } else if (this.outcomeFilter === 'negative') {
-      items = items.filter(
-        (t) =>
-          (t.status === 'CLOSED' && (paperTradeRealizedPnl(t) ?? 0) < 0) ||
-          t.status === 'REJECTED' ||
-          t.status === 'CANCELLED' ||
-          t.status === 'EXPIRED' ||
-          t.status === 'INTERRUPTED',
-      );
+      items = items.filter((t) => t.status === 'CLOSED' && (paperTradeRealizedPnl(t) ?? 0) < 0);
     }
 
     return items;
@@ -107,6 +102,10 @@ export class StrategyTradesPanelComponent implements OnChanges {
     open: number;
     realizedPnl: number;
     capitalPrice: number;
+    totalTrades: number;
+    winRatePercent: number;
+    avgProfit: number;
+    avgLoss: number;
   } {
     const items = [...this.trades].filter((t) => tradeMatchesCatalogStrategy(t, this.strategyId));
     let wins = 0;
@@ -115,6 +114,8 @@ export class StrategyTradesPanelComponent implements OnChanges {
     let capitalPrice = 0;
     let open = 0;
     let closed = 0;
+    let profitSum = 0;
+    let lossSum = 0;
 
     for (const t of items) {
       capitalPrice += paperTradeCapitalPrice(t);
@@ -128,13 +129,64 @@ export class StrategyTradesPanelComponent implements OnChanges {
         realizedPnl += pnl;
         if (pnl > 0) {
           wins++;
+          profitSum += pnl;
         } else if (pnl < 0) {
           losses++;
+          lossSum += pnl;
         }
       }
     }
 
-    return { closed, wins, losses, open, realizedPnl, capitalPrice };
+    const totalTrades = closed + open;
+    const winRatePercent = closed > 0 ? (wins / closed) * 100 : 0;
+    const avgProfit = wins > 0 ? profitSum / wins : 0;
+    const avgLoss = losses > 0 ? lossSum / losses : 0;
+
+    return {
+      closed,
+      wins,
+      losses,
+      open,
+      realizedPnl,
+      capitalPrice,
+      totalTrades,
+      winRatePercent,
+      avgProfit,
+      avgLoss,
+    };
+  }
+
+  equityCurve(): { linePath: string; areaPath: string; positive: boolean } | null {
+    const closed = [...this.trades]
+      .filter((trade) => tradeMatchesCatalogStrategy(trade, this.strategyId) && trade.status === 'CLOSED')
+      .sort(
+        (left, right) =>
+          Date.parse(left.closedAt ?? left.openedAt ?? left.createdAt) -
+          Date.parse(right.closedAt ?? right.openedAt ?? right.createdAt),
+      );
+    if (closed.length < 2) {
+      return null;
+    }
+    let cumulative = 0;
+    const values: number[] = [];
+    for (const trade of closed) {
+      cumulative += paperTradeRealizedPnl(trade) ?? trade.pnl ?? 0;
+      values.push(cumulative);
+    }
+    const min = Math.min(...values, 0);
+    const max = Math.max(...values, 0);
+    const span = max - min || 1;
+    const width = 560;
+    const height = 120;
+    const step = values.length > 1 ? width / (values.length - 1) : width;
+    const points = values.map((value, index) => {
+      const x = index * step;
+      const y = height - ((value - min) / span) * (height - 8) - 4;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+    const linePath = `M ${points.join(' L ')}`;
+    const areaPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
+    return { linePath, areaPath, positive: cumulative >= 0 };
   }
 
   setOutcomeFilter(filter: 'all' | 'positive' | 'negative'): void {

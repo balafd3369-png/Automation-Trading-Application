@@ -14,14 +14,9 @@ public static class ChartSessionMerger
     public static DateTimeOffset IstNow()
         => TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Ist);
 
-    /// <summary>NSE/BSE cash session 09:15–15:30 IST (exclusive end).</summary>
-    public static bool IsCashSessionOpen(DateTimeOffset timeIst)
-    {
-        var minutes = timeIst.Hour * 60 + timeIst.Minute;
-        var open = 9 * 60 + 15;
-        var close = 15 * 60 + 30;
-        return minutes >= open && minutes < close;
-    }
+    /// <summary>NSE/BSE cash session: trading day + 09:15–15:30 IST (exclusive end).</summary>
+    public static bool IsCashSessionOpen(DateTimeOffset timeIst) =>
+        NseCashSession.IsLiveIntradayWindow(timeIst);
 
     public static DateTimeOffset SessionEndIst(DateTime istDate)
     {
@@ -166,6 +161,35 @@ public static class ChartSessionMerger
         var today = nowIst.Date;
         return bars
             .Where(b => TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(b.Time), Ist).Date < today)
+            .ToList();
+    }
+
+    /// <summary>Drop weekend/holiday intraday bars and today's phantom session when the exchange is closed.</summary>
+    public static List<ChartBar> FilterIntradayToTradingCalendar(IReadOnlyList<ChartBar> bars)
+    {
+        if (bars.Count == 0)
+        {
+            return [];
+        }
+
+        var today = NseCashSession.IstToday();
+        var marketOpenToday = NseCashSession.IsTradingDay(today);
+        return bars
+            .Where(b =>
+            {
+                var barDay = NseCashSession.BarIstDate(b.Time);
+                if (!NseCashSession.IsTradingDay(barDay))
+                {
+                    return false;
+                }
+
+                if (!marketOpenToday && barDay == today)
+                {
+                    return false;
+                }
+
+                return true;
+            })
             .ToList();
     }
 

@@ -78,9 +78,12 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         _strategyFeed = strategyFeed;
         _zoneLive = zoneLive;
         _log = log;
-        foreach (var trade in history.RecoverOpenTrades())
+        using (history.RunAsUser(history.StrategyEngineUserId))
         {
-            _positions.Add(Position.FromRecovered(trade));
+            foreach (var trade in history.RecoverOpenTrades())
+            {
+                _positions.Add(Position.FromRecovered(trade));
+            }
         }
         AddMessage(
             "assistant",
@@ -239,6 +242,14 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         lock (_gate) return SnapshotUnsafe();
     }
 
+    public decimal AllocatedCapitalPerTrade()
+    {
+        lock (_gate)
+        {
+            return _config?.AllocatedCapital ?? 1_000_000m;
+        }
+    }
+
     public void CompleteExternalProposal(string proposalId, string reason)
     {
         lock (_gate)
@@ -267,6 +278,16 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         {
             if (_config is null) return;
             _config = _config with { AutoAdmitTrades = enabled };
+        }
+    }
+
+    /// <summary>Operations emergency flatten — closes open paper positions without altering strategy engines.</summary>
+    public PaperAgentSnapshot EmergencyFlattenOpenPositions(string reason)
+    {
+        lock (_gate)
+        {
+            CloseAllUnsafe(reason);
+            return SnapshotUnsafe();
         }
     }
 
@@ -341,6 +362,21 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
     private async Task TickAsync()
     {
         if (Interlocked.Exchange(ref _busy, 1) == 1) return;
+        try
+        {
+            using (_history.RunAsUser(_history.StrategyEngineUserId))
+            {
+                await TickCoreAsync();
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private async Task TickCoreAsync()
+    {
         string? zoneLiveProposalId = null;
         try
         {
@@ -412,10 +448,6 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Paper trading agent tick failed.");
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _busy, 0);
         }
 
         if (zoneLiveProposalId is not null)
@@ -931,6 +963,20 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         }
 
         var pnl = PositionPnl(position);
+        if (position.Legs.Count == 1)
+        {
+            var leg = position.Legs[0];
+            var exit = leg.CurrentPrice;
+            if (exit > 0 && leg.EntryPrice > 0)
+            {
+                pnl = PaperTradeEconomics.RealizedPnl(
+                    position.Direction,
+                    leg.EntryPrice,
+                    exit,
+                    leg.Quantity);
+            }
+        }
+
         _realizedPnl += pnl;
         _closedTrades++;
         if (pnl > 0) _winningTrades++;

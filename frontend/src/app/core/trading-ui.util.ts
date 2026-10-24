@@ -1,4 +1,12 @@
-import { PaperPosition, PaperTradeHistoryItem, PaperTradeHistoryLeg, SymbolSnapshot } from './board.models';
+import {
+  LiveExecutionSnapshot,
+  PaperPosition,
+  PaperTradeHistoryItem,
+  PaperTradeHistoryLeg,
+  SymbolSnapshot,
+  TradeHistoryRange,
+} from './board.models';
+import { formatInstrumentTypeDisplay } from './instrument-type.util';
 import { isIstCashSessionOpen, istParts, istSessionBucketStart } from './chart-ui.util';
 
 export function chartStepSec(interval: string): number {
@@ -91,7 +99,17 @@ export function brokerLoginRejectedMessage(message: string | null | undefined): 
   if (!msg) {
     return false;
   }
-  return msg.includes('invalid username') || msg.includes('invalid password') || msg.includes('attempts remaining');
+  return (
+    msg.includes('invalid username')
+    || msg.includes('invalid password')
+    || msg.includes('invalid username or password')
+    || msg.includes('incorrect password')
+    || msg.includes('wrong password')
+    || msg.includes('attempts remaining')
+    || msg.includes('api key is missing')
+    || msg.includes('api key is not configured')
+    || msg.includes('user id and password are required')
+  );
 }
 
 /** Board feed must not cancel an in-progress OTP entry (live board polls every second). */
@@ -120,6 +138,51 @@ export function isPaperTargetExit(exitReason: string | null | undefined): boolea
   return !!exitReason && exitReason.toLowerCase().includes('target');
 }
 
+function liveAgentFingerprint(snapshot: LiveExecutionSnapshot): string {
+  const positions = snapshot.brokerPositions.map((p) =>
+    `${p.tradingSymbol}:${p.quantity}:${p.lastPrice}:${p.pnl}:${p.averagePrice}`,
+  );
+  const orders = snapshot.brokerOrders.map((o) =>
+    `${o.orderId}:${o.status}:${o.filledQuantity}:${o.pendingQuantity}:${o.price}`,
+  );
+  const trades = snapshot.trades.map((t) => `${t.id}:${t.status}:${t.orders.length}`);
+  const pnl = snapshot.brokerPnl
+    ? `${snapshot.brokerPnl.totalPnl}:${snapshot.brokerPnl.realisedPnl}:${snapshot.brokerPnl.unrealisedPnl}`
+    : '';
+  return JSON.stringify({
+    armed: snapshot.armed,
+    zoneAutoLiveArmed: snapshot.zoneAutoLiveArmed,
+    pending: snapshot.pendingProposal?.id ?? '',
+    positions,
+    orders,
+    trades,
+    pnl,
+    events: snapshot.events.length,
+    eod: snapshot.eodPrompts.length,
+    reconciliation: snapshot.reconciliationStatus,
+  });
+}
+
+/** True when live book / PnL / orders meaningfully changed (not only updatedAt). */
+export function shouldReplaceLiveAgent(
+  next: LiveExecutionSnapshot,
+  current: LiveExecutionSnapshot | null,
+): boolean {
+  if (!current) {
+    return true;
+  }
+  if (next.updatedAt !== current.updatedAt) {
+    return true;
+  }
+  if (next.state !== current.state) {
+    return true;
+  }
+  if (next.armed !== current.armed || next.zoneAutoLiveArmed !== current.zoneAutoLiveArmed) {
+    return true;
+  }
+  return liveAgentFingerprint(next) !== liveAgentFingerprint(current);
+}
+
 /** Runtime + catalog ids for strategies shown in Trade History (excludes legacy spreads / ad-hoc agent codes). */
 const CATALOG_PAPER_STRATEGY_IDS = new Set(
   [
@@ -145,6 +208,23 @@ export function isCatalogPaperHistoryTrade(trade: PaperTradeHistoryItem): boolea
 
 export function filterCatalogPaperHistoryTrades(trades: PaperTradeHistoryItem[]): PaperTradeHistoryItem[] {
   return trades.filter(isCatalogPaperHistoryTrade);
+}
+
+/** Trades that never executed (timed-out proposals, rejects, etc.) — hide from Trade details ledger. */
+const PAPER_HISTORY_NON_EXECUTED_STATUSES = new Set<PaperTradeHistoryItem['status']>([
+  'PROPOSED',
+  'REJECTED',
+  'CANCELLED',
+  'EXPIRED',
+  'INTERRUPTED',
+]);
+
+export function isExecutedPaperHistoryTrade(trade: PaperTradeHistoryItem): boolean {
+  return !PAPER_HISTORY_NON_EXECUTED_STATUSES.has(trade.status);
+}
+
+export function filterExecutedPaperHistoryTrades(trades: PaperTradeHistoryItem[]): PaperTradeHistoryItem[] {
+  return trades.filter(isExecutedPaperHistoryTrade);
 }
 
 const PAPER_HISTORY_STRATEGY_LABELS: Record<string, string> = {
@@ -332,6 +412,15 @@ export function paperTradeHistoryInIstDateRange(
   return key >= fromYmd && key <= toYmd;
 }
 
+/** Inclusive IST calendar window for preset history ranges (matches paper trades API). */
+export function tradeHistoryPresetIstWindow(range: TradeHistoryRange, now = new Date()): { from: string; to: string } {
+  const to = istTodayCalendarYmd(now);
+  const daysBack = range === 'today' ? 0 : range === '1w' ? 6 : 29;
+  const fromInstant = new Date(now.getTime() - daysBack * 86_400_000);
+  const from = fromInstant.toLocaleDateString('en-CA', { timeZone: IST_TIME_ZONE });
+  return { from, to };
+}
+
 export function istTodayCalendarYmd(now = new Date()): string {
   return now.toLocaleDateString('en-CA', { timeZone: IST_TIME_ZONE });
 }
@@ -418,6 +507,9 @@ export function paperTradePlausibleMark(entry: number, mark: number): boolean {
 
 /** Quantity-weighted average entry across legs (single-leg trades = that leg’s fill). */
 export function paperTradeEntryPrice(trade: PaperTradeHistoryItem): number | null {
+  if (trade.entryPrice != null && trade.entryPrice > 0) {
+    return trade.entryPrice;
+  }
   const legs = trade.legs ?? [];
   if (!legs.length) {
     return null;
@@ -437,6 +529,9 @@ export function paperTradeEntryPrice(trade: PaperTradeHistoryItem): number | nul
 
 /** Quantity-weighted average exit across legs when closed. */
 export function paperTradeExitPrice(trade: PaperTradeHistoryItem): number | null {
+  if (trade.exitPrice != null && trade.exitPrice > 0) {
+    return trade.exitPrice;
+  }
   const legs = trade.legs ?? [];
   if (!legs.length) {
     return null;
@@ -481,18 +576,20 @@ export function paperTradeTarget(trade: PaperTradeHistoryItem): number | null {
   return target != null && target > 0 ? target : null;
 }
 
+/** Deployed capital at entry — use backend `capitalRequired` (qty × entryPrice). */
 export function paperTradeCapitalUsed(trade: PaperTradeHistoryItem): number {
   if (trade.capitalRequired != null && trade.capitalRequired > 0) {
     return trade.capitalRequired;
   }
-  const legs = trade.legs ?? [];
-  if (!legs.length) {
-    return 0;
+  if (
+    trade.quantity != null &&
+    trade.entryPrice != null &&
+    trade.quantity > 0 &&
+    trade.entryPrice > 0
+  ) {
+    return trade.quantity * trade.entryPrice;
   }
-  return legs.reduce((sum, leg) => {
-    const price = leg.entryPrice ?? leg.proposedPrice ?? 0;
-    return sum + Math.abs(price * leg.quantity);
-  }, 0);
+  return 0;
 }
 
 export function paperTradeExecutedAt(trade: PaperTradeHistoryItem): string | null {
@@ -510,6 +607,9 @@ export function paperTradeClosedAt(trade: PaperTradeHistoryItem): string | null 
 }
 
 export function paperTradeQuantityTotal(trade: PaperTradeHistoryItem): number {
+  if (trade.quantity != null && trade.quantity > 0) {
+    return trade.quantity;
+  }
   return (trade.legs ?? []).reduce((sum, leg) => sum + (leg.quantity ?? 0), 0);
 }
 
@@ -557,40 +657,14 @@ export function paperTradeLegPnl(leg: PaperTradeHistoryLeg): number | null {
   return move * leg.quantity;
 }
 
-/** P&L from leg fills (entry/exit × qty); falls back to trade-level pnl when fills are missing. */
+/** Realized P&L from backend trade record (direction × entry/exit × qty). */
 export function paperTradeRealizedPnl(trade: PaperTradeHistoryItem): number | null {
-  const legs = trade.legs ?? [];
-  if (!legs.length) {
-    return trade.pnl;
-  }
-  let sum = 0;
-  let any = false;
-  for (const leg of legs) {
-    const legPnl = paperTradeLegPnl(leg);
-    if (legPnl != null) {
-      sum += legPnl;
-      any = true;
-    }
-  }
-  if (any) {
-    return sum;
-  }
   return trade.pnl;
 }
 
-/** Notional at entry (₹) — sum of |entry × qty| across legs. */
+/** Notional at entry (₹) — same as deployed capital from backend. */
 export function paperTradeEntryNotional(trade: PaperTradeHistoryItem): number {
-  const legs = trade.legs ?? [];
-  if (!legs.length) {
-    return 0;
-  }
-  return legs.reduce((sum, leg) => {
-    const entry = legEntryPrice(leg);
-    if (entry == null) {
-      return sum;
-    }
-    return sum + Math.abs(entry * leg.quantity);
-  }, 0);
+  return paperTradeCapitalUsed(trade);
 }
 
 export function paperTradeDurationLabel(trade: PaperTradeHistoryItem): string | null {
@@ -624,9 +698,9 @@ export function paperPositionCapitalUsed(
     return paperTradeCapitalUsed(fromHistory);
   }
   if (position.legs?.length) {
-    return position.legs.reduce((sum, leg) => sum + Math.abs(leg.entryPrice * leg.quantity), 0);
+    return position.legs.reduce((sum, leg) => sum + leg.entryPrice * leg.quantity, 0);
   }
-  return Math.abs(position.entryPrice * position.quantity);
+  return position.entryPrice * position.quantity;
 }
 
 /** Map durable history OPEN rows to paper position cards when the live agent snapshot is empty or unavailable. */
@@ -653,7 +727,7 @@ export function paperPositionsFromHistory(trades: PaperTradeHistoryItem[]): Pape
             }, 0));
       return {
         id: trade.id,
-        instrumentType: first?.instrumentType ?? 'STOCK',
+        instrumentType: formatInstrumentTypeDisplay(first?.instrumentType),
         symbol: trade.underlying,
         direction: trade.direction as PaperPosition['direction'],
         triggerReason: trade.entryReason ?? 'Open paper trade (from history)',
@@ -701,4 +775,60 @@ export function symbolHasVerifiedQuote(symbol: SymbolSnapshot | null | undefined
     return false;
   }
   return symbol.last > 0;
+}
+
+function boardPriceAnchor(symbol: SymbolSnapshot): number {
+  if (symbol.previousClose > 0) {
+    return symbol.previousClose;
+  }
+  if (symbol.yesterdayHigh > 0 && symbol.yesterdayLow > 0) {
+    return (symbol.yesterdayHigh + symbol.yesterdayLow) / 2;
+  }
+  return 0;
+}
+
+/** Client-side guard: never show catalog placeholder 100.00 when we have a real reference price. */
+export function isCatalogPlaceholderPrice(symbol: SymbolSnapshot): boolean {
+  if (symbol.last <= 0) {
+    return true;
+  }
+  if (
+    symbol.last <= 101 &&
+    symbol.todayOpen <= 101 &&
+    symbol.yesterdayHigh === 108 &&
+    symbol.yesterdayLow === 92
+  ) {
+    return true;
+  }
+  const anchor = boardPriceAnchor(symbol);
+  if (anchor > 250 && symbol.last <= 101) {
+    return true;
+  }
+  if (anchor > 0 && symbol.last > 0) {
+    const deviation = Math.abs(symbol.last - anchor) / anchor;
+    if (deviation > 0.35 && symbol.last <= 101) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function boardSymbolDisplayLast(symbol: SymbolSnapshot | null | undefined): number | null {
+  if (!symbol) {
+    return null;
+  }
+  if (symbol.quoteQuality === 'Placeholder' || symbol.quoteVerified === false) {
+    return null;
+  }
+  if (symbol.quoteQuality && symbol.last > 0) {
+    return symbol.last;
+  }
+  if (!symbolHasVerifiedQuote(symbol)) {
+    return null;
+  }
+  if (!isCatalogPlaceholderPrice(symbol)) {
+    return symbol.last;
+  }
+  const anchor = boardPriceAnchor(symbol);
+  return anchor > 0 ? anchor : symbol.last > 0 ? symbol.last : null;
 }

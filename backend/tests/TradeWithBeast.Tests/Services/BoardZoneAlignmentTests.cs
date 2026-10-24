@@ -67,7 +67,7 @@ public sealed class BoardZoneAlignmentTests
 
         _ = new SymbolSnapshot(
             name,
-            last: todayOpen,
+            todayOpen,
             todayOpen,
             yesterdayHigh,
             yesterdayLow,
@@ -80,6 +80,6 @@ public sealed class BoardZoneAlignmentTests
             s2,
             NiftyZoneFormula.Mark(name, todayOpen, expectedB1, expectedS1, todayOpen),
             NiftyZoneFormula.IsTightRange(name, expectedB1, expectedS1, todayOpen),
-            previousClose: 0m);
+            0m);
     }
 }

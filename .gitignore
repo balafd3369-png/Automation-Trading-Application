@@ -14,3 +14,8 @@ dist/
 .env.*
 appsettings.Development.json
 secrets.json
+backend/.vs/
+backend/_buildcheck/
+backend/_qty-test-out/
+backend/build-out/
+**/_test-out/

@@ -120,7 +120,7 @@ public sealed class TradeHistoryStoreTests : IDisposable
 
         Assert.Empty(CreateStore().RecoverOpenTrades());
         Assert.Contains(CreateStore().RecentEvents(), x => x.TradeId == proposal.Id && x.Type == "CLOSED" && x.Pnl == 650m);
-        var history = CreateStore().QueryPaperTrades("1m", DateTimeOffset.UtcNow.AddSeconds(1));
+        var history = CreateStore().QueryPaperTrades("1m", DateTimeOffset.UtcNow.AddSeconds(1), 100_000m);
         var persisted = Assert.Single(history.Trades);
         Assert.Equal("INDEX_OPTION_LONG", persisted.Strategy);
         Assert.Equal(650m, persisted.Pnl);
@@ -162,7 +162,7 @@ public sealed class TradeHistoryStoreTests : IDisposable
                 ["TradeHistory:DatabasePath"] = _path,
             })
             .Build();
-        return new TradeHistoryStore(configuration);
+        return new TradeHistoryStore(configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger<TradeHistoryStore>.Instance);
     }
 
     public void Dispose()

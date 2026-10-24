@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using TradeWithBeast.Broker;
 using TradeWithBeast.Models;
 
@@ -9,11 +10,49 @@ namespace TradeWithBeast.Services;
 public sealed class TradeHistoryStore
 {
     public const string LocalUserId = "local-user";
+    private static readonly AsyncLocal<string?> ScopedUserId = new();
     private readonly object _gate = new();
     private readonly string _connectionString;
+    private readonly ICurrentUserAccessor _currentUser;
+    private readonly SystemIdentityOptions _systemIdentity;
+    private readonly ILogger<TradeHistoryStore> _log;
 
-    public TradeHistoryStore(IConfiguration configuration)
+    public string ActiveUserId
     {
+        get
+        {
+            var scoped = ScopedUserId.Value ?? _currentUser.UserId;
+            if (!string.IsNullOrWhiteSpace(scoped))
+            {
+                return scoped;
+            }
+
+            if (_systemIdentity.AllowAnonymousLocalUser)
+            {
+                return LocalUserId;
+            }
+
+            throw new UnauthorizedAccessException("Authentication required.");
+        }
+    }
+
+    public string StrategyEngineUserId => _systemIdentity.StrategyEngineUserId;
+
+    public IDisposable RunAsUser(string userId) => new UserScope(ScopedUserId, userId);
+
+    public TradeHistoryStore(IConfiguration configuration, ILogger<TradeHistoryStore> log)
+        : this(configuration, new CurrentUserAccessor(), new SystemIdentityOptions(), log)
+    {
+    }
+
+    public TradeHistoryStore(
+        IConfiguration configuration,
+        ICurrentUserAccessor currentUser,
+        SystemIdentityOptions systemIdentity,
+        ILogger<TradeHistoryStore> log)
+    {
+        _currentUser = currentUser;
+        _systemIdentity = systemIdentity;
         var configured = configuration["TradeHistory:DatabasePath"];
         var path = string.IsNullOrWhiteSpace(configured)
             ? Path.Combine(
@@ -31,6 +70,7 @@ public sealed class TradeHistoryStore
             DataSource = path,
             Pooling = false,
         }.ToString();
+        _log = log;
         Initialize();
     }
 
@@ -82,7 +122,7 @@ public sealed class TradeHistoryStore
                 VALUES ($id,$user,$strategy,$underlying,$direction,$score,$accepted,$risk,$reward,$rr,$at);
                 """;
             Add(command, "$id", decision.Id);
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             Add(command, "$strategy", decision.Strategy);
             Add(command, "$underlying", decision.Underlying);
             Add(command, "$direction", decision.Direction);
@@ -127,7 +167,7 @@ public sealed class TradeHistoryStore
                 VALUES($id,$user,'PROPOSED',$strategy,$underlying,$direction,$stop,$target,$risk,$reward,$capital,$at,$at);
                 """;
             Add(trade, "$id", proposal.Id);
-            Add(trade, "$user", LocalUserId);
+            Add(trade, "$user", ActiveUserId);
             Add(trade, "$strategy", proposal.Strategy);
             Add(trade, "$underlying", string.IsNullOrWhiteSpace(proposal.Underlying) ? proposal.Symbol : proposal.Underlying);
             Add(trade, "$direction", proposal.Direction);
@@ -196,18 +236,21 @@ public sealed class TradeHistoryStore
             }
             using var trade = connection.CreateCommand();
             trade.Transaction = transaction;
+            var capital = legs.Sum(leg => leg.EntryPrice * leg.Quantity);
             trade.CommandText =
                 """
                 UPDATE paper_trades
                 SET status='OPEN',opened_at=$opened,updated_at=$opened,
-                    max_risk=COALESCE($risk,max_risk),max_reward=COALESCE($reward,max_reward)
+                    max_risk=COALESCE($risk,max_risk),max_reward=COALESCE($reward,max_reward),
+                    capital_required=$capital
                 WHERE id=$id AND user_id=$user;
                 """;
             Add(trade, "$opened", UtcText(openedAt));
             Add(trade, "$risk", maxRisk is null ? DBNull.Value : DecimalText(maxRisk.Value));
             Add(trade, "$reward", maxReward is null ? DBNull.Value : DecimalText(maxReward.Value));
+            Add(trade, "$capital", DecimalText(capital));
             Add(trade, "$id", tradeId);
-            Add(trade, "$user", LocalUserId);
+            Add(trade, "$user", ActiveUserId);
             trade.ExecuteNonQuery();
             InsertEvent(connection, transaction, tradeId, "OPENED", "atomic simulated paper fill", null, openedAt);
             transaction.Commit();
@@ -267,7 +310,7 @@ public sealed class TradeHistoryStore
             Add(trade, "$pnl", DecimalText(pnl));
             Add(trade, "$at", UtcText(at));
             Add(trade, "$id", tradeId);
-            Add(trade, "$user", LocalUserId);
+            Add(trade, "$user", ActiveUserId);
             trade.ExecuteNonQuery();
             InsertEvent(connection, transaction, tradeId, "CLOSED", reason, pnl, at);
             transaction.Commit();
@@ -291,7 +334,7 @@ public sealed class TradeHistoryStore
             Add(command, "$reason", reason);
             Add(command, "$at", UtcText(at));
             Add(command, "$id", tradeId);
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             command.ExecuteNonQuery();
             InsertEvent(connection, transaction, tradeId, status, reason, null, at);
             transaction.Commit();
@@ -307,9 +350,11 @@ public sealed class TradeHistoryStore
             command.CommandText =
                 """
                 SELECT id,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,capital_required,opened_at
-                FROM paper_trades WHERE user_id=$user AND status='OPEN' ORDER BY opened_at;
+                FROM paper_trades
+                WHERE user_id=$user AND status='OPEN' AND COALESCE(trade_source,'STRATEGY') <> 'MANUAL'
+                ORDER BY opened_at;
                 """;
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             var rows = new List<(string Id, string Strategy, string Underlying, string Direction,
                 decimal Stop, decimal Target, decimal Risk, decimal Reward, decimal Capital, DateTimeOffset Opened)>();
             using var reader = command.ExecuteReader();
@@ -373,7 +418,7 @@ public sealed class TradeHistoryStore
         lock (_gate)
         {
             using var connection = Open();
-            var trades = ReadPaperTradesBetween(connection, from, now);
+            var trades = ReadGlobalStrategyPaperTradesBetween(connection, from, now);
             var catalog = StrategyCatalog.All();
             var byStrategy = catalog.Select(entry =>
             {
@@ -440,7 +485,7 @@ public sealed class TradeHistoryStore
             """
             SELECT id,status,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,capital_required,pnl,exit_reason,
                    (SELECT reason FROM paper_trade_events e WHERE e.trade_id=paper_trades.id AND e.event_type='PROPOSED' ORDER BY e.created_at ASC LIMIT 1),
-                   created_at,opened_at,closed_at
+                   created_at,opened_at,closed_at,COALESCE(trade_source,'STRATEGY')
             FROM paper_trades
             WHERE user_id=$user
               AND (
@@ -450,12 +495,12 @@ public sealed class TradeHistoryStore
               )
             ORDER BY created_at DESC;
             """;
-        Add(command, "$user", LocalUserId);
+        Add(command, "$user", ActiveUserId);
         Add(command, "$from", UtcText(from));
         Add(command, "$to", UtcText(to));
         var rows = new List<(string Id, string Status, string Strategy, string Underlying, string Direction,
             decimal Stop, decimal Target, decimal Risk, decimal Reward, decimal Capital, decimal? Pnl, string? Reason,
-            string? EntryReason, DateTimeOffset Created, DateTimeOffset? Opened, DateTimeOffset? Closed)>();
+            string? EntryReason, DateTimeOffset Created, DateTimeOffset? Opened, DateTimeOffset? Closed, string TradeSource)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
@@ -467,15 +512,115 @@ public sealed class TradeHistoryStore
                     DecimalValue(reader, 9) ?? 0, DecimalValue(reader, 10), reader.IsDBNull(11) ? null : reader.GetString(11),
                     reader.IsDBNull(12) ? null : reader.GetString(12),
                     DateTimeOffset.Parse(reader.GetString(13), CultureInfo.InvariantCulture),
-                    DateValue(reader, 14), DateValue(reader, 15)));
+                    DateValue(reader, 14), DateValue(reader, 15),
+                    reader.IsDBNull(16) ? TradeSourceWire.Strategy : reader.GetString(16)));
             }
         }
 
-        return rows.Select(row => new PaperTradeHistorySnapshot(
-            row.Id, row.Status, row.Strategy, row.Underlying, row.Direction, row.Stop, row.Target, row.Risk, row.Reward,
-            row.Capital, row.Pnl, row.Reason, row.EntryReason, row.Created, row.Opened, row.Closed,
-            ReadHistoryLegs(connection, row.Id))).ToList();
+        return rows.Select(row =>
+        {
+            var legs = ReadHistoryLegs(connection, row.Id);
+            var snapshot = new PaperTradeHistorySnapshot(
+                row.Id, row.Status, row.Strategy, row.Underlying, row.Direction, row.Stop, row.Target, row.Risk, row.Reward,
+                row.Capital, row.Pnl, row.Reason, row.EntryReason, row.Created, row.Opened, row.Closed,
+                0, 0, null, legs, row.TradeSource);
+            return snapshot;
+        }).ToList();
     }
+
+    private List<PaperTradeHistorySnapshot> ReadGlobalStrategyPaperTradesBetween(
+        SqliteConnection connection,
+        DateTimeOffset from,
+        DateTimeOffset to)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id,status,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,capital_required,pnl,exit_reason,
+                   (SELECT reason FROM paper_trade_events e WHERE e.trade_id=paper_trades.id AND e.event_type='PROPOSED' ORDER BY e.created_at ASC LIMIT 1),
+                   created_at,opened_at,closed_at,COALESCE(trade_source,'STRATEGY')
+            FROM paper_trades
+            WHERE COALESCE(trade_source,'STRATEGY')=$source
+              AND (
+                (created_at >= $from AND created_at <= $to)
+                OR (closed_at IS NOT NULL AND closed_at >= $from AND closed_at <= $to)
+                OR (status = 'OPEN' AND created_at <= $to AND (closed_at IS NULL OR closed_at > $from))
+              )
+            ORDER BY created_at DESC;
+            """;
+        Add(command, "$source", TradeSourceWire.Strategy);
+        Add(command, "$from", UtcText(from));
+        Add(command, "$to", UtcText(to));
+        var rows = new List<(string Id, string Status, string Strategy, string Underlying, string Direction,
+            decimal Stop, decimal Target, decimal Risk, decimal Reward, decimal Capital, decimal? Pnl, string? Reason,
+            string? EntryReason, DateTimeOffset Created, DateTimeOffset? Opened, DateTimeOffset? Closed, string TradeSource)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                rows.Add((
+                    reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                    reader.GetString(4), DecimalValue(reader, 5) ?? 0, DecimalValue(reader, 6) ?? 0,
+                    DecimalValue(reader, 7) ?? 0, DecimalValue(reader, 8) ?? 0,
+                    DecimalValue(reader, 9) ?? 0, DecimalValue(reader, 10), reader.IsDBNull(11) ? null : reader.GetString(11),
+                    reader.IsDBNull(12) ? null : reader.GetString(12),
+                    DateTimeOffset.Parse(reader.GetString(13), CultureInfo.InvariantCulture),
+                    DateValue(reader, 14), DateValue(reader, 15),
+                    reader.IsDBNull(16) ? TradeSourceWire.Strategy : reader.GetString(16)));
+            }
+        }
+
+        return rows.Select(row =>
+        {
+            var legs = ReadHistoryLegs(connection, row.Id);
+            return new PaperTradeHistorySnapshot(
+                row.Id, row.Status, row.Strategy, row.Underlying, row.Direction, row.Stop, row.Target, row.Risk, row.Reward,
+                row.Capital, row.Pnl, row.Reason, row.EntryReason, row.Created, row.Opened, row.Closed,
+                0, 0, null, legs, row.TradeSource);
+        }).ToList();
+    }
+
+    public int CountManualPaperTradesOnDate(DateTimeOffset day)
+    {
+        var start = StartOfIstDay(day);
+        var end = start.AddDays(1);
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT COUNT(*) FROM paper_trades
+                WHERE trade_source=$source
+                  AND created_at >= $from AND created_at < $to;
+                """;
+            Add(command, "$source", TradeSourceWire.Manual);
+            Add(command, "$from", UtcText(start));
+            Add(command, "$to", UtcText(end));
+            return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+    }
+
+    public int CountOpenManualPaperPositionsGlobal()
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT COUNT(*) FROM paper_trades
+                WHERE status='OPEN' AND trade_source=$source;
+                """;
+            Add(command, "$source", TradeSourceWire.Manual);
+            return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+    }
+
+    public List<PaperTradeHistorySnapshot> NormalizePaperTrades(
+        IReadOnlyList<PaperTradeHistorySnapshot> trades,
+        decimal capitalPerTrade) =>
+        trades.Select(trade => PaperTradeEconomics.Normalize(trade, capitalPerTrade, _log)).ToList();
 
     private static DateTimeOffset StartOfIstMonth(DateTimeOffset now)
     {
@@ -485,7 +630,7 @@ public sealed class TradeHistoryStore
         return new DateTimeOffset(start, ist.GetUtcOffset(start));
     }
 
-    public PaperTradeHistoryResponse QueryPaperTrades(string range, DateTimeOffset now)
+    public PaperTradeHistoryResponse QueryPaperTrades(string range, DateTimeOffset now, decimal capitalPerTrade)
     {
         var normalized = range.Trim().ToLowerInvariant();
         var from = normalized switch
@@ -497,10 +642,14 @@ public sealed class TradeHistoryStore
             _ => now.AddMonths(-12),
         };
         var label = normalized is "today" or "1w" or "1m" or "3m" ? normalized : "all";
-        return QueryPaperTradesBetween(from, now, label);
+        return QueryPaperTradesBetween(from, now, label, capitalPerTrade);
     }
 
-    public PaperTradeHistoryResponse QueryPaperTradesForIstDates(string fromYmd, string? toYmd, DateTimeOffset now)
+    public PaperTradeHistoryResponse QueryPaperTradesForIstDates(
+        string fromYmd,
+        string? toYmd,
+        DateTimeOffset now,
+        decimal capitalPerTrade)
     {
         var from = StartOfIstCalendarDay(fromYmd);
         var to = EndOfIstCalendarDay(string.IsNullOrWhiteSpace(toYmd) ? fromYmd : toYmd!);
@@ -510,19 +659,23 @@ public sealed class TradeHistoryStore
         }
 
         var label = $"custom:{fromYmd}:{toYmd ?? fromYmd}";
-        return QueryPaperTradesBetween(from, to > now ? now : to, label);
+        return QueryPaperTradesBetween(from, to > now ? now : to, label, capitalPerTrade);
     }
 
-    private PaperTradeHistoryResponse QueryPaperTradesBetween(DateTimeOffset from, DateTimeOffset to, string label)
+    public PaperTradeHistoryResponse QueryPaperTradesBetween(
+        DateTimeOffset from,
+        DateTimeOffset to,
+        string label,
+        decimal capitalPerTrade)
     {
         lock (_gate)
         {
             using var connection = Open();
-            var trades = ReadPaperTradesBetween(connection, from, to);
+            var trades = NormalizePaperTrades(ReadPaperTradesBetween(connection, from, to), capitalPerTrade);
             var closed = trades.Where(trade => trade.Status == "CLOSED").ToList();
             var exitStats = SummarizeExitOutcomes(closed.Select(trade => (trade.Pnl, trade.ExitReason)));
             return new(
-                LocalUserId,
+                ActiveUserId,
                 label,
                 new(
                     closed.Count,
@@ -555,7 +708,7 @@ public sealed class TradeHistoryStore
                 ON CONFLICT(id) DO NOTHING;
                 """;
             Add(command, "$id", proposal.Id);
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             Add(command, "$instrument", proposal.InstrumentType);
             Add(command, "$symbol", proposal.Symbol);
             Add(command, "$direction", proposal.Direction);
@@ -637,7 +790,7 @@ public sealed class TradeHistoryStore
                 WHERE user_id = $user AND created_at >= $from AND created_at <= $to
                 ORDER BY created_at DESC;
                 """;
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             Add(command, "$from", UtcText(from));
             Add(command, "$to", UtcText(now));
             using var reader = command.ExecuteReader();
@@ -650,7 +803,7 @@ public sealed class TradeHistoryStore
         var closed = trades.Where(trade => trade.Status == "CLOSED").ToList();
         var exitStats = SummarizeExitOutcomes(closed.Select(trade => (trade.Pnl, trade.ExitReason)));
         return new TradeHistoryResponse(
-            LocalUserId,
+            ActiveUserId,
             label,
             from,
             now,
@@ -693,7 +846,7 @@ public sealed class TradeHistoryStore
                 ON CONFLICT(id) DO NOTHING;
                 """;
             Add(command, "$id", proposal.Id);
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             Add(command, "$strategy", proposal.Strategy);
             Add(command, "$underlying", proposal.Underlying);
             Add(command, "$product", product);
@@ -722,7 +875,7 @@ public sealed class TradeHistoryStore
             Add(command, "$reason", reason is null ? DBNull.Value : reason);
             Add(command, "$at", UtcText(DateTimeOffset.UtcNow));
             Add(command, "$id", tradeId);
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             command.ExecuteNonQuery();
             InsertLiveEvent(connection, transaction, tradeId, status, reason ?? status, DateTimeOffset.UtcNow);
             transaction.Commit();
@@ -781,7 +934,7 @@ public sealed class TradeHistoryStore
                   AND ($active=0 OR status NOT IN ('CLOSED','FAILED','REJECTED','CANCELLED'))
                 ORDER BY created_at DESC LIMIT 100;
                 """;
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             Add(command, "$active", activeOnly ? 1 : 0);
             var rows = new List<(string Id, PaperTradeProposal Proposal, string Product, string Status, string? Reason, DateTimeOffset Created)>();
             using (var reader = command.ExecuteReader())
@@ -820,6 +973,275 @@ public sealed class TradeHistoryStore
                     DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture)));
             }
             return events;
+        }
+    }
+
+    public const string ManualStrategyId = "MANUAL_TRADE";
+
+    public void SaveManualPaperTradeOpen(PaperTradeProposal proposal, IReadOnlyList<PaperPositionLegSnapshot> legs, DateTimeOffset openedAt)
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction();
+            using var trade = connection.CreateCommand();
+            trade.Transaction = transaction;
+            var capital = legs.Sum(leg => leg.EntryPrice * leg.Quantity);
+            trade.CommandText =
+                """
+                INSERT OR REPLACE INTO paper_trades
+                    (id,user_id,status,strategy,underlying,direction,stop_loss,target,max_risk,max_reward,capital_required,
+                     trade_source,created_at,updated_at,opened_at)
+                VALUES($id,$user,'OPEN',$strategy,$underlying,$direction,$stop,$target,$risk,$reward,$capital,
+                    $source,$at,$at,$opened);
+                """;
+            Add(trade, "$id", proposal.Id);
+            Add(trade, "$user", ActiveUserId);
+            Add(trade, "$strategy", ManualStrategyId);
+            Add(trade, "$underlying", string.IsNullOrWhiteSpace(proposal.Underlying) ? proposal.Symbol : proposal.Underlying);
+            Add(trade, "$direction", proposal.Direction);
+            Add(trade, "$stop", DecimalText(proposal.StopLoss));
+            Add(trade, "$target", DecimalText(proposal.Target));
+            Add(trade, "$risk", DecimalText(proposal.MaxRisk));
+            Add(trade, "$reward", DecimalText(proposal.MaxReward));
+            Add(trade, "$capital", DecimalText(capital));
+            Add(trade, "$source", TradeSourceWire.Manual);
+            Add(trade, "$at", UtcText(openedAt));
+            Add(trade, "$opened", UtcText(openedAt));
+            trade.ExecuteNonQuery();
+            foreach (var leg in legs)
+            {
+                using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText =
+                    """
+                    INSERT OR REPLACE INTO paper_trade_legs
+                        (id,trade_id,symbol,underlying,instrument_type,side,ratio,quantity,proposed_price,entry_price,current_price)
+                    VALUES($id,$trade,$symbol,$underlying,$instrument,$side,1,$quantity,$price,$entry,$entry);
+                    """;
+                Add(command, "$id", leg.Id);
+                Add(command, "$trade", proposal.Id);
+                Add(command, "$symbol", leg.Symbol);
+                Add(command, "$underlying", proposal.Underlying);
+                Add(command, "$instrument", proposal.InstrumentType);
+                Add(command, "$side", leg.Side);
+                Add(command, "$quantity", leg.Quantity);
+                Add(command, "$price", DecimalText(leg.EntryPrice));
+                Add(command, "$entry", DecimalText(leg.EntryPrice));
+                command.ExecuteNonQuery();
+            }
+            InsertEvent(connection, transaction, proposal.Id, "PROPOSED", proposal.Reason, null, openedAt);
+            InsertEvent(connection, transaction, proposal.Id, "OPENED", "manual paper fill", null, openedAt);
+            transaction.Commit();
+        }
+    }
+
+    public PaperTradeHistorySnapshot? GetManualPaperTrade(string tradeId)
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT id FROM paper_trades
+                WHERE id=$id AND user_id=$user AND trade_source=$source LIMIT 1;
+                """;
+            Add(command, "$id", tradeId);
+            Add(command, "$user", ActiveUserId);
+            Add(command, "$source", TradeSourceWire.Manual);
+            if (command.ExecuteScalar() is null)
+            {
+                return null;
+            }
+
+            var from = DateTimeOffset.UtcNow.AddYears(-5);
+            var to = DateTimeOffset.UtcNow.AddDays(1);
+            return ReadPaperTradesBetween(connection, from, to).FirstOrDefault(t => t.Id == tradeId);
+        }
+    }
+
+    public decimal SumOpenManualDeployedCapital()
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT
+                  (SELECT COALESCE(SUM(CAST(capital_required AS REAL)),0)
+                   FROM paper_trades
+                   WHERE user_id=$user AND status='OPEN' AND trade_source=$source)
+                  +
+                  (SELECT COALESCE(SUM(CAST(limit_price AS REAL) * quantity),0)
+                   FROM manual_orders
+                   WHERE user_id=$user AND execution_mode='PAPER' AND status='PENDING' AND limit_price IS NOT NULL);
+                """;
+            Add(command, "$user", ActiveUserId);
+            Add(command, "$source", TradeSourceWire.Manual);
+            return Convert.ToDecimal(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+    }
+
+    public IReadOnlyList<PaperTradeHistorySnapshot> QueryManualPaperTrades(DateTimeOffset from, DateTimeOffset to, decimal capitalPerTrade)
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            var trades = ReadPaperTradesBetween(connection, from, to)
+                .Where(t => string.Equals(t.TradeSource, TradeSourceWire.Manual, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            return NormalizePaperTrades(trades, capitalPerTrade);
+        }
+    }
+
+    public void UpsertManualOrder(ManualOrderSnapshot order)
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                INSERT INTO manual_orders(
+                    id,user_id,execution_mode,trade_source,status,symbol,underlying,instrument_type,transaction_type,
+                    order_type,product,exchange,quantity,limit_price,filled_quantity,average_price,broker_order_id,trade_id,
+                    strike,option_right,expiry,message,created_at,updated_at)
+                VALUES(
+                    $id,$user,$mode,$source,$status,$symbol,$underlying,$instrument,$side,$orderType,$product,$exchange,
+                    $quantity,$limit,$filled,$average,$broker,$trade,$strike,$right,$expiry,$message,$created,$updated)
+                ON CONFLICT(id) DO UPDATE SET
+                    status=excluded.status,
+                    filled_quantity=excluded.filled_quantity,
+                    average_price=excluded.average_price,
+                    broker_order_id=excluded.broker_order_id,
+                    trade_id=excluded.trade_id,
+                    message=excluded.message,
+                    updated_at=excluded.updated_at;
+                """;
+            Add(command, "$id", order.Id);
+            Add(command, "$user", ActiveUserId);
+            Add(command, "$mode", order.ExecutionMode);
+            Add(command, "$source", order.TradeSource);
+            Add(command, "$status", order.Status);
+            Add(command, "$symbol", order.Symbol);
+            Add(command, "$underlying", order.Underlying);
+            Add(command, "$instrument", order.InstrumentType);
+            Add(command, "$side", order.TransactionType);
+            Add(command, "$orderType", order.OrderType);
+            Add(command, "$product", order.Product);
+            Add(command, "$exchange", order.Exchange);
+            Add(command, "$quantity", order.Quantity);
+            Add(command, "$limit", order.LimitPrice is null ? DBNull.Value : DecimalText(order.LimitPrice.Value));
+            Add(command, "$filled", order.FilledQuantity);
+            Add(command, "$average", DecimalText(order.AveragePrice));
+            Add(command, "$broker", order.BrokerOrderId is null ? DBNull.Value : order.BrokerOrderId);
+            Add(command, "$trade", order.TradeId is null ? DBNull.Value : order.TradeId);
+            Add(command, "$strike", DBNull.Value);
+            Add(command, "$right", DBNull.Value);
+            Add(command, "$expiry", DBNull.Value);
+            Add(command, "$message", order.Message);
+            Add(command, "$created", UtcText(order.CreatedAt));
+            Add(command, "$updated", UtcText(order.UpdatedAt));
+            command.ExecuteNonQuery();
+        }
+    }
+
+    public ManualOrderSnapshot? GetManualOrder(string orderId)
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            return ReadManualOrders(connection, includeTerminal: true)
+                .FirstOrDefault(o => o.Id.Equals(orderId, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public IReadOnlyList<ManualOrderSnapshot> ListManualOrders(string? executionMode, bool includeTerminal)
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            return ReadManualOrders(connection, includeTerminal, executionMode);
+        }
+    }
+
+    private List<ManualOrderSnapshot> ReadManualOrders(
+        SqliteConnection connection,
+        bool includeTerminal,
+        string? executionMode = null)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id,execution_mode,trade_source,status,symbol,underlying,instrument_type,transaction_type,order_type,
+                   product,exchange,quantity,limit_price,filled_quantity,average_price,broker_order_id,trade_id,message,
+                   created_at,updated_at
+            FROM manual_orders
+            WHERE user_id=$user
+              AND ($mode='' OR execution_mode=$mode)
+              AND ($terminal=1 OR status IN ('PENDING','SUBMITTED','PARTIAL'))
+            ORDER BY updated_at DESC
+            LIMIT 200;
+            """;
+        Add(command, "$user", ActiveUserId);
+        Add(command, "$mode", executionMode ?? "");
+        Add(command, "$terminal", includeTerminal ? 1 : 0);
+        var list = new List<ManualOrderSnapshot>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new ManualOrderSnapshot(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetString(8),
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetInt32(11),
+                DecimalValue(reader, 12),
+                reader.GetInt32(13),
+                DecimalValue(reader, 14) ?? 0,
+                reader.IsDBNull(15) ? null : reader.GetString(15),
+                reader.IsDBNull(16) ? null : reader.GetString(16),
+                reader.IsDBNull(17) ? "" : reader.GetString(17),
+                DateTimeOffset.Parse(reader.GetString(18), CultureInfo.InvariantCulture),
+                DateTimeOffset.Parse(reader.GetString(19), CultureInfo.InvariantCulture)));
+        }
+        return list;
+    }
+
+    public void SaveManualLiveTrade(PaperTradeProposal proposal, string product)
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var transaction = connection.BeginTransaction();
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                INSERT INTO live_trades(id,user_id,strategy,underlying,product,status,proposal_json,trade_source,created_at,updated_at)
+                VALUES($id,$user,$strategy,$underlying,$product,'CONFIRMED',$json,$source,$at,$at)
+                ON CONFLICT(id) DO NOTHING;
+                """;
+            Add(command, "$id", proposal.Id);
+            Add(command, "$user", ActiveUserId);
+            Add(command, "$strategy", ManualStrategyId);
+            Add(command, "$underlying", proposal.Underlying);
+            Add(command, "$product", product);
+            Add(command, "$json", JsonSerializer.Serialize(proposal));
+            Add(command, "$source", TradeSourceWire.Manual);
+            Add(command, "$at", UtcText(DateTimeOffset.UtcNow));
+            command.ExecuteNonQuery();
+            InsertLiveEvent(connection, transaction, proposal.Id, "MANUAL", "Manual live order submitted.", DateTimeOffset.UtcNow);
+            transaction.Commit();
         }
     }
 
@@ -914,6 +1336,40 @@ public sealed class TradeHistoryStore
                 """;
             command.ExecuteNonQuery();
             ApplySchemaMigration(connection, 4, "ALTER TABLE paper_trades ADD COLUMN capital_required TEXT NOT NULL DEFAULT '0';");
+            ApplySchemaMigration(connection, 5, "ALTER TABLE paper_trades ADD COLUMN trade_source TEXT NOT NULL DEFAULT 'STRATEGY';");
+            ApplySchemaMigration(connection, 6, "ALTER TABLE live_trades ADD COLUMN trade_source TEXT NOT NULL DEFAULT 'STRATEGY';");
+            ApplySchemaMigration(
+                connection,
+                7,
+                """
+                CREATE TABLE IF NOT EXISTS manual_orders (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    execution_mode TEXT NOT NULL,
+                    trade_source TEXT NOT NULL DEFAULT 'MANUAL',
+                    status TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    underlying TEXT NOT NULL,
+                    instrument_type TEXT NOT NULL,
+                    transaction_type TEXT NOT NULL,
+                    order_type TEXT NOT NULL,
+                    product TEXT NOT NULL,
+                    exchange TEXT NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    limit_price TEXT NULL,
+                    filled_quantity INTEGER NOT NULL DEFAULT 0,
+                    average_price TEXT NOT NULL DEFAULT '0',
+                    broker_order_id TEXT NULL,
+                    trade_id TEXT NULL,
+                    strike TEXT NULL,
+                    option_right TEXT NULL,
+                    expiry TEXT NULL,
+                    message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_manual_orders_user_updated ON manual_orders(user_id,updated_at DESC);
+                """);
             using var recovery = connection.CreateCommand();
             recovery.CommandText =
                 """
@@ -951,7 +1407,7 @@ public sealed class TradeHistoryStore
             appendFields(command);
             command.CommandText += " WHERE id = $id AND user_id = $user;";
             Add(command, "$id", id);
-            Add(command, "$user", LocalUserId);
+            Add(command, "$user", ActiveUserId);
             command.ExecuteNonQuery();
         }
     }
@@ -1064,8 +1520,9 @@ public sealed class TradeHistoryStore
                     : entry.Value - mark.Value;
                 pnl = movement * reader.GetInt32(4);
             }
+            var instrumentType = InstrumentTypeNormalizer.Parse(reader.IsDBNull(2) ? null : reader.GetString(2));
             legs.Add(new(
-                reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.GetString(0), reader.GetString(1), InstrumentTypeNormalizer.ToApiValue(instrumentType), reader.GetString(3),
                 reader.GetInt32(4), DecimalValue(reader, 5) ?? 0, entry, currentPrice,
                 exitPrice, pnl, DecimalValue(reader, 9),
                 reader.IsDBNull(10) ? null : reader.GetString(10), DateValue(reader, 11)));
@@ -1203,4 +1660,19 @@ public sealed class TradeHistoryStore
 
     private static void Add(SqliteCommand command, string name, object value) =>
         command.Parameters.AddWithValue(name, value);
+
+    private sealed class UserScope : IDisposable
+    {
+        private readonly AsyncLocal<string?> _local;
+        private readonly string? _previous;
+
+        public UserScope(AsyncLocal<string?> local, string userId)
+        {
+            _local = local;
+            _previous = local.Value;
+            local.Value = userId;
+        }
+
+        public void Dispose() => _local.Value = _previous;
+    }
 }

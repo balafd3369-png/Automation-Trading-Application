@@ -158,7 +158,7 @@ After UI changes, use **Ctrl+F5** (hard refresh).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/board` | Full pressure board (poll every 1s from UI) |
+| GET | `/api/board` | Full pressure board (`BoardPollStore`; default **6s** prod, **1s** dev — see `src/environments/`) |
 | GET | `/api/board/chart/{name}?interval=5minute` | Candles + zone lines for chart |
 | POST | `/api/broker/otp/send` | Request m.Stock OTP |
 | POST | `/api/broker/otp/verify` | Body: `{ "otp": "123456" }` |
@@ -168,7 +168,33 @@ Chart `interval` values: `minute`, `5minute`, `15minute`, `60minute`, `day`.
 
 ---
 
-## 7. Troubleshooting
+## 7. Multi-user friend testing (login required)
+
+Hosted / friend testing uses **session login** (no per-user broker). Default admin is seeded on first run:
+
+- Email: `admin@tradewithbeast.local` (override via `SystemIdentity:AdminEmail`)
+- Password: set **`SystemIdentity:AdminPassword`** via user secrets before hosting (default `ChangeMe-Admin-123!` is **blocked on Production startup**)
+
+```powershell
+cd backend
+dotnet user-secrets set "SystemIdentity:AdminPassword" "Your-Strong-Password-Here"
+```
+
+See [docs/DEPLOYMENT-HARDENING.md](docs/DEPLOYMENT-HARDENING.md) for the full checklist and readiness endpoints.
+
+| Setting | Hosted (default) | Local dev without login |
+|---------|------------------|-------------------------|
+| `SystemIdentity:RequireAuthentication` | `true` | `false` |
+| `SystemIdentity:AllowAnonymousLocalUser` | `false` | `true` |
+| Frontend `environment.requireAuth` | `true` (production build) | `false` (`environment.development.ts`) |
+
+Legacy anonymous API (old `local-user` paper rows) only works when **both** backend `AllowAnonymousLocalUser` and frontend `requireAuth: false` are set.
+
+After login: **Admin** → `#/admin`, **Trader** → `#/dashboard`, then use Market / Manual for shared quotes and personal paper trades.
+
+---
+
+## 8. Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
@@ -180,7 +206,7 @@ Chart `interval` values: `minute`, `5minute`, `15minute`, `60minute`, `day`.
 
 ---
 
-## 8. Production build (optional)
+## 9. Production build (optional)
 
 ```powershell
 # Backend

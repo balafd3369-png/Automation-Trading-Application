@@ -1,0 +1,49 @@
+@if (enabled) {
+  <div
+    class="msa-root"
+    [class.msa-compact]="compact"
+    [class.msa-rail]="variant === 'rail'"
+    [class.msa-sell]="mode === 'sell'"
+    [class.msa-buy]="mode === 'buy'"
+    [class.msa-range]="mode === 'range'"
+    [class.msa-static]="!motionEnabled"
+    aria-hidden="true"
+  >
+    @if (motionEnabled) {
+      <div class="msa-canvas">
+        @for (p of particles; track p.id) {
+          @if (mode === 'range') {
+            <span
+              class="msa-dot"
+              [style.left.%]="p.left"
+              [style.--msa-size.px]="p.size"
+              [style.--msa-delay.s]="p.delay"
+              [style.--msa-duration.s]="p.duration"
+              [style.--msa-drift.px]="p.drift"
+            ></span>
+          } @else {
+            <span
+              class="msa-arrow"
+              [class.msa-tone-0]="p.tone === 0"
+              [class.msa-tone-1]="p.tone === 1"
+              [class.msa-tone-2]="p.tone === 2"
+              [style.left.%]="p.left"
+              [style.--msa-size.px]="p.size"
+              [style.--msa-delay.s]="p.delay"
+              [style.--msa-duration.s]="p.duration"
+              [style.--msa-drift.px]="p.drift"
+            ></span>
+          }
+        }
+      </div>
+    }
+    @if (showLabel && variant !== 'rail') {
+      <div class="msa-caption">
+        <strong>{{ title }}</strong>
+        @if (subtitle && mode !== 'range') {
+          <span>{{ subtitle }}</span>
+        }
+      </div>
+    }
+  </div>
+}

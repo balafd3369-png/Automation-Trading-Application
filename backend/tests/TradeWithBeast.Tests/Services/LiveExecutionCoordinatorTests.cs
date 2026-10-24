@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using TradeWithBeast.Broker;
@@ -13,7 +14,7 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
     [Fact]
     public void ComputeBrokerPnl_splits_open_and_closed_positions()
     {
-        var pnl = LiveExecutionCoordinator.ComputeBrokerPnl(
+        var pnl = InvokeComputeBrokerPnl(
         [
             new("NFO", "NIFTY22SEP23400PE", "MIS", 65, 0, 137.65m, 143m, 347.75m),
             new("NFO", "NIFTY22SEP23300PE", "MIS", 0, 0, 0m, 98.55m, -263.25m),
@@ -91,9 +92,53 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
         return new(
             brokers,
             new FakeProposalSource(proposal),
-            new TradeHistoryStore(configuration),
+            new TradeHistoryStore(configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger<TradeHistoryStore>.Instance),
             new LiveExecutionOptions { Enabled = true, OrderTimeoutSeconds = 3, TreatMarketAsOpen = true },
+            new TradingPlatformOptions { FuturesEnabled = false },
             NullLogger<LiveExecutionCoordinator>.Instance);
+    }
+
+    [Fact]
+    public async Task Future_leg_blocked_from_live_when_futures_disabled()
+    {
+        var proposal = Proposal(
+            "future-1",
+            "NAKED_INDEX_FUTURE",
+            [
+                new(
+                    "f1",
+                    "NIFTY FUT",
+                    "NIFTY",
+                    "FUTURE",
+                    "BUY",
+                    1,
+                    65,
+                    24_500m,
+                    null,
+                    null,
+                    null,
+                    new("test", "NFO", 123, DateTimeOffset.UtcNow, 0, true, 24_499m, 24_501m, 1000, 1000, [])),
+            ]);
+        var broker = new FakeBroker();
+        var coordinator = Create(proposal, broker);
+        coordinator.Arm(LiveExecutionCoordinator.ArmAcknowledgement);
+
+        var result = await coordinator.ConfirmAsync(proposal.Id, "MIS", CancellationToken.None);
+
+        Assert.Empty(broker.Placed);
+        Assert.Empty(result.Trades);
+        Assert.Contains(
+            InstrumentExecutionPolicy.FuturesDisabledLiveMessage,
+            result.ReconciliationStatus);
+    }
+
+    private static LiveBrokerPnlSnapshot InvokeComputeBrokerPnl(IReadOnlyList<BrokerPosition> positions)
+    {
+        var method = typeof(LiveExecutionCoordinator).GetMethod(
+            "ComputeBrokerPnl",
+            BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+        Assert.NotNull(method);
+        return (LiveBrokerPnlSnapshot)method!.Invoke(null, [positions])!;
     }
 
     private static MStockAuthClient CreateAuth()
@@ -105,6 +150,7 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
             new StubFactory(new HttpClient()),
             new MStockOptions { ApiKey = "key", RestBaseUrl = "https://api.mstock.trade" },
             sessions,
+            new MStockLoginContext(),
             NullLogger<MStockAuthClient>.Instance);
     }
 
@@ -116,7 +162,16 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
             id, legs.Count == 1 ? "OPTION" : "MULTI_LEG", "NIFTY", "BEARISH", 65,
             legs.Sum(leg => (leg.Side == "BUY" ? 1 : -1) * leg.IndicativePrice),
             150m, 50m, "test evidence", DateTimeOffset.UtcNow.AddMinutes(2),
-            strategy, "NIFTY", 80m, 3_250m, 3_250m, 1m, ["test"], legs, DateTimeOffset.UtcNow);
+            strategy,
+            "NIFTY",
+            80m,
+            3_250m,
+            3_250m,
+            3_250m,
+            1m,
+            ["test"],
+            legs,
+            DateTimeOffset.UtcNow);
 
     private static PaperTradeLegProposal Leg(string id, string symbol, string side, decimal price) =>
         new(

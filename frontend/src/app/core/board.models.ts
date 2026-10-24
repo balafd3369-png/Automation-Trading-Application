@@ -1,5 +1,14 @@
 export type PressureMark = 'BUYING' | 'SELLING' | 'RANGE BOUND';
 
+/** How <c>last</c> was chosen on the board API (debugging / UI badge). */
+export type QuoteSourceQuality =
+  | 'VerifiedLive'
+  | 'VerifiedClose'
+  | 'FallbackClose'
+  | 'SeedData'
+  | 'Placeholder'
+  | 'Rejected';
+
 export interface BoardCounts {
   buying: number;
   selling: number;
@@ -30,6 +39,9 @@ export interface SymbolSnapshot {
   previousClose: number;
   /** False when m.Stock is connected but this symbol still has demo seed / unmapped quote. */
   quoteVerified?: boolean;
+  quoteQuality?: QuoteSourceQuality;
+  /** When the displayed <c>last</c> was valid (live tick time or session close). ISO-8601 UTC. */
+  quoteTimestamp?: string | null;
 }
 
 export interface BoardResponse {
@@ -328,9 +340,18 @@ export interface PaperTradeHistoryLeg {
   expiry: string | null;
 }
 
+export type TradeExecutionSource = 'PAPER' | 'LIVE';
+
+/** Strategy automation vs discretionary manual trades in the shared store. */
+export type TradeSource = 'STRATEGY' | 'MANUAL';
+
 export interface PaperTradeHistoryItem {
   id: string;
   status: TradeHistoryItem['status'];
+  /** Paper vs live execution; defaults to PAPER when omitted (legacy API rows). */
+  executionSource?: TradeExecutionSource;
+  /** STRATEGY (automation) vs MANUAL (discretionary); defaults to STRATEGY. */
+  tradeSource?: TradeSource;
   strategy: string;
   underlying: string;
   direction: string;
@@ -338,6 +359,11 @@ export interface PaperTradeHistoryItem {
   target?: number;
   maxRisk: number;
   maxReward: number;
+  /** Canonical qty from backend (floor(capitalPerTrade / entryPrice) for single-leg). */
+  quantity?: number;
+  /** Quantity-weighted entry price from backend. */
+  entryPrice?: number;
+  exitPrice?: number | null;
   capitalRequired?: number;
   pnl: number | null;
   exitReason: string | null;

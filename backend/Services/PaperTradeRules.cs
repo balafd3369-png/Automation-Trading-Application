@@ -26,19 +26,8 @@ public static class PaperTradeRules
         return PaperEntrySignal.None;
     }
 
-    public static int CalculateQuantity(
-        decimal price,
-        decimal stop,
-        decimal capitalBudget,
-        decimal riskBudget)
-    {
-        var riskPerUnit = Math.Abs(price - stop);
-        if (price <= 0 || riskPerUnit <= 0 || capitalBudget <= 0 || riskBudget <= 0)
-        {
-            return 0;
-        }
-        return (int)Math.Floor(Math.Min(capitalBudget / price, riskBudget / riskPerUnit));
-    }
+    public static int CalculateQuantity(decimal entryPrice, decimal capitalPerTrade) =>
+        PaperTradeEconomics.QuantityFromCapital(capitalPerTrade, entryPrice);
 
     public static bool HitStop(
         string direction,

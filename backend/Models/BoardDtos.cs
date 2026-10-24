@@ -33,7 +33,9 @@ public sealed record SymbolSnapshot(
     long? Volume = null,
     long? OpenInterest = null,
     DateTimeOffset? DataTimestamp = null,
-    bool QuoteVerified = true);
+    bool QuoteVerified = true,
+    QuoteSourceQuality QuoteQuality = QuoteSourceQuality.SeedData,
+    DateTimeOffset? QuoteTimestamp = null);
 
 public sealed record ChartBar(long Time, decimal Open, decimal High, decimal Low, decimal Close);
 
