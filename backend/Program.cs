@@ -23,9 +23,11 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
 
 };
 
-
-
-builder.WebHost.UseUrls("http://0.0.0.0:45211");
+const int defaultListenPort = 45211;
+var listenPort = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var portFromEnv) && portFromEnv > 0
+    ? portFromEnv
+    : defaultListenPort;
+builder.WebHost.UseUrls($"http://0.0.0.0:{listenPort}");
 
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
@@ -181,7 +183,7 @@ app.MapHub<TradeWithBeast.Hubs.MarketChartHub>("/hubs/market-chart");
 
 app.MapGet("/", () => Results.Redirect("/api/board"));
 
-app.MapGet("/api/health", () => Results.Ok(new { status = "ok", port = 45211 }));
+app.MapGet("/api/health", () => Results.Ok(new { status = "ok", port = listenPort }));
 
 app.Run();
 

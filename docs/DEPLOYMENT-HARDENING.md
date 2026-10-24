@@ -66,6 +66,14 @@ Look for lines prefixed with `DEPLOYMENT CHECK`:
 6. Production Angular build; confirm login required.
 7. Two test users: manual paper isolation smoke test.
 
+## Render (Docker Web Service)
+
+- **Root directory:** `backend`
+- **Runtime:** Docker (`backend/Dockerfile` → `dotnet TradeWithBeast.dll`)
+- **Health check path:** `/api/health` (no auth; exempt in `RequireAuthenticationMiddleware`)
+- **Port:** set Render’s `PORT` env var; app binds `http://0.0.0.0:$PORT`, or **45211** locally when `PORT` is unset
+- **Required env:** `ASPNETCORE_ENVIRONMENT=Production`, `SystemIdentity__AdminPassword` (non-default)
+
 ## Remaining YELLOW items (acceptable for Phase 1)
 
 - Broker disconnected → reconciliation/market feed checks show **WARNING** until OTP login.

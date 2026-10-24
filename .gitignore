@@ -18,4 +18,5 @@ backend/.vs/
 backend/_buildcheck/
 backend/_qty-test-out/
 backend/build-out/
+backend/render-publish-check/
 **/_test-out/
