@@ -796,75 +796,108 @@
           [class.chart-view-full]="chartViewMode === 'full'"
           [class.chart-view-max]="chartViewMode === 'max'"
         >
-          <div class="crumb">
-            {{ marketKind }} / {{ selected.name }}
-            @if (openedOption && optionsChartMode === 'contract') {
-              / {{ openedOption.label }}
-            }
-          </div>
-          <div class="headline" [class.options-headline]="marketKind === 'options'">
-            <div>
-              @if (marketKind === 'options' && optionsChartMode === 'contract' && openedOption) {
-                <span class="options-premium-tag">Option premium</span>
-              }
-              @if (marketKind === 'options' && optionsChartMode === 'underlying') {
-                <span class="options-premium-tag options-spot-tag">Index spot</span>
-              }
-              <div class="symbol" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">
-                {{ marketKind === 'options' && optionsChartMode === 'underlying' ? selected.name : (openedOption?.label || selected.name) }}
-              </div>
-              <div class="last" [class.up]="tone(selected) === 'up'" [class.down]="tone(selected) === 'down'">
+          @if (marketKind === 'options') {
+            <div class="options-quote-strip" aria-label="Option quote">
+              <span class="options-quote-strip-kind">
+                @if (optionsChartMode === 'underlying') {
+                  Spot
+                } @else {
+                  Premium
+                }
+              </span>
+              <span
+                class="options-quote-strip-contract"
+                [class.up]="tone(selected) === 'up'"
+                [class.down]="tone(selected) === 'down'"
+              >
+                {{ optionsChartMode === 'underlying' ? selected.name : (openedOption?.label || selected.name) }}
+              </span>
+              <span
+                class="options-quote-strip-price"
+                [class.up]="tone(selected) === 'up'"
+                [class.down]="tone(selected) === 'down'"
+              >
                 @if (displayLast() != null) {
                   {{ displayLast() | number: '1.2-2' }}
                 } @else {
                   —
                 }
-              </div>
-              @if (selectedQuoteQualityLabel()) {
-                <div class="quote-quality-block" role="status" [attr.title]="'Quote source: ' + selected.quoteQuality">
-                  <div class="quote-quality-pill" [ngClass]="selectedQuoteQualityClass()">
-                    {{ selectedQuoteQualityLabel() }}
-                    @if (selectedQuoteQualityLive()) {
-                      <span class="quote-quality-check" aria-hidden="true">✓</span>
-                    }
-                  </div>
-                  @if (selectedQuoteFreshnessLabel()) {
-                    <div class="quote-freshness">{{ selectedQuoteFreshnessLabel() }}</div>
-                  }
+              </span>
+              @if (optionsChartTradeEnabled()) {
+                <div class="headline-trade-actions options-quote-strip-actions">
+                  <button type="button" class="headline-trade-btn headline-trade-btn--buy" (click)="openTradeTicketForChart('BUY')">Buy</button>
+                  <button type="button" class="headline-trade-btn headline-trade-btn--sell" (click)="openTradeTicketForChart('SELL')">Sell</button>
                 </div>
               }
-              <div
-                class="market-momentum-badge"
-                [class.momentum-bull]="marketMomentumMode() === 'buy'"
-                [class.momentum-bear]="marketMomentumMode() === 'sell'"
-                [class.momentum-range]="marketMomentumMode() === 'range'"
-                role="status"
-              >
-                <span class="market-momentum-badge-glow" aria-hidden="true"></span>
-                {{ marketMomentumLabel() }}
+              <span class="options-quote-strip-meta">{{ lastVs(selected) }}</span>
+            </div>
+          } @else {
+            <div class="market-quote-card" aria-label="Symbol quote">
+              <div class="market-quote-card-row">
+                <div class="market-quote-card-primary">
+                  <span
+                    class="market-quote-symbol"
+                    [class.up]="tone(selected) === 'up'"
+                    [class.down]="tone(selected) === 'down'"
+                  >
+                    {{ selected.name }}
+                  </span>
+                  <span
+                    class="market-quote-price"
+                    [class.up]="tone(selected) === 'up'"
+                    [class.down]="tone(selected) === 'down'"
+                  >
+                    @if (displayLast() != null) {
+                      {{ displayLast() | number: '1.2-2' }}
+                    } @else {
+                      —
+                    }
+                  </span>
+                </div>
+                <div class="market-quote-card-aside">
+                  <div
+                    class="market-momentum-badge market-momentum-badge--inline"
+                    [class.momentum-bull]="marketMomentumMode() === 'buy'"
+                    [class.momentum-bear]="marketMomentumMode() === 'sell'"
+                    [class.momentum-range]="marketMomentumMode() === 'range'"
+                    role="status"
+                  >
+                    <span class="market-momentum-badge-glow" aria-hidden="true"></span>
+                    {{ marketMomentumLabel() }}
+                  </div>
+                  <span class="market-quote-vs">{{ lastVs(selected) }} · open {{ displayOpen() | number: '1.2-2' }}</span>
+                  @if (selectedQuoteQualityLabel()) {
+                    <span
+                      class="quote-quality-pill quote-quality-pill--inline"
+                      [ngClass]="selectedQuoteQualityClass()"
+                      role="status"
+                      [attr.title]="'Quote source: ' + selected.quoteQuality"
+                    >
+                      {{ selectedQuoteQualityLabel() }}
+                      @if (selectedQuoteQualityLive()) {
+                        <span class="quote-quality-check" aria-hidden="true">✓</span>
+                      }
+                    </span>
+                  }
+                  <div class="headline-trade-actions market-quote-trade-actions">
+                    <button type="button" class="headline-trade-btn headline-trade-btn--buy" (click)="openTradeTicketForChart('BUY')">Buy</button>
+                    <button type="button" class="headline-trade-btn headline-trade-btn--sell" (click)="openTradeTicketForChart('SELL')">Sell</button>
+                  </div>
+                  <div class="market-quote-mark" [ngClass]="badgeClass(selected.mark)">{{ selected.mark }}</div>
+                </div>
               </div>
-              <div class="vs">{{ lastVs(selected) }} · open {{ displayOpen() | number: '1.2-2' }}</div>
-              @if (optionsChartMode === 'contract' && openedOption && lastChart?.tradingSymbol) {
-                <div class="contract-symbol">{{ lastChart?.tradingSymbol }}</div>
-              }
+              <div class="chips market-quote-card-chips" aria-label="Range chips">
+                <span class="chip b2">B2 {{ selected.b2 | number: '1.2-2' }}</span>
+                <span class="chip b1">B1 {{ selected.b1 | number: '1.2-2' }}</span>
+                <span class="chip s">S {{ selected.s | number: '1.2-2' }}</span>
+                <span class="chip s1">S1 {{ selected.s1 | number: '1.2-2' }}</span>
+                <span class="chip s2">S2 {{ selected.s2 | number: '1.2-2' }}</span>
+                @if (selected.tightRange) {
+                  <span class="chip tight">tight range</span>
+                }
+              </div>
             </div>
-            <div class="headline-trade-actions">
-              <button type="button" class="headline-trade-btn headline-trade-btn--buy" (click)="openTradeTicketForChart('BUY')">Buy</button>
-              <button type="button" class="headline-trade-btn headline-trade-btn--sell" (click)="openTradeTicketForChart('SELL')">Sell</button>
-            </div>
-            <div [ngClass]="badgeClass(selected.mark)">{{ selected.mark }}</div>
-          </div>
-
-          <div class="chips" aria-label="Range chips">
-            <span class="chip b2">B2 {{ selected.b2 | number: '1.2-2' }}</span>
-            <span class="chip b1">B1 {{ selected.b1 | number: '1.2-2' }}</span>
-            <span class="chip s">S {{ selected.s | number: '1.2-2' }}</span>
-            <span class="chip s1">S1 {{ selected.s1 | number: '1.2-2' }}</span>
-            <span class="chip s2">S2 {{ selected.s2 | number: '1.2-2' }}</span>
-            @if (selected.tightRange) {
-              <span class="chip tight">tight range</span>
-            }
-          </div>
+          }
 
           <div class="chart-block">
             @if (optionChartError) {

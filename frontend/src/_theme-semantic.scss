@@ -116,6 +116,20 @@
   border-color: var(--color-badge-info-border, var(--border));
 }
 
+/* Themed shells: inputs and segmented controls inherit readable colors on every preset. */
+.trade-terminal,
+.history-panel-full,
+.live-terminal,
+app-trade-history-dashboard {
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    background: var(--color-card, var(--editor));
+    color: var(--color-text-primary, var(--fg));
+    border-color: var(--color-border, var(--border));
+  }
+}
+
 .twb-text-profit,
 .up {
   color: var(--color-success, var(--success));

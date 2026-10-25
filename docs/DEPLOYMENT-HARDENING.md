@@ -28,6 +28,17 @@ On **Production** startup, the app **fails to start** if `AdminPassword` is miss
 
 Development logs a **warning** instead.
 
+## UI theme contrast (frontend)
+
+Before release, run theme contrast unit tests (all presets + sample custom backgrounds):
+
+```powershell
+cd frontend
+npx ng test --no-watch --browsers=ChromeHeadless --include=**/app-theme.spec.ts
+```
+
+CI should fail if primary/secondary text drops below WCAG-style thresholds on card/surface tokens. Trade History and Live terminal chrome use `--color-*` semantic variables, not fixed light-gray palettes.
+
 ## Verification
 
 ### Startup logs

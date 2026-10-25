@@ -147,13 +147,27 @@ export function buildSemanticThemeTokens(palette: AppThemePalette): SemanticThem
     ? mixHex(palette.accent, card, 0.06)
     : mixHex(palette.accent, palette.editor, 0.12);
   const tableBorder = mixHex(palette.border, palette.bg, light ? 0.65 : 0.85);
+  const textSurfaces = [card, surface, palette.editor, palette.bg, palette.title, palette.activity];
+  const anchorFg = pickReadableText(palette.bg);
+  const textPrimary = ensureReadableAcrossSurfaces(
+    palette.fg,
+    textSurfaces,
+    MIN_BODY_CONTRAST,
+    anchorFg,
+  );
+  const textSecondary = ensureReadableAcrossSurfaces(
+    palette.muted,
+    textSurfaces,
+    MIN_SURFACE_MUTED_CONTRAST,
+    textPrimary,
+  );
 
   return {
     bg: palette.bg,
     surface,
     card,
-    textPrimary: palette.fg,
-    textSecondary: palette.muted,
+    textPrimary,
+    textSecondary,
     border: palette.border,
     success: semantic.success,
     danger: semantic.danger,
@@ -546,8 +560,16 @@ export function applyThemePalette(
   root.style.setProperty('--editor', palette.editor);
   root.style.setProperty('--border', palette.border);
   root.style.setProperty('--fg', palette.fg);
-  root.style.setProperty('--muted', palette.muted);
-  root.style.setProperty('--dim', palette.dim);
+  root.style.setProperty('--muted', semanticTokens.textSecondary);
+  root.style.setProperty(
+    '--dim',
+    ensureReadableAcrossSurfaces(
+      palette.dim,
+      [palette.bg, palette.editor, palette.title],
+      2.8,
+      semanticTokens.textPrimary,
+    ),
+  );
   root.style.setProperty('--chart-bg', palette.chartBg);
   root.style.setProperty('--chart-grid', palette.chartGrid);
   root.style.setProperty('--chart-text', palette.chartText);
@@ -639,6 +661,9 @@ export function applyThemePalette(
   root.style.setProperty('--rail-buy-label', light ? '#047857' : '#86efac');
   root.style.setProperty('--rail-range-label', light ? '#b45309' : '#fcd34d');
   root.style.setProperty('--twb-table-head-color', semanticTokens.textSecondary);
+  root.style.setProperty('--twb-up', semantic.success);
+  root.style.setProperty('--twb-down', semantic.danger);
+  root.style.setProperty('--twb-muted', semanticTokens.textSecondary);
   root.style.setProperty('--nav-active-fg', '#ffffff');
   root.style.setProperty('--rail-head-tint', light ? '14%' : '22%');
   root.style.setProperty('--rail-head-border-mix', light ? '30%' : '38%');
@@ -755,8 +780,45 @@ const READABLE_TEXT_LIGHT = '#f5f5f5';
 const READABLE_TEXT_DARK = '#0d0d0d';
 const MIN_BODY_CONTRAST = 4.5;
 const MIN_MUTED_CONTRAST = 3;
+const MIN_SURFACE_MUTED_CONTRAST = 3.2;
 
 /** Ensures primary / secondary text meets contrast on the main background. */
+/** Used by tests to guard contrast on every preset. */
+export function themeTextContrastRatio(fgHex: string, bgHex: string): number {
+  return contrastRatio(fgHex, bgHex);
+}
+
+function ensureMinContrastOnBackground(
+  textHex: string,
+  bgHex: string,
+  minRatio: number,
+  anchorFg: string,
+): string {
+  if (contrastRatio(textHex, bgHex) >= minRatio) {
+    return textHex;
+  }
+  for (const weight of [0.52, 0.64, 0.76, 0.88, 0.95]) {
+    const candidate = mixHex(anchorFg, bgHex, weight);
+    if (contrastRatio(candidate, bgHex) >= minRatio) {
+      return candidate;
+    }
+  }
+  return pickReadableText(bgHex);
+}
+
+function ensureReadableAcrossSurfaces(
+  textHex: string,
+  surfaces: string[],
+  minRatio: number,
+  anchorFg: string,
+): string {
+  let result = textHex;
+  for (const surface of surfaces) {
+    result = ensureMinContrastOnBackground(result, surface, minRatio, anchorFg);
+  }
+  return result;
+}
+
 function withReadableTextHierarchy(palette: AppThemePalette): AppThemePalette {
   const fg =
     contrastRatio(palette.fg, palette.bg) >= MIN_BODY_CONTRAST

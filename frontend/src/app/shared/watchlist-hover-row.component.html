@@ -3,7 +3,8 @@
     <div class="watchlist-hover-row__quote" [attr.aria-label]="label()">
       <ng-content />
     </div>
-    <div class="watchlist-hover-row__actions" (click)="$event.stopPropagation()">
+    <div class="watchlist-hover-row__actions-slot">
+      <div class="watchlist-hover-row__actions" (click)="$event.stopPropagation()">
       <button
         type="button"
         class="watchlist-act watchlist-act--buy"
@@ -40,6 +41,7 @@
         </svg>
         <span class="watchlist-act__text">Chart</span>
       </button>
+      </div>
     </div>
   </div>
 </li>

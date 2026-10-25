@@ -295,48 +295,108 @@ public sealed class MStockAuthClient : IBrokerMarketClient
         return snap with { TradingSymbol = matchedAlias };
     }
 
+    private const int OptionQuoteInstrumentsPerRequest = 12;
+    private static readonly TimeSpan OptionQuoteBatchGap = TimeSpan.FromMilliseconds(75);
+
     public async Task<IReadOnlyList<OptionMarketQuote>> GetOptionQuotesAsync(
         IReadOnlyList<OptionQuoteRequest> contracts,
         CancellationToken ct)
     {
-        var requested = contracts
-            .Select(contract => new
-            {
-                Contract = contract,
-                Aliases = OptionSymbols.QuoteKeys(
+        if (contracts.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = contracts
+            .Select(contract => new OptionQuoteRow(
+                contract,
+                OptionSymbols.QuoteKeys(
                     contract.Underlying,
                     contract.Expiry,
                     contract.Strike,
-                    contract.Side),
-            })
+                    contract.Side)))
             .ToList();
-        var quotes = new List<OptionMarketQuote>();
-        foreach (var chunk in requested.Chunk(4))
+
+        var filled = new Dictionary<(decimal Strike, string Side), OptionMarketQuote>();
+        await FetchOptionQuotePassAsync(rows, primaryAliasOnly: true, filled, ct);
+        var missing = rows
+            .Where(row => !filled.ContainsKey(QuoteKey(row.Contract)))
+            .ToList();
+        if (missing.Count > 0)
         {
-            var aliasKeys = chunk
-                .SelectMany(row => row.Aliases)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var query = string.Join("&", aliasKeys.Select(key => "i=" + Uri.EscapeDataString(key)));
-            using var req = new HttpRequestMessage(HttpMethod.Get, "openapi/typea/instruments/quote/ohlc?" + query);
-            ApplyCommonHeaders(req);
-            ApplyAuth(req);
-            var root = await SendJson(req, ct);
-            if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+            await FetchOptionQuotePassAsync(missing, primaryAliasOnly: false, filled, ct);
+        }
+
+        return filled.Values
+            .OrderBy(quote => quote.Strike)
+            .ThenBy(quote => quote.Side, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static (decimal Strike, string Side) QuoteKey(OptionQuoteRequest contract) =>
+        (contract.Strike, contract.Side.ToUpperInvariant());
+
+    private sealed record OptionQuoteRow(OptionQuoteRequest Contract, IReadOnlyList<string> Aliases);
+
+    private async Task FetchOptionQuotePassAsync(
+        IReadOnlyList<OptionQuoteRow> rows,
+        bool primaryAliasOnly,
+        Dictionary<(decimal Strike, string Side), OptionMarketQuote> filled,
+        CancellationToken ct)
+    {
+        var contractsPerChunk = primaryAliasOnly ? OptionQuoteInstrumentsPerRequest : 4;
+        var batch = 0;
+        foreach (var chunk in rows.Chunk(contractsPerChunk))
+        {
+            if (batch++ > 0)
+            {
+                await Task.Delay(OptionQuoteBatchGap, ct);
+            }
+
+            var aliasKeys = primaryAliasOnly
+                ? chunk.Select(row => row.Aliases[0]).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                : chunk.SelectMany(row => row.Aliases).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (aliasKeys.Count == 0)
+            {
+                continue;
+            }
+
+            JsonElement? data;
+            try
+            {
+                data = await FetchOptionOhlcDataAsync(aliasKeys, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.LogWarning(
+                    ex,
+                    "Option OHLC batch failed ({AliasMode}, {Contracts} contracts)",
+                    primaryAliasOnly ? "primary" : "all-aliases",
+                    chunk.Length);
+                continue;
+            }
+
+            if (data is null)
             {
                 continue;
             }
 
             foreach (var row in chunk)
             {
-                if (!TryReadOptionOhlc(data, row.Aliases, out var matchedAlias, out var snap))
+                var key = QuoteKey(row.Contract);
+                if (filled.ContainsKey(key))
                 {
                     continue;
                 }
 
-                quotes.Add(new OptionMarketQuote(
+                if (!TryReadOptionOhlc(data.Value, row.Aliases, out var matchedAlias, out var snap))
+                {
+                    continue;
+                }
+
+                filled[key] = new OptionMarketQuote(
                     row.Contract.Strike,
-                    row.Contract.Side.ToUpperInvariant(),
+                    key.Side,
                     matchedAlias,
                     snap.Last,
                     snap.Open,
@@ -345,10 +405,24 @@ public sealed class MStockAuthClient : IBrokerMarketClient
                     snap.Ask,
                     snap.Volume,
                     snap.OpenInterest,
-                    snap.Timestamp));
+                    snap.Timestamp);
             }
         }
-        return quotes;
+    }
+
+    private async Task<JsonElement?> FetchOptionOhlcDataAsync(IReadOnlyList<string> aliasKeys, CancellationToken ct)
+    {
+        var query = string.Join("&", aliasKeys.Select(key => "i=" + Uri.EscapeDataString(key)));
+        using var req = new HttpRequestMessage(HttpMethod.Get, "openapi/typea/instruments/quote/ohlc?" + query);
+        ApplyCommonHeaders(req);
+        ApplyAuth(req);
+        var root = await SendJson(req, ct);
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return data.Clone();
     }
 
     public async Task<FundSummary?> GetFundSummaryAsync(CancellationToken ct)
@@ -508,8 +582,24 @@ public sealed class MStockAuthClient : IBrokerMarketClient
                 json.Length > 500 ? json[..500] + "…" : json);
         }
 
-        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
-        return doc.RootElement.Clone();
+        var payload = string.IsNullOrWhiteSpace(json) ? "{}" : json;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            return doc.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            _log.LogWarning(
+                ex,
+                "m.Stock returned non-JSON for {Method} {Path} (HTTP {Status}): {Body}",
+                req.Method,
+                req.RequestUri?.PathAndQuery ?? "?",
+                (int)res.StatusCode,
+                payload.Length > 500 ? payload[..500] + "…" : payload);
+            using var empty = JsonDocument.Parse("{}");
+            return empty.RootElement.Clone();
+        }
     }
 
     private void ApplyCommonHeaders(HttpRequestMessage req)

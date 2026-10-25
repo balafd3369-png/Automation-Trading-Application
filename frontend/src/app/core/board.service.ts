@@ -105,9 +105,11 @@ export class BoardService {
   }
 
   optionChain(underlying: string, expiry: string): Observable<OptionMarketQuote[]> {
-    return this.http.get<OptionMarketQuote[]>('/api/board/option-chain', {
-      params: { underlying, expiry },
-    });
+    return this.http
+      .get<OptionMarketQuote[]>('/api/board/option-chain', {
+        params: { underlying, expiry },
+      })
+      .pipe(timeout(30_000));
   }
 
   paperAgent(): Observable<PaperAgentSnapshot> {

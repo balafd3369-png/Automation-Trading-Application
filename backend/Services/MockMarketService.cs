@@ -815,7 +815,24 @@ public sealed class MockMarketService : IHostedService, IDisposable
             requests.Add(new OptionQuoteRequest(underlying, expiry, strike, "PE"));
         }
 
-        var quotes = await Broker.GetOptionQuotesAsync(requests, ct);
+        IReadOnlyList<OptionMarketQuote> quotes;
+        try
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            budget.CancelAfter(TimeSpan.FromSeconds(25));
+            quotes = await Broker.GetOptionQuotesAsync(requests, budget.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _log.LogWarning("Option chain quote fetch timed out for {Underlying} {Expiry:yyyy-MM-dd}", underlying, expiry);
+            return [];
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Option chain quote fetch failed for {Underlying} {Expiry:yyyy-MM-dd}", underlying, expiry);
+            return [];
+        }
+
         return quotes
             .Select(quote =>
             {

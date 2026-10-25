@@ -9,6 +9,7 @@ import {
   resolveChartSurface,
   resolveThemePalette,
   saveThemeSelection,
+  themeTextContrastRatio,
 } from './app-theme';
 
 describe('app-theme', () => {
@@ -48,7 +49,8 @@ describe('app-theme', () => {
     expect(document.documentElement.style.getPropertyValue('--accent').trim()).toBe(palette.accent);
     expect(document.documentElement.style.getPropertyValue('--chart-bg').trim()).toBe(palette.chartBg);
     expect(document.documentElement.style.getPropertyValue('--color-bg').trim()).toBe(palette.bg);
-    expect(document.documentElement.style.getPropertyValue('--color-text-primary').trim()).toBe(palette.fg);
+    const tokens = buildSemanticThemeTokens(palette);
+    expect(document.documentElement.style.getPropertyValue('--color-text-primary').trim()).toBe(tokens.textPrimary);
     expect(document.documentElement.style.getPropertyValue('--font-size-body').trim()).toBe('14px');
   });
 
@@ -78,5 +80,32 @@ describe('app-theme', () => {
     expect(palette.fg).toBe('#0d0d0d');
     applyThemePalette(palette, 'custom');
     expect(document.documentElement.style.getPropertyValue('--fg-on-accent-band').trim()).not.toBe('');
+  });
+
+  it('keeps semantic text readable on card/surface for every preset', () => {
+    for (const preset of APP_THEME_PRESETS) {
+      const palette = resolveThemePalette({ presetId: preset.id });
+      const tokens = buildSemanticThemeTokens(palette);
+      expect(themeTextContrastRatio(tokens.textPrimary, tokens.card)).toBeGreaterThanOrEqual(4.5);
+      expect(themeTextContrastRatio(tokens.textSecondary, tokens.card)).toBeGreaterThanOrEqual(3.2);
+      expect(themeTextContrastRatio(tokens.textSecondary, tokens.surface)).toBeGreaterThanOrEqual(3.2);
+    }
+  });
+
+  it('warm preset applies readable muted css variable on card', () => {
+    const palette = resolveThemePalette({ presetId: 'warm' });
+    applyThemePalette(palette, 'warm');
+    const muted = document.documentElement.style.getPropertyValue('--color-text-secondary').trim();
+    const card = document.documentElement.style.getPropertyValue('--color-card').trim();
+    expect(themeTextContrastRatio(muted, card)).toBeGreaterThanOrEqual(3.2);
+  });
+
+  it('custom dark backgrounds get readable semantic tokens', () => {
+    for (const hex of ['#1a0f08', '#0c0618', '#000000', '#131722']) {
+      const palette = resolveThemePalette({ presetId: 'custom', customBg: hex });
+      const tokens = buildSemanticThemeTokens(palette);
+      expect(themeTextContrastRatio(tokens.textPrimary, tokens.card)).toBeGreaterThanOrEqual(4.5);
+      expect(themeTextContrastRatio(tokens.textSecondary, tokens.card)).toBeGreaterThanOrEqual(3.2);
+    }
   });
 });

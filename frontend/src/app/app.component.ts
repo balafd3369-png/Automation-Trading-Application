@@ -638,11 +638,11 @@ export class AppComponent implements OnInit, AfterViewInit {
         this.rememberChartCache(requestKey, mergedPayload);
       });
 
-    merge(interval(3000), this.optionChainReload)
+    merge(interval(5000), this.optionChainReload)
       .pipe(
         startWith(0),
         filter(() => this.marketKind === 'options' && !!this.optionUnderlying && !!this.optionExpiry),
-        switchMap(() =>
+        exhaustMap(() =>
           this.board.optionChain(this.optionUnderlying, this.optionExpiry).pipe(
             catchError(() => EMPTY),
           ),
@@ -2458,7 +2458,8 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.bumpView();
   }
 
-  private optionsChartShowsContractPremium(): boolean {
+  /** Options workbench: trade ticket only for a selected CE/PE contract (not index spot). */
+  optionsChartTradeEnabled(): boolean {
     return this.marketKind === 'options' && this.optionsChartMode === 'contract' && !!this.openedOption;
   }
 
@@ -3934,8 +3935,10 @@ export class AppComponent implements OnInit, AfterViewInit {
     if (!this.selected) {
       return;
     }
-    if (this.marketKind === 'options' && this.optionsChartMode === 'contract' && this.openedOption) {
-      this.openTradeTicketFromOption(this.openedOption, side);
+    if (this.marketKind === 'options') {
+      if (this.optionsChartTradeEnabled()) {
+        this.openTradeTicketFromOption(this.openedOption!, side);
+      }
       return;
     }
     this.openTradeTicketFromStock(this.selected, side);
@@ -4131,7 +4134,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   lastVs(symbol: SymbolSnapshot): string {
     const zone =
       symbol.last >= symbol.b1 ? 'above B1' : symbol.last <= symbol.s1 ? 'below S1' : 'between S1–B1';
-    if (this.optionsChartShowsContractPremium()) {
+    if (this.optionsChartTradeEnabled()) {
       return `option premium · ${symbol.name} underlying ${symbol.last.toFixed(2)}`;
     }
     return zone;
@@ -4521,7 +4524,7 @@ export class AppComponent implements OnInit, AfterViewInit {
       return;
     }
     if (
-      this.optionsChartShowsContractPremium()
+      this.optionsChartTradeEnabled()
       || !this.candleSeries
       || !this.lastChart?.candles.length
     ) {
@@ -4602,7 +4605,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   displayLast(): number | null {
-    if (this.optionsChartShowsContractPremium()) {
+    if (this.optionsChartTradeEnabled()) {
       const last = this.openedOption?.last ?? this.lastChart?.last ?? 0;
       return last > 0 ? last : null;
     }
@@ -4622,7 +4625,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   displayOpen(): number {
-    if (this.optionsChartShowsContractPremium()) {
+    if (this.optionsChartTradeEnabled()) {
       return (
         this.lastChart?.todayOpen ??
         this.openedOption?.previousClose ??
@@ -4682,7 +4685,7 @@ export class AppComponent implements OnInit, AfterViewInit {
       return;
     }
     if (
-      this.optionsChartShowsContractPremium() ||
+      this.optionsChartTradeEnabled() ||
       !this.candleSeries ||
       !this.selected ||
       !symbolHasVerifiedQuote(this.selected) ||
@@ -4863,7 +4866,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     const candles = this.toTvCandles(data.candles);
     this.candleSeries.setData(candles);
     const zones = this.chartZoneLevels(data);
-    const lines = this.optionsChartShowsContractPremium() ? [] : [
+    const lines = this.optionsChartTradeEnabled() ? [] : [
       { price: Number(zones.b2), color: '#238636', title: 'B2' },
       { price: Number(zones.b1), color: '#3fb950', title: 'B1' },
       { price: Number(zones.s), color: '#79b8ff', title: 'S' },

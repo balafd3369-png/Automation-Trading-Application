@@ -2,6 +2,8 @@
   display: block;
   list-style: none;
   margin-bottom: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-md, 8px);
 }
 
 .watchlist-hover-row {
@@ -12,6 +14,7 @@
 .watchlist-hover-row__shell {
   display: grid;
   grid-template-rows: auto 0fr;
+  overflow: hidden;
   border-radius: var(--radius-md, 8px);
   border: 1px solid transparent;
   cursor: pointer;
@@ -67,20 +70,43 @@
   background: color-mix(in srgb, var(--activity) 88%, #fff 4%);
 }
 
+/* Clips the second grid row when collapsed (0fr); min-height:0 is required for 0fr to hide overflow. */
+.watchlist-hover-row__actions-slot {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .watchlist-hover-row__actions {
   display: flex;
   gap: 4px;
-  padding: 2px 6px 5px;
+  padding: 0 6px;
+  margin: 0;
+  max-height: 0;
   overflow: hidden;
-  opacity: 0.5;
-  pointer-events: auto;
-  transition: opacity 180ms ease, padding 180ms ease;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  border: 0;
+  box-shadow: none;
+  transition:
+    opacity 180ms ease,
+    max-height 220ms ease,
+    padding 180ms ease,
+    visibility 0s linear 180ms;
 }
 
 :host(:hover) .watchlist-hover-row__actions,
 :host(:focus-within) .watchlist-hover-row__actions {
-  opacity: 1;
+  max-height: 4rem;
   padding: 3px 7px 7px;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    opacity 180ms ease,
+    max-height 220ms ease,
+    padding 180ms ease,
+    visibility 0s;
 }
 
 .watchlist-act {
@@ -161,7 +187,9 @@
   }
 
   .watchlist-hover-row__actions {
+    max-height: 4rem;
     opacity: 1;
+    visibility: visible;
     pointer-events: auto;
     padding: 4px 8px 8px;
   }
