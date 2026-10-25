@@ -2,6 +2,8 @@
 
 ## Production configuration
 
+Full reference: [CONFIGURATION.md](./CONFIGURATION.md) and [AZURE-APP-SERVICE-CONFIG.md](./AZURE-APP-SERVICE-CONFIG.md).
+
 | Setting | Friend testing value |
 |---------|----------------------|
 | `ASPNETCORE_ENVIRONMENT` | `Production` |

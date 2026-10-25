@@ -1,4 +1,5 @@
-import { DatePipe, DecimalPipe, NgClass } from '@angular/common';
+import { DatePipe, DecimalPipe, NgClass, NgComponentOutlet } from '@angular/common';
+import { Type } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import {
   AfterViewInit,
@@ -75,12 +76,7 @@ import { ChartLiveCoordinator } from './core/chart-live.coordinator';
 import { TradingRefreshService } from './core/trading-refresh.service';
 import { LiveClockComponent } from './live-clock.component';
 import { PaperStrategyFocus, PaperStrategyFocusService } from './core/paper-strategy-focus.service';
-import { StrategiesPageComponent } from './strategies/strategies-page.component';
-import { StrategyCommandCenterComponent } from './strategy-command-center/strategy-command-center.component';
 import { StrategiesPageStore } from './strategies/strategies-page.store';
-import { StrategyTradesPanelComponent } from './strategy-trades-panel/strategy-trades-panel.component';
-import { TradeHistoryDashboardComponent } from './trade-history-dashboard/trade-history-dashboard.component';
-import { ManualTradingPageComponent } from './manual-trading/manual-trading-page.component';
 import { ManualTransactionType } from './core/manual-trading.models';
 import { TradeTicketService } from './core/trade-ticket.service';
 import {
@@ -94,10 +90,8 @@ import { OperationsNotificationService } from './core/operations-notification.se
 import { OperationsNotification } from './core/operations.models';
 import { TradeTicketModalComponent } from './trade-ticket/trade-ticket-modal.component';
 import { InstrumentKind, normalizeInstrumentType } from './core/instrument-type.util';
-import { OperationsSuiteComponent } from './operations/operations-suite.component';
 import { AppOperationsTab } from './core/app-navigation.util';
 import { MarketSentimentAmbientComponent } from './market-sentiment-ambient/market-sentiment-ambient.component';
-import { SuperIntelligencePageComponent } from './super-intelligence/super-intelligence-page.component';
 import {
   ChartDrawing,
   IndicatorKind,
@@ -199,6 +193,11 @@ import {
   readBootNavigationState,
   routerPathForState,
 } from './core/app-navigation.util';
+import {
+  LazyFeatureKey,
+  loadLazyFeature,
+  prefetchLazyFeaturesOnIdle,
+} from './core/app-lazy-features';
 
 const BOOT_NAV = readBootNavigationState();
 
@@ -266,18 +265,12 @@ type TvCandle = {
     NgClass,
     FormsModule,
     LiveClockComponent,
-    StrategiesPageComponent,
-    StrategyCommandCenterComponent,
-    SuperIntelligencePageComponent,
-    StrategyTradesPanelComponent,
-    TradeHistoryDashboardComponent,
     MarketSentimentAmbientComponent,
-    ManualTradingPageComponent,
-    OperationsSuiteComponent,
     RouterLink,
     RouterOutlet,
     TradeTicketModalComponent,
     WatchlistHoverRowComponent,
+    NgComponentOutlet,
   ],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss',
@@ -325,6 +318,9 @@ export class AppComponent implements OnInit, AfterViewInit {
   private indexChartPrefetchStarted = false;
   private chartPollInFlight = false;
   private chartResize?: ResizeObserver;
+  private chartHostIntersection?: IntersectionObserver;
+  /** False until chart container intersects the viewport (or market view is left). */
+  private chartHostVisible = false;
   private boardSymbolsRev = '';
   private readonly railLists: {
     selling: SymbolSnapshot[];
@@ -411,6 +407,8 @@ export class AppComponent implements OnInit, AfterViewInit {
   strategyDetailId: string | null = BOOT_NAV.strategyDetailId ?? null;
   operationsTab: AppOperationsTab = BOOT_NAV.operationsTab ?? 'risk';
   fullPageRoute = false;
+  private readonly lazyFeatures = new Map<LazyFeatureKey, Type<unknown>>();
+  private readonly lazyFeatureLoading = new Set<LazyFeatureKey>();
   pickerOpen = false;
   symbolSearchPanelTop = 0;
   symbolSearchPanelLeft = 0;
@@ -557,6 +555,8 @@ export class AppComponent implements OnInit, AfterViewInit {
       )
       .subscribe((event) => syncRouteChrome(event.urlAfterRedirects));
 
+    prefetchLazyFeaturesOnIdle();
+    this.syncLazyFeatureLoads();
     this.boardPoll.start();
     this.boardPoll.events$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((event) => {
       if (event.kind === 'error') {
@@ -592,10 +592,7 @@ export class AppComponent implements OnInit, AfterViewInit {
         startWith(0),
         filter(
           () =>
-            this.centerView === 'market'
-            && this.brokerConnected
-            && !!this.pendingChartName
-            && !!this.candleSeries
+            this.shouldPollChartHttp()
             && !this.chartStreamReceiving,
         ),
       ),
@@ -603,10 +600,7 @@ export class AppComponent implements OnInit, AfterViewInit {
         startWith(0),
         filter(
           () =>
-            this.centerView === 'market'
-            && this.brokerConnected
-            && !!this.pendingChartName
-            && !!this.candleSeries
+            this.shouldPollChartHttp()
             && this.chartStreamReceiving,
         ),
       ),
@@ -641,7 +635,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     merge(interval(5000), this.optionChainReload)
       .pipe(
         startWith(0),
-        filter(() => this.marketKind === 'options' && !!this.optionUnderlying && !!this.optionExpiry),
+        filter(() => this.shouldPollOptionChain()),
         exhaustMap(() =>
           this.board.optionChain(this.optionUnderlying, this.optionExpiry).pipe(
             catchError(() => EMPTY),
@@ -661,7 +655,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     merge(interval(4000), this.tradingRefresh.paperAgentRefresh$)
       .pipe(
         startWith(0),
-        filter(() => this.state === 'ready'),
+        filter(() => this.shouldPollPaperAgent()),
         exhaustMap(() =>
           this.board.paperAgent().pipe(
             catchError(() => {
@@ -686,7 +680,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     interval(4000)
       .pipe(
         startWith(0),
-        filter(() => this.state === 'ready' && this.platformLiveTradingEnabled),
+        filter(() => this.shouldPollLiveAgent()),
         exhaustMap(() => this.board.liveAgent().pipe(catchError(() => EMPTY))),
         takeUntilDestroyed(this.destroyRef),
       )
@@ -801,8 +795,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.destroyRef.onDestroy(() => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', onResize);
-      cancelAnimationFrame(this.chartLoadFrame);
-      this.chartResize?.disconnect();
+      this.leaveMarketWorkbench();
     });
   }
 
@@ -996,13 +989,97 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.syncNavigationHash();
   }
 
+  private shouldPollPaperAgent(): boolean {
+    return this.centerView === 'trades' && this.state === 'ready';
+  }
+
+  private shouldPollLiveAgent(): boolean {
+    return (
+      this.centerView === 'trades'
+      && this.tradePanelTab === 'live'
+      && this.state === 'ready'
+      && this.platformLiveTradingEnabled
+    );
+  }
+
+  private shouldPollOptionChain(): boolean {
+    return (
+      this.centerView === 'market'
+      && this.marketKind === 'options'
+      && !!this.optionUnderlying
+      && !!this.optionExpiry
+    );
+  }
+
+  private shouldPollChartHost(): boolean {
+    return this.centerView === 'market' && this.chartHostVisible && this.state === 'ready';
+  }
+
+  private shouldPollChartHttp(): boolean {
+    return (
+      this.shouldPollChartHost()
+      && this.brokerConnected
+      && !!this.pendingChartName
+      && !!this.candleSeries
+    );
+  }
+
   private leaveMarketWorkbench(): void {
+    cancelAnimationFrame(this.chartLoadFrame);
+    this.chartLoadFrame = 0;
+    this.chartBusy = false;
+    this.chartPollInFlight = false;
+    this.chartStreamReceiving = false;
+    this.chartHostIntersection?.disconnect();
+    this.chartHostIntersection = undefined;
+    this.chartHostVisible = false;
+    void this.chartLive.disconnect();
     this.tvChart?.remove();
     this.tvChart = undefined;
     this.candleSeries = undefined;
+    this.zonePriceLines = [];
+    this.indicatorSeries.clear();
+    this.bollingerSeries = undefined;
+    this.rsiSeries = undefined;
+    this.drawingPriceLines.clear();
+    this.drawingTrendSeries.clear();
     this.chartResize?.disconnect();
+    this.chartResize = undefined;
     this.loadedChartName = '';
     this.lastChart = undefined;
+    this.lastIndicatorCandleKey = '';
+    this.sessionMarkerKey = '';
+    this.crosshairCandle = undefined;
+  }
+
+  private setupChartHostVisibility(): void {
+    const el = this.chartHost?.nativeElement;
+    if (!el) {
+      this.chartHostVisible = false;
+      return;
+    }
+    if (typeof IntersectionObserver === 'undefined') {
+      this.chartHostVisible = el.clientWidth >= 16 && el.clientHeight >= 16;
+      return;
+    }
+    this.chartHostIntersection?.disconnect();
+    this.chartHostIntersection = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.some((entry) => entry.isIntersecting && entry.intersectionRatio > 0);
+        if (visible === this.chartHostVisible) {
+          return;
+        }
+        this.chartHostVisible = visible;
+        if (visible && this.centerView === 'market') {
+          this.scheduleChartLoad();
+        }
+        this.bumpView();
+      },
+      { threshold: [0, 0.02, 0.1] },
+    );
+    this.chartHostIntersection.observe(el);
+    const rect = el.getBoundingClientRect();
+    this.chartHostVisible = rect.width >= 16 && rect.height >= 16 && rect.bottom > 0 && rect.top < window.innerHeight;
   }
 
   private applyNavigationState(state: ReturnType<typeof parseRouterUrl>): void {
@@ -1036,13 +1113,17 @@ export class AppComponent implements OnInit, AfterViewInit {
       if (this.selected) {
         this.pendingChartName = this.selected.name;
       }
-      this.scheduleChartLoad();
-      requestAnimationFrame(() => this.scheduleChartLoad());
+      queueMicrotask(() => {
+        this.setupChartHostVisibility();
+        this.scheduleChartLoad();
+        requestAnimationFrame(() => this.scheduleChartLoad());
+      });
       this.refreshOptionContractRails();
       return;
     }
 
     if (state.centerView === 'trades') {
+      this.tradingRefresh.requestPaperRefresh();
       if (state.tradePanelTab === 'live' && !this.platformLiveTradingEnabled) {
         void this.router.navigateByUrl('/trades/paper');
         return;
@@ -1053,7 +1134,86 @@ export class AppComponent implements OnInit, AfterViewInit {
       }
       this.applyTradePanelSideEffects(state.tradePanelTab);
     }
+    this.syncLazyFeatureLoads();
   }
+
+  lazyFeature(key: LazyFeatureKey): Type<unknown> | null {
+    return this.lazyFeatures.get(key) ?? null;
+  }
+
+  private ensureLazyFeature(key: LazyFeatureKey): void {
+    if (this.lazyFeatures.has(key) || this.lazyFeatureLoading.has(key)) {
+      return;
+    }
+    this.lazyFeatureLoading.add(key);
+    void loadLazyFeature(key)
+      .then((cmp) => {
+        this.lazyFeatures.set(key, cmp);
+        this.bumpView();
+      })
+      .finally(() => this.lazyFeatureLoading.delete(key));
+  }
+
+  private syncLazyFeatureLoads(): void {
+    if (this.centerView === 'strategies' && !this.strategyDetailId) {
+      this.ensureLazyFeature('strategies');
+    }
+    if (this.centerView === 'strategies' && this.strategyDetailId) {
+      this.ensureLazyFeature('strategyCenter');
+    }
+    if (this.centerView === 'manual') {
+      this.ensureLazyFeature('manual');
+    }
+    if (this.centerView === 'operations') {
+      this.ensureLazyFeature('operations');
+    }
+    if (this.centerView === 'intelligence') {
+      this.ensureLazyFeature('intelligence');
+    }
+    if (this.centerView === 'trades' && this.tradePanelTab === 'history') {
+      this.ensureLazyFeature('tradeHistory');
+    }
+    if (this.centerView === 'trades' && this.tradePanelTab === 'paper' && this.paperStrategyFilter) {
+      this.ensureLazyFeature('strategyTradesPanel');
+    }
+  }
+
+  strategiesShellInputs(): Record<string, unknown> {
+    return { active: this.centerView === 'strategies' && !this.strategyDetailId };
+  }
+
+  strategyCenterInputs(): Record<string, unknown> {
+    return { strategyId: this.strategyDetailId ?? '', active: true };
+  }
+
+  operationsSuiteInputs(): Record<string, unknown> {
+    return { tab: this.operationsTab, active: true };
+  }
+
+  tradeHistoryDashboardInputs(): Record<string, unknown> {
+    return {
+      trades: this.historyMergedTrades(),
+      loading: !this.tradeHistory,
+      periodLabel: this.paperTradePeriodLabel(),
+      periodKey: this.historyPeriodAnimKey(),
+      initialStrategyCanonicalId: this.paperStrategyFilter,
+      initialSourceFilter: this.historySourceFilter(),
+    };
+  }
+
+  strategyTradesPanelInputs(): Record<string, unknown> {
+    return {
+      strategyId: this.paperStrategyFilter,
+      strategyLabel: this.paperStrategyFilterLabel(),
+      periodLabel: this.paperTradePeriodLabel(),
+      trades: this.paperStrategyTradesList(),
+      contextMode: true,
+    };
+  }
+
+  readonly strategyTradesPanelOutputs = {
+    closed: () => this.clearPaperStrategyFocus(),
+  };
 
   zoneBacktestTargetSymbol(): string {
     if (!this.isIndex(this.selectedName)) {
@@ -3752,7 +3912,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   refreshChart(): void {
-    if (this.centerView !== 'market' || this.state !== 'ready') {
+    if (!this.shouldPollChartHost()) {
       return;
     }
     this.chartRefreshPending = true;
@@ -4200,12 +4360,13 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   ngAfterViewInit(): void {
+    this.setupChartHostVisibility();
     this.hydrateChartFromStorageEarly();
     this.scheduleChartLoad();
   }
 
   private hydrateChartFromStorageEarly(): void {
-    if (this.centerView !== 'market') {
+    if (!this.shouldPollChartHost()) {
       return;
     }
     const snap = this.chartSnapshotForKey(this.chartRequestKey());
@@ -4220,7 +4381,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   private scheduleChartLoad(force = false): void {
-    if (this.centerView !== 'market' || this.state !== 'ready') {
+    if (!this.shouldPollChartHost()) {
       return;
     }
     const key = this.chartRequestKey();
@@ -4390,7 +4551,6 @@ export class AppComponent implements OnInit, AfterViewInit {
       next = 'Connected but quotes empty. Wait for market hours or reconnect with Request OTP.';
     } else if (this.brokerConnected && !this.otpRequested && !this.brokerBusy) {
       next = 'Connected. Live market prices active.';
-      this.prefetchIndexChartsInBackground();
     } else if (data.feed.includes('awaiting broker login') && !this.otpRequested && !this.brokerBusy) {
       this.onBrokerProviderChange();
       next = this.brokerMessage;
@@ -4401,6 +4561,9 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   private loadChart(name: string, interval: string): void {
+    if (!this.shouldPollChartHost()) {
+      return;
+    }
     const host = this.chartHost?.nativeElement;
     if (!host) {
       return;
@@ -4497,26 +4660,9 @@ export class AppComponent implements OnInit, AfterViewInit {
     });
   }
 
+  /** Disabled for Phase 2 performance — avoids burst chart API calls after broker connect. */
   private prefetchIndexChartsInBackground(): void {
-    if (!this.brokerConnected || this.indexChartPrefetchStarted || this.marketKind === 'options') {
-      return;
-    }
-    this.indexChartPrefetchStarted = true;
-    const activeKey = this.chartRequestKey();
-    for (const indexName of this.indexTabs) {
-      const key = `${indexName}|${this.chartInterval}`;
-      if (key === activeKey || this.chartDataCache.has(key) || this.chartPersistence.load(key)) {
-        continue;
-      }
-      this.board
-        .chart(indexName, this.chartInterval, 'full')
-        .pipe(catchError(() => EMPTY), take(1))
-        .subscribe((data) => {
-          if (data.candles.length) {
-            this.rememberChartCache(key, data);
-          }
-        });
-    }
+    return;
   }
 
   private applyChartLiveUpdate(update: ChartLiveUpdate): void {

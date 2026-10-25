@@ -11,8 +11,13 @@ dist/
 .idea/
 *.log
 .env
+.env.local
+.env.production
 .env.*
-appsettings.Development.json
+!.env.example
+backend/.env
+backend/.env.local
+backend/.env.production
 secrets.json
 backend/.vs/
 backend/_buildcheck/

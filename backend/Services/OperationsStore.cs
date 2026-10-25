@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using TradeWithBeast.Configuration;
 using TradeWithBeast.Models;
 
 namespace TradeWithBeast.Services;
@@ -16,26 +17,15 @@ public sealed class OperationsStore
 
     public OperationsStore(
         IConfiguration configuration,
+        DatabaseOptions database,
         ICurrentUserAccessor currentUser,
         SystemIdentityOptions identity,
         ILogger<OperationsStore> log)
     {
         _currentUser = currentUser;
         _identity = identity;
-        var configured = configuration["TradeHistory:DatabasePath"];
-        var path = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "TradeWithBeast",
-                "trade-history.db")
-            : configured;
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        _connectionString = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+        var path = DatabaseConnectionResolver.ResolveSqliteDatabasePath(configuration, database);
+        _connectionString = DatabaseConnectionResolver.BuildSqliteConnectionString(path);
         _log = log;
         Initialize();
     }

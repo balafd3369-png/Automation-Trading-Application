@@ -1,16 +1,28 @@
 import { Routes } from '@angular/router';
+
 import { EmptyRouteComponent } from './empty-route.component';
-import { LoginPageComponent } from './auth/login-page.component';
-import { UserDashboardComponent } from './dashboard/user-dashboard.component';
-import { AdminDashboardComponent } from './dashboard/admin-dashboard.component';
+
 import { adminGuard, authGuard } from './core/auth.guard';
 
 const protectedShell = { canActivate: [authGuard] };
 
 export const routes: Routes = [
-  { path: 'login', component: LoginPageComponent },
-  { path: 'dashboard', component: UserDashboardComponent, canActivate: [authGuard] },
-  { path: 'admin', component: AdminDashboardComponent, canActivate: [adminGuard] },
+  {
+    path: 'login',
+    loadComponent: () => import('./auth/login-page.component').then((m) => m.LoginPageComponent),
+  },
+  {
+    path: 'dashboard',
+    loadComponent: () =>
+      import('./dashboard/user-dashboard.component').then((m) => m.UserDashboardComponent),
+    canActivate: [authGuard],
+  },
+  {
+    path: 'admin',
+    loadComponent: () =>
+      import('./dashboard/admin-dashboard.component').then((m) => m.AdminDashboardComponent),
+    canActivate: [adminGuard],
+  },
   { path: '', pathMatch: 'full', redirectTo: 'market' },
   { path: 'market', component: EmptyRouteComponent, ...protectedShell },
   { path: 'market/options', component: EmptyRouteComponent, ...protectedShell },

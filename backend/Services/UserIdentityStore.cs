@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using TradeWithBeast.Configuration;
 using TradeWithBeast.Models;
 
 namespace TradeWithBeast.Services;
@@ -13,24 +14,13 @@ public sealed class UserIdentityStore
 
     public UserIdentityStore(
         IConfiguration configuration,
+        DatabaseOptions database,
         SystemIdentityOptions options,
         ILogger<UserIdentityStore> log)
     {
         _options = options;
-        var configured = configuration["TradeHistory:DatabasePath"];
-        var path = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "TradeWithBeast",
-                "trade-history.db")
-            : configured;
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        _connectionString = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
+        var path = DatabaseConnectionResolver.ResolveSqliteDatabasePath(configuration, database);
+        _connectionString = DatabaseConnectionResolver.BuildSqliteConnectionString(path);
         _log = log;
         Initialize();
         EnsureSeedAdmin();

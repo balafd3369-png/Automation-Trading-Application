@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using TradeWithBeast.Models;
+using TradeWithBeast.Configuration;
 using TradeWithBeast.Services;
 
 namespace TradeWithBeast.Tests.Services;
@@ -34,6 +35,7 @@ public sealed class MultiUserIsolationTests : IDisposable
         var accessor = new CurrentUserAccessor();
         var ops = new OperationsStore(
             config,
+            new DatabaseOptions(),
             accessor,
             new SystemIdentityOptions { AllowAnonymousLocalUser = true },
             NullLogger<OperationsStore>.Instance);
@@ -57,6 +59,7 @@ public sealed class MultiUserIsolationTests : IDisposable
     {
         var users = new UserIdentityStore(
             Config(),
+            new DatabaseOptions(),
             new SystemIdentityOptions { AdminEmail = $"admin-{Guid.NewGuid():N}@test.local" },
             NullLogger<UserIdentityStore>.Instance);
         users.CreateUser($"trader-{Guid.NewGuid():N}@test.local", PasswordHasher.Hash("password-123"), "Trader", UserRoles.Trader);
@@ -107,6 +110,7 @@ public sealed class MultiUserIsolationTests : IDisposable
         var accessor = new CurrentUserAccessor();
         var ops = new OperationsStore(
             config,
+            new DatabaseOptions(),
             accessor,
             new SystemIdentityOptions { AllowAnonymousLocalUser = true },
             NullLogger<OperationsStore>.Instance);
@@ -161,7 +165,7 @@ public sealed class MultiUserIsolationTests : IDisposable
     }
 
     private TradeHistoryStore CreateHistoryStore() =>
-        new(Config(), new CurrentUserAccessor(), new SystemIdentityOptions(), NullLogger<TradeHistoryStore>.Instance);
+        new(Config(), new DatabaseOptions(), new CurrentUserAccessor(), new SystemIdentityOptions(), NullLogger<TradeHistoryStore>.Instance);
 
     private IConfiguration Config() =>
         new ConfigurationBuilder()

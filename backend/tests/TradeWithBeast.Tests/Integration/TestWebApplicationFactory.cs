@@ -15,7 +15,7 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseEnvironment("Development");
+        builder.UseEnvironment("Testing");
         builder.UseSetting("TradeHistory:DatabasePath", _historyPath);
         builder.UseSetting("LiveTrading:Enabled", "false");
         builder.UseSetting("SystemIdentity:RequireAuthentication", "false");

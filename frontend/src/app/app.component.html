@@ -572,24 +572,51 @@
     <div class="titlebar-spectrum" aria-hidden="true"></div>
   </header>
 
-  <app-strategies-page
-    class="strategies-shell"
-    [class.strategies-shell-hidden]="centerView !== 'strategies' || strategyDetailId"
-    [active]="centerView === 'strategies' && !strategyDetailId"
-  />
-  @if (centerView === 'strategies' && strategyDetailId) {
-    <app-strategy-command-center
+  @if (centerView === 'strategies' && !strategyDetailId) {
+    <div
       class="strategies-shell"
-      [strategyId]="strategyDetailId"
-      [active]="true"
-    />
+      [class.strategies-shell-hidden]="centerView !== 'strategies' || strategyDetailId"
+    >
+      @if (lazyFeature('strategies'); as strategiesCmp) {
+        <ng-container *ngComponentOutlet="strategiesCmp; inputs: strategiesShellInputs()" />
+      } @else {
+        <div class="lazy-route-placeholder" role="status">Loading strategies…</div>
+      }
+    </div>
+  }
+  @if (centerView === 'strategies' && strategyDetailId) {
+    <div class="strategies-shell">
+      @if (lazyFeature('strategyCenter'); as centerCmp) {
+        <ng-container *ngComponentOutlet="centerCmp; inputs: strategyCenterInputs()" />
+      } @else {
+        <div class="lazy-route-placeholder" role="status">Loading strategy…</div>
+      }
+    </div>
   }
   @if (centerView === 'intelligence') {
-    <app-super-intelligence-page class="strategies-shell" />
+    <div class="strategies-shell">
+      @if (lazyFeature('intelligence'); as intelligenceCmp) {
+        <ng-container *ngComponentOutlet="intelligenceCmp" />
+      } @else {
+        <div class="lazy-route-placeholder" role="status">Loading intelligence…</div>
+      }
+    </div>
   } @else if (centerView === 'manual') {
-    <app-manual-trading-page class="strategies-shell" />
+    <div class="strategies-shell">
+      @if (lazyFeature('manual'); as manualCmp) {
+        <ng-container *ngComponentOutlet="manualCmp" />
+      } @else {
+        <div class="lazy-route-placeholder" role="status">Loading manual trading…</div>
+      }
+    </div>
   } @else if (centerView === 'operations') {
-    <app-operations-suite class="strategies-shell" [tab]="operationsTab" [active]="true" />
+    <div class="strategies-shell">
+      @if (lazyFeature('operations'); as operationsCmp) {
+        <ng-container *ngComponentOutlet="operationsCmp; inputs: operationsSuiteInputs()" />
+      } @else {
+        <div class="lazy-route-placeholder" role="status">Loading settings…</div>
+      }
+    </div>
   } @else if (centerView !== 'strategies') {
   <div
     class="workbench twb-aurora-page"
@@ -1622,14 +1649,11 @@
                 <button type="button" class="paper-strategy-clear-btn" (click)="clearPaperStrategyFocus()">Clear filter</button>
               </div>
             </header>
-            <app-strategy-trades-panel
-              [strategyId]="paperStrategyFilter"
-              [strategyLabel]="paperStrategyFilterLabel()"
-              [periodLabel]="paperTradePeriodLabel()"
-              [trades]="paperStrategyTradesList()"
-              [contextMode]="true"
-              (closed)="clearPaperStrategyFocus()"
-            />
+            @if (lazyFeature('strategyTradesPanel'); as tradesPanelCmp) {
+              <ng-container
+                *ngComponentOutlet="tradesPanelCmp; inputs: strategyTradesPanelInputs(); outputs: strategyTradesPanelOutputs"
+              />
+            }
           </div>
         } @else {
         <header class="trade-page-head" aria-label="Paper trading overview">
@@ -2258,15 +2282,13 @@
             </div>
           }
           <div class="trade-terminal-body">
-            <app-trade-history-dashboard
-              id="trade-history-dashboard"
-              [trades]="historyMergedTrades()"
-              [loading]="!tradeHistory"
-              [periodLabel]="paperTradePeriodLabel()"
-              [periodKey]="historyPeriodAnimKey()"
-              [initialStrategyCanonicalId]="paperStrategyFilter"
-              [initialSourceFilter]="historySourceFilter()"
-            />
+            @if (tradePanelTab === 'history') {
+              @if (lazyFeature('tradeHistory'); as historyCmp) {
+                <ng-container *ngComponentOutlet="historyCmp; inputs: tradeHistoryDashboardInputs()" />
+              } @else {
+                <div class="lazy-route-placeholder trade-terminal-body" role="status">Loading trade history…</div>
+              }
+            }
           </div>
           @if (historyError) {
             <div class="trade-terminal-error">{{ historyError }}</div>

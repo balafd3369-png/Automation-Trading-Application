@@ -1,4 +1,5 @@
 using TradeWithBeast.Broker;
+using TradeWithBeast.Configuration;
 using TradeWithBeast.Models;
 
 namespace TradeWithBeast.Services;
@@ -24,6 +25,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
     private readonly ZoneBoardSessionTracker _zoneBoardSessions;
     private readonly StrategyRecommendationEngine _strategyFeed;
     private readonly Lazy<IZoneLiveAutoGateway> _zoneLive;
+    private readonly TradingOptions _tradingDefaults;
     private readonly ILogger<PaperTradingAgent> _log;
     private string? _deferZoneLiveProposalId;
     private readonly Dictionary<string, decimal> _previous = new(StringComparer.OrdinalIgnoreCase);
@@ -33,7 +35,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
     private readonly Dictionary<string, DateTimeOffset> _signalNotifiedAt = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<MarketContextSnapshot> _latestContext = [];
     private Timer? _timer;
-    private PaperAgentConfig? _config = new(1_000_000m, 10_000m, 5_000m, 30, true);
+    private PaperAgentConfig? _config;
     private PaperTradeProposal? _pending;
     private bool _running;
     private bool _userStoppedPaper;
@@ -66,6 +68,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         ZoneBoardSessionTracker zoneBoardSessions,
         StrategyRecommendationEngine strategyFeed,
         Lazy<IZoneLiveAutoGateway> zoneLive,
+        TradingOptions tradingDefaults,
         ILogger<PaperTradingAgent> log)
     {
         _marketContext = marketContext;
@@ -77,7 +80,14 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         _zoneBoardSessions = zoneBoardSessions;
         _strategyFeed = strategyFeed;
         _zoneLive = zoneLive;
+        _tradingDefaults = tradingDefaults;
         _log = log;
+        _config = new PaperAgentConfig(
+            tradingDefaults.DefaultAllocatedCapital,
+            tradingDefaults.DefaultProfitTarget,
+            tradingDefaults.DefaultMaxDailyLoss,
+            tradingDefaults.DefaultMaxOpenPositions,
+            tradingDefaults.DefaultAutoAdmitTrades);
         using (history.RunAsUser(history.StrategyEngineUserId))
         {
             foreach (var trade in history.RecoverOpenTrades())
@@ -297,7 +307,12 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         {
             if (_config is null)
             {
-                _config = new PaperAgentConfig(1_000_000m, 10_000m, 5_000m, 30, true);
+                _config = new PaperAgentConfig(
+                    _tradingDefaults.DefaultAllocatedCapital,
+                    _tradingDefaults.DefaultProfitTarget,
+                    _tradingDefaults.DefaultMaxDailyLoss,
+                    _tradingDefaults.DefaultMaxOpenPositions,
+                    _tradingDefaults.DefaultAutoAdmitTrades);
             }
 
             _running = true;

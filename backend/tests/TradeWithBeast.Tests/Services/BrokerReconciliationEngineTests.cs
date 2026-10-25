@@ -131,6 +131,7 @@ public sealed class BrokerReconciliationEngineTests
         history ??= CreateHistoryStore();
         var ops = new OperationsStore(
             config,
+            new TradeWithBeast.Configuration.DatabaseOptions(),
             new CurrentUserAccessor(),
             new SystemIdentityOptions { AllowAnonymousLocalUser = true },
             NullLogger<OperationsStore>.Instance);

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using TradeWithBeast.Broker;
+using TradeWithBeast.Configuration;
 using TradeWithBeast.Models;
 
 namespace TradeWithBeast.Services;
@@ -41,35 +42,21 @@ public sealed class TradeHistoryStore
     public IDisposable RunAsUser(string userId) => new UserScope(ScopedUserId, userId);
 
     public TradeHistoryStore(IConfiguration configuration, ILogger<TradeHistoryStore> log)
-        : this(configuration, new CurrentUserAccessor(), new SystemIdentityOptions(), log)
+        : this(configuration, new DatabaseOptions(), new CurrentUserAccessor(), new SystemIdentityOptions(), log)
     {
     }
 
     public TradeHistoryStore(
         IConfiguration configuration,
+        DatabaseOptions database,
         ICurrentUserAccessor currentUser,
         SystemIdentityOptions systemIdentity,
         ILogger<TradeHistoryStore> log)
     {
         _currentUser = currentUser;
         _systemIdentity = systemIdentity;
-        var configured = configuration["TradeHistory:DatabasePath"];
-        var path = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "TradeWithBeast",
-                "trade-history.db")
-            : configured;
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-        _connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = path,
-            Pooling = false,
-        }.ToString();
+        var path = DatabaseConnectionResolver.ResolveSqliteDatabasePath(configuration, database);
+        _connectionString = DatabaseConnectionResolver.BuildSqliteConnectionString(path);
         _log = log;
         Initialize();
     }
