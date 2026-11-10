@@ -1,0 +1,121 @@
+﻿<section class="admin-zones">
+  <header class="admin-zones-head">
+    <div>
+      <h1>Open vs zones</h1>
+      <p>
+        Today&apos;s <strong>09:15 open</strong> compared to Sabo levels (B2, B1, S, S1, S2). Pick symbols to trade on the
+        market board.
+      </p>
+    </div>
+    <div class="admin-zones-actions">
+      <a routerLink="/admin">Admin home</a>
+      <a routerLink="/market">Market</a>
+      <button type="button" (click)="logout()">Logout</button>
+    </div>
+  </header>
+
+  @if (error) {
+    <p class="admin-zones-error">{{ error }}</p>
+  } @else if (!data) {
+    <p class="admin-zones-loading">Loading board…</p>
+  } @else {
+    <p class="admin-zones-meta">Feed {{ data.feed }} · Updated {{ data.updatedAt | date: 'medium' }}</p>
+
+    <div class="admin-zones-kind" role="tablist" aria-label="Symbol kind">
+      <button type="button" role="tab" [class.active]="kind === 'indices'" (click)="setKind('indices')">
+        Indices ({{ data.indices.length }})
+      </button>
+      <button type="button" role="tab" [class.active]="kind === 'stocks'" (click)="setKind('stocks')">
+        Stocks ({{ data.stocks.length }})
+      </button>
+    </div>
+
+    @if (kind === 'indices') {
+      <div class="admin-zones-summary" aria-label="Index open summary">
+        <span>Open ≥ B2: <b>{{ counts('indices').aboveB2 }}</b></span>
+        <span>Open ≥ B1: <b>{{ counts('indices').aboveB1 }}</b></span>
+        <span>Open ≤ S1: <b>{{ counts('indices').belowS1 }}</b></span>
+        <span>Open ≤ S2: <b>{{ counts('indices').belowS2 }}</b></span>
+      </div>
+    } @else {
+      <div class="admin-zones-summary" aria-label="Stock open summary">
+        <span>Open ≥ B2: <b>{{ counts('stocks').aboveB2 }}</b></span>
+        <span>Open ≥ B1: <b>{{ counts('stocks').aboveB1 }}</b></span>
+        <span>Open ≤ S1: <b>{{ counts('stocks').belowS1 }}</b></span>
+        <span>Open ≤ S2: <b>{{ counts('stocks').belowS2 }}</b></span>
+      </div>
+    }
+
+    <div class="admin-zones-filter" role="group" aria-label="Filter by open vs zones">
+      <button type="button" [class.active]="filter === 'all'" (click)="setFilter('all')">All</button>
+      <button type="button" [class.active]="filter === 'aboveB2'" (click)="setFilter('aboveB2')">Open ≥ B2</button>
+      <button type="button" [class.active]="filter === 'aboveB1'" (click)="setFilter('aboveB1')">Open ≥ B1</button>
+      <button type="button" [class.active]="filter === 'belowS1'" (click)="setFilter('belowS1')">Open ≤ S1</button>
+      <button type="button" [class.active]="filter === 'belowS2'" (click)="setFilter('belowS2')">Open ≤ S2</button>
+    </div>
+
+    <div class="admin-zones-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Today open</th>
+            <th>LTP</th>
+            <th>B2</th>
+            <th>B1</th>
+            <th>S</th>
+            <th>S1</th>
+            <th>S2</th>
+            <th>Open vs zones</th>
+            <th>Board</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track row.name) {
+            <tr>
+              <td><strong>{{ row.name }}</strong></td>
+              <td>{{ row.todayOpen | number: '1.2-2' }}</td>
+              <td>{{ row.last | number: '1.2-2' }}</td>
+              <td class="zone-b2">{{ row.b2 | number: '1.2-2' }}</td>
+              <td class="zone-b1">{{ row.b1 | number: '1.2-2' }}</td>
+              <td class="zone-s">{{ row.s | number: '1.2-2' }}</td>
+              <td class="zone-s1">{{ row.s1 | number: '1.2-2' }}</td>
+              <td class="zone-s2">{{ row.s2 | number: '1.2-2' }}</td>
+              <td>
+                <span class="band" [ngClass]="row.openBand.replace(' ', '-').replace('–', '-')">{{ row.openBand }}</span>
+                <div class="flags">
+                  @if (row.openAboveB2) {
+                    <span class="flag up">≥ B2</span>
+                  }
+                  @if (row.openAboveB1 && !row.openAboveB2) {
+                    <span class="flag up">≥ B1</span>
+                  }
+                  @if (row.openBelowS1) {
+                    <span class="flag down">≤ S1</span>
+                  }
+                  @if (row.openBelowS2) {
+                    <span class="flag down">≤ S2</span>
+                  }
+                </div>
+              </td>
+              <td>{{ row.mark }}</td>
+              <td>
+                <button type="button" class="trade-btn" (click)="trade(row)">Trade</button>
+              </td>
+            </tr>
+          } @empty {
+            <tr>
+              <td colspan="11" class="empty">No symbols match this filter.</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <p class="admin-zones-foot">
+      Levels use <code>NiftyZoneFormula</code> (yesterday + 2-day OHLC, today open). Filters are inclusive (e.g. open ≥
+      B2 also counts in open ≥ B1).
+    </p>
+  }
+</section>

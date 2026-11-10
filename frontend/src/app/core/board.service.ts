@@ -41,7 +41,17 @@ import {
   BrokerReconciliationDashboard,
   BrokerReconciliationHistoryEntry,
 } from './operations.models';
-import { AdminPlatformDashboard, UserAnalyticsSummary, UserDashboardSummary } from './user-dashboard.models';
+import {
+  AdminPlatformDashboard,
+  GapAnalyzerResponse,
+  GapStudyUniverseResponse,
+  OpenVsZonesBoardResponse,
+  ReversalScanResponse,
+  UserAnalyticsSummary,
+  UserDashboardSummary,
+  ZoneAnalyzerPatternDetailResponse,
+  ZoneStockAnalyzerResponse,
+} from './user-dashboard.models';
 import { TradingQuantityRules, TradingQuantityRulesQuery } from './trading-quantity.models';
 
 @Injectable({ providedIn: 'root' })
@@ -79,9 +89,9 @@ export class BoardService {
   chart(
     name: string,
     interval = '5minute',
-    depth: 'fast' | 'full' = 'full',
+    depth: 'fast' | 'mid' | 'full' = 'full',
   ): Observable<ChartResponse> {
-    const waitMs = depth === 'fast' ? 12_000 : 25_000;
+    const waitMs = depth === 'fast' ? 12_000 : depth === 'mid' ? 16_000 : 25_000;
     return this.http
       .get<ChartResponse>(`/api/board/chart/${encodeURIComponent(name)}`, {
         params: { interval, depth },
@@ -299,6 +309,38 @@ export class BoardService {
     return this.http.get<AdminPlatformDashboard>('/api/admin/dashboard').pipe(timeout(12_000));
   }
 
+  adminOpenVsZones(): Observable<OpenVsZonesBoardResponse> {
+    return this.http.get<OpenVsZonesBoardResponse>('/api/admin/open-vs-zones').pipe(timeout(12_000));
+  }
+
+  openVsZones(): Observable<OpenVsZonesBoardResponse> {
+    return this.http.get<OpenVsZonesBoardResponse>('/api/board/open-vs-zones').pipe(timeout(12_000));
+  }
+
+  zoneAnalyzer(): Observable<ZoneStockAnalyzerResponse> {
+    return this.http.get<ZoneStockAnalyzerResponse>('/api/board/zone-analyzer').pipe(timeout(15_000));
+  }
+
+  reversalScan(): Observable<ReversalScanResponse> {
+    return this.http.get<ReversalScanResponse>('/api/board/reversal-scan').pipe(timeout(15_000));
+  }
+
+  gapAnalyzer(): Observable<GapAnalyzerResponse> {
+    return this.http.get<GapAnalyzerResponse>('/api/board/gap-analyzer').pipe(timeout(15_000));
+  }
+
+  zoneAnalyzerDetail(
+    name: string,
+    patternId: string,
+    lookbackDays = 90,
+  ): Observable<ZoneAnalyzerPatternDetailResponse> {
+    return this.http
+      .get<ZoneAnalyzerPatternDetailResponse>('/api/board/zone-analyzer/detail', {
+        params: { name, patternId, lookbackDays: String(lookbackDays) },
+      })
+      .pipe(timeout(20_000));
+  }
+
   quantityRules(query: TradingQuantityRulesQuery): Observable<TradingQuantityRules> {
     return this.http
       .get<TradingQuantityRules>('/api/platform/quantity-rules', {
@@ -309,5 +351,14 @@ export class BoardService {
         },
       })
       .pipe(timeout(8_000));
+  }
+
+  /** Universe gap study (four clues) for Strategies gap playbook table. */
+  gapStudyUniverse(lookbackDays = 120, universe = 'nifty50'): Observable<GapStudyUniverseResponse> {
+    return this.http
+      .get<GapStudyUniverseResponse>('/api/paper-agent/backtest/gap-study', {
+        params: { lookbackDays: String(lookbackDays), universe },
+      })
+      .pipe(timeout(180_000));
   }
 }

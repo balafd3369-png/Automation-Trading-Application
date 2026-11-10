@@ -7,6 +7,10 @@ const CATALOG_TO_ENGINE_CODES: Record<string, readonly string[]> = {
   'zone-s1-break-s2': ['ZONE_S1_BREAK_S2'],
   'zone-s2-bounce-b1': ['ZONE_S2_BOUNCE_B1'],
   'stock-b1-rejection-to-s2': ['STOCK_B1_REJECTION_TO_S2'],
+  'gap-failed-rally-gap-down': ['GAP_DOWN_AFTER_FAILED_RALLY'],
+  'gap-distribution-gap-down': ['GAP_DOWN_AFTER_DISTRIBUTION'],
+  'gap-weak-close-gap-down': ['GAP_DOWN_AFTER_CLOSE_BELOW_S1'],
+  'gap-strong-close-gap-up': ['GAP_UP_AFTER_CLOSE_ABOVE_B1'],
   'bala-10am-high-fade': ['TEN_AM_HIGH_FADE_DAY_LOW'],
   'ten-am-low-break-to-day-open': ['TEN_AM_LOW_BREAK_DAY_OPEN'],
 };

@@ -1,0 +1,486 @@
+﻿<div class="select-stock" [class.select-stock--analyzer]="viewMode === 'analyzer'">
+  <header class="select-stock-head">
+    <div class="select-stock-brand">
+      <a routerLink="/market" class="back-link">← Market</a>
+      <h1>Select stock</h1>
+      <p>
+        @if (viewMode === 'screener') {
+          Today&apos;s <strong>09:15 open</strong> vs Sabo zones (B2, B1, S, S1, S2). Pick a column, open the chart,
+          and trade from the same levels as the board.
+        } @else {
+          <strong>Zone Analyzer</strong> scans the live board every refresh — buy / sell / watch aligned with your
+          B1→B2, S1→S2, S2 bounce, and B1 rejection playbooks (same rules as paper auto-trades).
+        }
+      </p>
+    </div>
+    <div class="select-stock-toolbar">
+      <div class="view-mode" role="tablist" aria-label="Select stock mode">
+        <button type="button" role="tab" [class.active]="viewMode === 'screener'" (click)="setViewMode('screener')">
+          Open screener
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="analyzer-trigger"
+          [class.active]="viewMode === 'analyzer'"
+          (click)="setViewMode('analyzer')"
+        >
+          Analyzer
+        </button>
+      </div>
+      <div class="kind-tabs" role="tablist" aria-label="Symbol kind">
+        <button type="button" role="tab" [class.active]="kind === 'all'" (click)="setKind('all')">All</button>
+        <button type="button" role="tab" [class.active]="kind === 'stocks'" (click)="setKind('stocks')">
+          Stocks
+          @if (viewMode === 'screener') {
+            ({{ data?.stocks?.length ?? '…' }})
+          }
+        </button>
+        <button type="button" role="tab" [class.active]="kind === 'indices'" (click)="setKind('indices')">
+          Indices
+          @if (viewMode === 'screener') {
+            ({{ data?.indices?.length ?? '…' }})
+          }
+        </button>
+      </div>
+      <label class="search">
+        <span class="sr-only">Filter symbol</span>
+        <input type="search" placeholder="Filter symbol…" [value]="query" (input)="onSearchInput($event)" />
+      </label>
+    </div>
+  </header>
+
+  @if (error) {
+    <p class="select-stock-error">{{ error }}</p>
+  } @else if (viewMode === 'screener' && !data) {
+    <p class="select-stock-loading">Loading session opens…</p>
+  } @else if (viewMode === 'analyzer' && !analyzer) {
+    <p class="select-stock-loading">Running zone analyzer…</p>
+  } @else if (viewMode === 'screener' && data) {
+    <p class="select-stock-meta">
+      Feed <strong>{{ data.feed }}</strong> · Updated {{ data.updatedAt | date: 'medium' }} · LTP band shows where
+      price is <em>now</em> vs the same zones.
+    </p>
+
+    <div class="zone-board">
+      @for (col of columns; track col.key) {
+        <section class="zone-col" [ngClass]="'zone-col--' + col.tone">
+          <header class="zone-col-head">
+            <h2>{{ col.title }}</h2>
+            <span class="count">{{ columnCount(col.key) }}</span>
+            <p class="hint">{{ col.hint }}</p>
+          </header>
+          <ul class="zone-cards">
+            @for (row of rowsForColumn(col.key); track row.name) {
+              <li>
+                <button type="button" class="zone-card" (click)="openChartFromOpenVs(row)">
+                  <span class="sym">{{ row.name }}</span>
+                  <span class="prices">
+                    <span class="open" title="Today open">O {{ row.todayOpen | number: '1.2-2' }}</span>
+                    <span class="ltp" title="LTP">LTP {{ row.last | number: '1.2-2' }}</span>
+                  </span>
+                  <span class="delta" [ngClass]="moveClass(row)">
+                    @if (openDelta(row) !== 0) {
+                      {{ openDelta(row) > 0 ? '+' : '' }}{{ openDelta(row) | number: '1.2-2' }}
+                    }
+                    {{ row.sessionMove }}
+                  </span>
+                  @if (row.ltpBand && row.ltpBand !== row.openBand) {
+                    <span class="ltp-band">Now: {{ row.ltpBand }}</span>
+                  }
+                  <span class="mark" [ngClass]="row.mark.toLowerCase()">{{ row.mark }}</span>
+                </button>
+              </li>
+            } @empty {
+              <li class="zone-empty">No symbols in this band.</li>
+            }
+          </ul>
+        </section>
+      }
+    </div>
+
+    <details class="zone-legend">
+      <summary>How bands work</summary>
+      <ul>
+        <li><strong>Above B2</strong> — open at or above B2.</li>
+        <li><strong>Above B1</strong> — open between B1 and B2.</li>
+        <li><strong>Between S1 &amp; B1</strong> — neutral pocket.</li>
+        <li><strong>Between S1 &amp; S2</strong> — sell corridor.</li>
+        <li><strong>Below S1 / S2</strong> — weak opens; watch reversals.</li>
+      </ul>
+    </details>
+  } @else if (viewMode === 'analyzer' && analyzer) {
+    <section class="ws" aria-label="Zone analyzer workstation">
+      @if (gapAnalyzer) {
+        <section class="ws-gap-hero" aria-label="Best gap clue">
+          <div class="ws-gap-hero-top">
+            <span class="ws-gap-badge">Best backtested gap clue</span>
+            @if (gapAnalyzer.featured.qualifies) {
+              <span class="ws-gap-verified">Verified on Nifty 50</span>
+            }
+          </div>
+          <h2 class="ws-gap-title">{{ gapAnalyzer.featured.title }}</h2>
+          <p class="ws-gap-rules">
+            <span>{{ gapAnalyzer.featured.priorRule }}</span>
+            <span class="ws-gap-arrow">→</span>
+            <span>{{ gapAnalyzer.featured.tradeRule }}</span>
+          </p>
+          <div class="ws-gap-metrics">
+            <div class="ws-gap-metric ws-gap-metric--win">
+              <span class="lbl">Win rate</span>
+              <strong>{{ gapAnalyzer.featured.backtestWinRatePercent | number: '1.1-1' }}%</strong>
+            </div>
+            <div class="ws-gap-metric ws-gap-metric--pass">
+              <span class="lbl">Passed</span>
+              <strong>{{ gapAnalyzer.featured.backtestWins }}W</strong>
+            </div>
+            <div class="ws-gap-metric ws-gap-metric--fail">
+              <span class="lbl">Failed</span>
+              <strong>{{ gapAnalyzer.featured.backtestLosses }}L</strong>
+            </div>
+            <div class="ws-gap-metric">
+              <span class="lbl">Gap events</span>
+              <strong>{{ gapAnalyzer.featured.totalGapEvents }}</strong>
+              <span class="sub">{{ gapAnalyzer.lookbackDays }}d · {{ gapAnalyzer.featured.symbolsWithEvents }} stocks</span>
+            </div>
+            <div class="ws-gap-metric">
+              <span class="lbl">Live now</span>
+              <strong>{{ gapAnalyzer.liveActionableCount }}</strong>
+              <span class="sub">actionable shorts</span>
+            </div>
+          </div>
+          <ul class="ws-gap-notes">
+            @for (n of gapAnalyzer.featured.notes; track n) {
+              <li>{{ n }}</li>
+            }
+          </ul>
+        </section>
+
+        @if (gapPlaybooksView().length) {
+          <section class="ws-gap-playbooks" aria-label="Gap playbooks">
+            <header class="ws-gap-playbooks-head">
+              <h3>Gap down · gap up playbooks</h3>
+              <p>Same four strategies as the Strategies page — Nifty 50 backtest + live cards below.</p>
+            </header>
+            <div class="ws-gap-playbooks-table-wrap">
+              <table class="ws-gap-playbooks-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Playbook</th>
+                    <th scope="col">Prior → gap</th>
+                    <th scope="col">Nifty 50 backtest</th>
+                    <th scope="col">Paper</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (pb of gapPlaybooksView(); track pb.clueId) {
+                    <tr [class.ws-gap-playbook--featured]="pb.clueId === gapAnalyzer.featured.clueId">
+                      <td>
+                        <strong>{{ pb.title }}</strong>
+                        <span class="ws-gap-pb-action" [class.long]="pb.action === 'Long'">{{ pb.action }}</span>
+                      </td>
+                      <td class="ws-gap-pb-rules">
+                        <span>{{ pb.priorRule }}</span>
+                        <span class="ws-gap-arrow">→</span>
+                        <span>{{ pb.gapRule }}</span>
+                      </td>
+                      <td>{{ gapPlaybookBacktestLabel(pb) }}</td>
+                      <td>
+                        @if (pb.paperAuto) {
+                          <span class="ws-gap-pb-auto">Auto</span>
+                        } @else {
+                          <span class="ws-gap-pb-monitor">Monitor</span>
+                        }
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </section>
+        }
+
+        <section class="ws-gap-live" aria-label="Gap trades">
+          <header class="ws-gap-live-head">
+            <h3>Take trade · gap setups</h3>
+            <p>Sorted by score — shorts toward <strong>S2</strong>; longs toward <strong>B2</strong> / resistance.</p>
+          </header>
+          @if (filterGapTrades().length) {
+            <div class="ws-gap-cards">
+              @for (g of filterGapTrades(); track g.name) {
+                <article
+                  class="ws-gap-card"
+                  [class.ws-gap-card--hot]="g.liveActionable"
+                  [class.ws-gap-card--long]="g.action === 'Long'"
+                >
+                  <div class="ws-gap-card-head">
+                    <span class="g-sym">{{ g.name }}</span>
+                    <span class="g-action" [class.long]="g.action === 'Long'">{{ g.action }}</span>
+                    <span class="g-grade" [ngClass]="scoreTierClass(g.qualityScore)">{{ g.grade }} · {{ g.qualityScore }}</span>
+                    @if (g.liveActionable) {
+                      <span class="g-live">LIVE</span>
+                    }
+                  </div>
+                  <p class="g-headline">{{ g.headline }}</p>
+                  <div class="g-stats">
+                    <span
+                      >Gap <strong>{{ g.gapVsPrevClosePercent > 0 ? '+' : '' }}{{ g.gapVsPrevClosePercent | number: '1.2-2' }}%</strong></span
+                    >
+                    <span
+                      >Backtest <strong>{{ g.backtestWinRatePercent | number: '1.0-1' }}%</strong>
+                      @if (g.backtestWins + g.backtestLosses > 0) {
+                        <span class="ws-muted">({{ g.backtestWins }}W/{{ g.backtestLosses }}L)</span>
+                      }
+                    </span>
+                  </div>
+                  <div class="g-levels">
+                    <span>Entry <strong>{{ g.entryHint }}</strong></span>
+                    <span>T <strong>{{ g.targetPrice | number: '1.2-2' }}</strong></span>
+                    <span>S <strong>{{ g.stopPrice | number: '1.2-2' }}</strong></span>
+                  </div>
+                  <p class="g-clue">{{ gapClueShort(g.clueId) }} · {{ g.openBand }} → {{ g.ltpBand }}</p>
+                  <div class="ws-gap-card-actions">
+                    <button type="button" class="ws-gap-trade-btn" (click)="openChartFromGap(g)">Chart &amp; trade</button>
+                    <button type="button" (click)="toggleWatchSymbol(g.name, $event)" [class.on]="isWatched(g.name)">Watch</button>
+                  </div>
+                </article>
+              }
+            </div>
+          } @else {
+            <p class="ws-muted ws-gap-empty">
+              No live gap-down setups right now (market closed or open quote off). Banner stats still show the best historical
+              clue.
+            </p>
+          }
+        </section>
+      }
+
+      <header class="ws-topbar">
+        <div class="ws-regime" [ngClass]="regimeToneClass(analyzer.marketRegime)">
+          <span class="ws-regime-label">Regime</span>
+          <strong>{{ analyzer.marketRegime }}</strong>
+        </div>
+        <div class="ws-tape">
+          <span>{{ analyzer.feed }}</span>
+          <span class="ws-dot">·</span>
+          <span class="buy-count">{{ analyzer.counts.buying }}B</span>
+          <span class="sell-count">{{ analyzer.counts.selling }}S</span>
+          <span>{{ analyzer.counts.rangeBound }}R</span>
+          <span class="ws-dot">·</span>
+          <span class="ws-updated">{{ analyzer.analyzedAt | date: 'shortTime' }}</span>
+        </div>
+        <button type="button" class="ws-alert" [class.on]="alertSettings.enabled" (click)="toggleAlerts()">
+          Alerts {{ alertSettings.enabled ? 'ON' : 'OFF' }}
+        </button>
+      </header>
+
+      @if (reversal) {
+        <section class="ws-reversal" aria-label="Reversal radar">
+          <header class="ws-reversal-head">
+            <h2>{{ reversal.playbook.title }}</h2>
+            <p class="ws-reversal-stats">
+              Scanned <strong>{{ reversal.stats.stocksScanned }}</strong> stocks · Gunshot
+              <strong>{{ reversal.stats.activeFadeCount }}</strong> · Gap↓
+              <strong>{{ reversal.stats.gapContinuationCount }}</strong> · Failed open
+              <strong>{{ reversal.stats.failedMorningCount }}</strong> · Early
+              <strong>{{ reversal.stats.earlyWarningCount }}</strong> · {{ reversal.stats.breadthNote }}
+            </p>
+          </header>
+          <ol class="ws-reversal-stages">
+            @for (s of reversal.playbook.stages; track s) {
+              <li>{{ s }}</li>
+            }
+          </ol>
+          <div class="ws-reversal-tabs" role="tablist">
+            <button type="button" role="tab" [class.active]="reversalTab === 'fade'" (click)="setReversalTab('fade')">
+              Gunshot ({{ reversal.activeFades.length }})
+            </button>
+            <button type="button" role="tab" [class.active]="reversalTab === 'gap'" (click)="setReversalTab('gap')">
+              Gap ↓ ({{ reversal.gapContinuations.length }})
+            </button>
+            <button type="button" role="tab" [class.active]="reversalTab === 'failed'" (click)="setReversalTab('failed')">
+              Failed open ({{ reversal.failedMorningOpens.length }})
+            </button>
+            <button type="button" role="tab" [class.active]="reversalTab === 'warn'" (click)="setReversalTab('warn')">
+              Early ({{ reversal.earlyWarnings.length }})
+            </button>
+          </div>
+          <ul class="ws-reversal-list">
+            @for (r of reversalRowsForTab(); track r.name) {
+              <li>
+                <button type="button" class="ws-reversal-row" (click)="openChartFromReversal(r)">
+                  <span class="r-sym">{{ r.name }}</span>
+                  <span class="r-stage">{{ reversalPatternLabel(r.patternId) }}</span>
+                  <span class="c-score" [ngClass]="scoreTierClass(r.score)">{{ r.score }}</span>
+                  <span class="r-gap" title="Gap vs previous close"
+                    >{{ r.gapVsPrevClosePercent > 0 ? '+' : '' }}{{ r.gapVsPrevClosePercent | number: '1.2-2' }}%</span
+                  >
+                  <span class="r-bands">{{ r.openBand }} → {{ r.ltpBand }}</span>
+                  <span class="r-move">{{ r.sessionMove }}</span>
+                </button>
+              </li>
+            } @empty {
+              <li class="ws-muted">No names in this bucket right now (or open quote failed sanity check).</li>
+            }
+          </ul>
+        </section>
+      }
+
+      @if (analyzer.topOpportunities.length) {
+        <div class="ws-leaderboard" aria-label="Top opportunities">
+          <span class="ws-leaderboard-title">TOP</span>
+          @for (t of analyzer.topOpportunities; track t.name; let i = $index) {
+            <div class="ws-leader-row">
+              <span class="ws-rank">{{ i + 1 }}</span>
+              <span class="ws-sym">{{ t.name }}</span>
+              <span class="ws-score" [ngClass]="scoreTierClass(t.qualityScore)">{{ t.qualityScore }}</span>
+              <span class="ws-act" [class.buy]="t.action === 'Buy'">{{ t.action }}</span>
+            </div>
+          }
+        </div>
+      }
+
+      <div class="ws-ribbon" role="navigation" aria-label="Strategy playbook">
+        @for (p of analyzer.playbook; track p.patternId) {
+          <div class="ws-ribbon-item" [class.buy]="p.direction.toLowerCase().includes('buy')">
+            <span class="ws-ribbon-title">{{ p.title }}</span>
+            <span class="ws-ribbon-dir">{{ p.direction }}</span>
+            <span class="ws-ribbon-meta">T: {{ p.target }} · S: {{ p.stop }}</span>
+          </div>
+        }
+      </div>
+
+      <ng-template #setupCard let-row>
+        <li class="ws-setup" [class.expanded]="isExpanded(row)">
+          <article class="ws-card">
+            <button type="button" class="ws-card-hit" (click)="toggleExpand(row, $event)">
+              <div class="ws-card-grid">
+                <span class="c-sym">{{ row.name }}</span>
+                <span class="c-score" [ngClass]="scoreTierClass(row.qualityScore)">{{ row.qualityScore }}</span>
+                <span class="c-pat" [title]="row.patternId">{{ patternShort(row.patternId) }}</span>
+                <span class="c-wr">{{ winRateDisplay(row) }}</span>
+                <span class="c-risk" [ngClass]="riskClass(row.riskClass)">{{ row.riskClass }}</span>
+                <span class="c-dist">{{ row.triggerDistancePercent | number: '1.2-2' }}%</span>
+                <span class="c-tgt">T {{ (row.targetPrice ?? row.b2) | number: '1.2-2' }}</span>
+                <span class="c-stp">S {{ (row.stopPrice ?? row.s) | number: '1.2-2' }}</span>
+              </div>
+              <div class="ws-card-sub">
+                <span [ngClass]="timingClass(row.entryTiming)">{{ row.entryTiming }}</span>
+                <span>LTP {{ row.last | number: '1.2-2' }}</span>
+                <span>MTF {{ row.mtfAlignmentScore }}/3</span>
+              </div>
+            </button>
+            <div class="ws-card-bar">
+              <button type="button" (click)="openChartFromAnalyzer(row, $event)">Chart</button>
+              <button type="button" [class.on]="isWatched(row.name)" (click)="toggleWatchSymbol(row.name, $event)">
+                Watch
+              </button>
+            </div>
+            @if (isExpanded(row)) {
+              <div class="ws-drawer">
+                <div class="ws-drawer-col">
+                  <h4>Why this trade</h4>
+                  <ul>
+                    @for (w of row.whyBullets; track w) {
+                      <li>{{ w }}</li>
+                    }
+                  </ul>
+                </div>
+                <div class="ws-drawer-col ws-drawer-stats">
+                  @if (isDetailLoading(row)) {
+                    <p class="ws-muted">Loading backtest…</p>
+                  } @else if (detailErr(row)) {
+                    <p class="ws-muted">{{ detailErr(row) }}</p>
+                  } @else {
+                    @if (detailFor(row); as d) {
+                      <p>
+                        <span class="ws-stat-label">Win rate</span>
+                        <strong>{{ d.winRatePercent | number: '1.0-1' }}%</strong>
+                      </p>
+                      <p>
+                        <span class="ws-stat-label">Samples</span>
+                        <strong>{{ d.samples }}</strong>
+                        <span class="ws-muted">({{ d.wins }}W / {{ d.losses }}L)</span>
+                      </p>
+                      @if (d.last20Wins + d.last20Losses > 0) {
+                        <p>
+                          <span class="ws-stat-label">Last 20</span>
+                          <strong>{{ d.last20Wins }}W / {{ d.last20Losses }}L</strong>
+                        </p>
+                      }
+                      @if (d.rewardRiskRatio != null) {
+                        <p>
+                          <span class="ws-stat-label">Reward / risk</span>
+                          <strong>{{ d.rewardRiskRatio | number: '1.1-1' }}</strong>
+                        </p>
+                      }
+                      <p class="ws-muted">Confidence: {{ d.confidenceLabel }}</p>
+                    } @else {
+                      <p class="ws-muted">Expand loads per-symbol backtest on demand.</p>
+                    }
+                  }
+                </div>
+              </div>
+            }
+          </article>
+        </li>
+      </ng-template>
+
+      <div class="ws-board">
+        <section class="ws-pane ws-pane--buy">
+          <header class="ws-pane-head">
+            <h2>BUY</h2>
+            <span>{{ filterAnalyzer(analyzer.buy).length }}</span>
+          </header>
+          <ul class="ws-list">
+            <li class="ws-list-head" aria-hidden="true">
+              <span>SYM</span><span>SCR</span><span>PAT</span><span>WR</span><span>RISK</span><span>DIST</span
+              ><span>TGT</span><span>STP</span>
+            </li>
+            @for (row of filterAnalyzer(analyzer.buy); track rowKey(row)) {
+              <ng-container *ngTemplateOutlet="setupCard; context: { $implicit: row }" />
+            } @empty {
+              <li class="ws-empty">No buy setups</li>
+            }
+          </ul>
+        </section>
+
+        <section class="ws-pane ws-pane--sell">
+          <header class="ws-pane-head">
+            <h2>SELL</h2>
+            <span>{{ filterAnalyzer(analyzer.sell).length }}</span>
+          </header>
+          <ul class="ws-list">
+            <li class="ws-list-head" aria-hidden="true">
+              <span>SYM</span><span>SCR</span><span>PAT</span><span>WR</span><span>RISK</span><span>DIST</span
+              ><span>TGT</span><span>STP</span>
+            </li>
+            @for (row of filterAnalyzer(analyzer.sell); track rowKey(row)) {
+              <ng-container *ngTemplateOutlet="setupCard; context: { $implicit: row }" />
+            } @empty {
+              <li class="ws-empty">No sell setups</li>
+            }
+          </ul>
+        </section>
+
+        <section class="ws-pane ws-pane--watch">
+          <header class="ws-pane-head">
+            <h2>WATCH</h2>
+            <span>{{ filterAnalyzer(analyzer.watch).length }}</span>
+          </header>
+          <ul class="ws-list">
+            <li class="ws-list-head" aria-hidden="true">
+              <span>SYM</span><span>SCR</span><span>PAT</span><span>WR</span><span>RISK</span><span>DIST</span
+              ><span>TGT</span><span>STP</span>
+            </li>
+            @for (row of filterAnalyzer(analyzer.watch); track rowKey(row)) {
+              <ng-container *ngTemplateOutlet="setupCard; context: { $implicit: row }" />
+            } @empty {
+              <li class="ws-empty">No watch setups</li>
+            }
+          </ul>
+        </section>
+      </div>
+    </section>
+  }
+</div>

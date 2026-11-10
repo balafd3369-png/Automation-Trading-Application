@@ -293,7 +293,13 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
 
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        budget.CancelAfter(depth == ChartLoadDepth.Fast ? TimeSpan.FromSeconds(10) : ChartRequestBudget);
+        var budgetTimeout = depth switch
+        {
+            ChartLoadDepth.Fast => TimeSpan.FromSeconds(10),
+            ChartLoadDepth.Mid  => TimeSpan.FromSeconds(14),
+            _                   => ChartRequestBudget,
+        };
+        budget.CancelAfter(budgetTimeout);
         try
         {
             return await ChartAsyncCore(symbol, name, mapped, depth, budget.Token);
@@ -413,6 +419,10 @@ public sealed class MockMarketService : IHostedService, IDisposable
             bars = ChartSessionMerger.TrimIntradayBarsBeforeSessionOpen(bars);
             bars = TrimPostMarketIntradayBars(bars);
             bars = ChartSessionMerger.FilterIntradayToTradingCalendar(bars);
+            if (mapped is not "minute")
+            {
+                bars = ChartSessionMerger.EnsureInterval(bars, mapped);
+            }
         }
 
         bars = SanitizeBars(bars, snap.Last, mapped);
@@ -1312,21 +1322,51 @@ public sealed class MockMarketService : IHostedService, IDisposable
                 ist.GetUtcOffset(sessionEndLocal))
             : nowIst;
 
-        var lookbackDays = mapped switch
+        // Fast depth = latest 2 sessions only (1 historical + today) → near-instant first paint.
+        // Mid  depth = ~5 sessions  → progressive stage 2, fills in prior week.
+        // Full depth = full history (up to ~12 sessions for 5m) → background deep history.
+        var lookbackDays = depth switch
         {
-            "minute" => 2,
-            "5minute" => 12,
-            "15minute" => 12,
-            "60minute" => 21,
-            "day" => 120,
-            _ => 12,
+            ChartLoadDepth.Fast => mapped switch
+            {
+                "minute"    => 1,
+                "5minute"   => 2,
+                "15minute"  => 2,
+                "60minute"  => 4,
+                "day"       => 60,
+                _           => 2,
+            },
+            ChartLoadDepth.Mid => mapped switch
+            {
+                "minute"    => 2,
+                "5minute"   => 6,
+                "15minute"  => 6,
+                "60minute"  => 10,
+                "day"       => 90,
+                _           => 6,
+            },
+            _ => mapped switch          // Full
+            {
+                "minute"    => 2,
+                "5minute"   => 12,
+                "15minute"  => 12,
+                "60minute"  => 21,
+                "day"       => 120,
+                _           => 12,
+            },
         };
         var fromLocal = nowIst.Date.AddDays(-lookbackDays).AddHours(9).AddMinutes(15);
         var fromIst = new DateTimeOffset(
             DateTime.SpecifyKind(fromLocal, DateTimeKind.Unspecified),
             ist.GetUtcOffset(fromLocal));
 
-        var chunkDays = mapped is "minute" ? 1 : 4;
+        // Fast: single chunk. Mid: 2 chunks max. Full: 4-day chunks (unchanged).
+        var chunkDays = depth switch
+        {
+            ChartLoadDepth.Fast => lookbackDays,
+            ChartLoadDepth.Mid  => 4,
+            _                   => mapped is "minute" ? 1 : 4,
+        };
         foreach (var ex in exchanges)
         {
             try
@@ -1344,6 +1384,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
 
                 if (depth == ChartLoadDepth.Fast)
                 {
+                    // Priority 1: broker intraday endpoint (today only, fastest).
                     try
                     {
                         var intradayFast = await Broker.GetIntradayCandlesAsync(ex, token, mapped, ct);
@@ -1357,6 +1398,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
                         _log.LogDebug(exFast, "Fast intraday chart failed for {Name} {Exchange} {Interval}", name, ex, mapped);
                     }
 
+                    // Priority 2: today date-range from broker historical API.
                     var todayFrom = new DateTimeOffset(
                         DateTime.SpecifyKind(nowIst.Date.AddHours(9).AddMinutes(15), DateTimeKind.Unspecified),
                         ist.GetUtcOffset(nowIst.Date.AddHours(9).AddMinutes(15)));
@@ -1364,6 +1406,16 @@ public sealed class MockMarketService : IHostedService, IDisposable
                     if (todayOnly.Count >= 8)
                     {
                         return (todayOnly, ex);
+                    }
+
+                    // Priority 3: 1 prior session + today (single-chunk historical call).
+                    var priorFrom = new DateTimeOffset(
+                        DateTime.SpecifyKind(nowIst.Date.AddDays(-2).AddHours(9).AddMinutes(15), DateTimeKind.Unspecified),
+                        ist.GetUtcOffset(nowIst.Date.AddDays(-2).AddHours(9).AddMinutes(15)));
+                    var shortHistory = await Broker.GetCandlesAsync(ex, token, mapped, priorFrom, toIst, ct);
+                    if (shortHistory.Count > 0)
+                    {
+                        return (shortHistory, ex);
                     }
 
                     continue;
@@ -1425,11 +1477,12 @@ public sealed class MockMarketService : IHostedService, IDisposable
         if (interval == "day")
         {
             var day = DateTimeOffset.UtcNow;
-            var open = snap.TodayOpen > 0 ? snap.TodayOpen : snap.Last;
+            var last = snap.Last > 0 ? snap.Last : 100m;
+            var open = snap.TodayOpen > 0 ? snap.TodayOpen : last;
             return
             [
-                new ChartBar(day.AddDays(-1).ToUnixTimeSeconds(), open, Math.Max(open, snap.Last), Math.Min(open, snap.Last), snap.Last),
-                new ChartBar(day.ToUnixTimeSeconds(), open, Math.Max(open, snap.Last), Math.Min(open, snap.Last), snap.Last),
+                new ChartBar(day.AddDays(-1).ToUnixTimeSeconds(), open, Math.Max(open, last), Math.Min(open, last), last),
+                new ChartBar(day.ToUnixTimeSeconds(), open, Math.Max(open, last), Math.Min(open, last), last),
             ];
         }
 
@@ -1441,8 +1494,11 @@ public sealed class MockMarketService : IHostedService, IDisposable
             sessionStart = sessionStart.AddDays(-1);
         }
 
-        var tick = Math.Max(0.05m, snap.Last * 0.00035m);
-        var price = snap.TodayOpen > 0 ? snap.TodayOpen : snap.Last;
+        // Guard: if both prices are zero (broker not connected, market data not arrived),
+        // use a placeholder of 100 so bars pass open>0 filtering on the frontend.
+        var anchorPrice = snap.TodayOpen > 0 ? snap.TodayOpen : snap.Last > 0 ? snap.Last : 100m;
+        var tick = Math.Max(0.05m, anchorPrice * 0.00035m);
+        var price = anchorPrice;
         var rng = new Random(HashCode.Combine(snap.Name, interval, now.Date));
         var bars = new List<ChartBar>();
         for (var t = sessionStart; t <= now; t = t.AddMinutes(stepMinutes))
@@ -1461,8 +1517,9 @@ public sealed class MockMarketService : IHostedService, IDisposable
         if (bars.Count == 0)
         {
             var utcNow = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            bars.Add(new ChartBar(utcNow - 300, snap.Last, snap.Last + tick, snap.Last - tick, snap.Last));
-            bars.Add(new ChartBar(utcNow, snap.Last, snap.Last + tick, snap.Last - tick, snap.Last));
+            // anchorPrice is guaranteed > 0 (floored at 100 above)
+            bars.Add(new ChartBar(utcNow - 300, anchorPrice, anchorPrice + tick, anchorPrice - tick, anchorPrice));
+            bars.Add(new ChartBar(utcNow, anchorPrice, anchorPrice + tick, anchorPrice - tick, anchorPrice));
         }
 
         return bars;

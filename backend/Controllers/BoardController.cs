@@ -10,14 +10,59 @@ namespace TradeWithBeast.Controllers;
 public sealed class BoardController : ControllerBase
 {
     private readonly MockMarketService _market;
+    private readonly ZoneStockAnalyzerService _zoneAnalyzer;
+    private readonly ZoneAnalyzerDetailService _zoneDetail;
+    private readonly GapAnalyzerService _gapAnalyzer;
 
-    public BoardController(MockMarketService market)
+    public BoardController(
+        MockMarketService market,
+        ZoneStockAnalyzerService zoneAnalyzer,
+        ZoneAnalyzerDetailService zoneDetail,
+        GapAnalyzerService gapAnalyzer)
     {
         _market = market;
+        _zoneAnalyzer = zoneAnalyzer;
+        _zoneDetail = zoneDetail;
+        _gapAnalyzer = gapAnalyzer;
     }
 
     [HttpGet("board")]
     public IActionResult GetBoard() => Ok(_market.Snapshot());
+
+    /// <summary>Today open vs B2/B1/S1/S2 — Select Stock board.</summary>
+    [HttpGet("board/open-vs-zones")]
+    public IActionResult GetOpenVsZones() =>
+        Ok(OpenVsZonesBoardBuilder.Build(_market.Snapshot()));
+
+    /// <summary>Live buy/sell/watch zone analyzer (Select Stock · Analyzer).</summary>
+    [HttpGet("board/zone-analyzer")]
+    public IActionResult GetZoneAnalyzer() =>
+        Ok(_zoneAnalyzer.Analyze());
+
+    /// <summary>Stock reversal radar — morning fade, failed opens, gap-down continuation.</summary>
+    [HttpGet("board/reversal-scan")]
+    public IActionResult GetReversalScan() =>
+        Ok(StockReversalPatternScanner.Scan(_market.Snapshot()));
+
+    /// <summary>Gap up/down analyzer — verified clues + live trade cards.</summary>
+    [HttpGet("board/gap-analyzer")]
+    public IActionResult GetGapAnalyzer() => Ok(_gapAnalyzer.Analyze());
+
+    [HttpGet("board/zone-analyzer/detail")]
+    public async Task<IActionResult> GetZoneAnalyzerDetail(
+        [FromQuery] string name,
+        [FromQuery] string patternId,
+        [FromQuery] int lookbackDays = 90,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(patternId))
+        {
+            return BadRequest(new { message = "name and patternId are required." });
+        }
+
+        var detail = await _zoneDetail.GetDetailAsync(name.Trim(), patternId.Trim(), lookbackDays, ct);
+        return detail is null ? NotFound() : Ok(detail);
+    }
 
     [HttpGet("board/symbols/search")]
     public IActionResult SearchSymbols([FromQuery] string q, [FromQuery] int limit = 24)
@@ -46,9 +91,12 @@ public sealed class BoardController : ControllerBase
         [FromQuery] string depth = "full",
         CancellationToken ct = default)
     {
-        var loadDepth = depth.Equals("fast", StringComparison.OrdinalIgnoreCase)
-            ? ChartLoadDepth.Fast
-            : ChartLoadDepth.Full;
+        var loadDepth = depth.ToLowerInvariant() switch
+        {
+            "fast" => ChartLoadDepth.Fast,
+            "mid"  => ChartLoadDepth.Mid,
+            _      => ChartLoadDepth.Full,
+        };
         var chart = await _market.ChartAsync(name, interval, ct, loadDepth);
         if (chart is null)
         {

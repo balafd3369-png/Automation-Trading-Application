@@ -25,6 +25,7 @@ import {
   catchError,
   debounceTime,
   distinctUntilChanged,
+  delay,
   exhaustMap,
   filter,
   finalize,
@@ -189,6 +190,7 @@ import {
 } from './core/app-theme';
 import {
   APP_NAV_STORAGE_KEY,
+  consumeMarketSymbolPick,
   parseRouterUrl,
   readBootNavigationState,
   routerPathForState,
@@ -328,6 +330,8 @@ export class AppComponent implements OnInit, AfterViewInit {
     ranged: SymbolSnapshot[];
   } = { selling: [], buying: [], ranged: [] };
   private lastIndicatorCandleKey = '';
+  /** Timestamp of the last full indicator recalculation (ms). Throttled during live ticks. */
+  private lastIndicatorCalcMs = 0;
   private lastAppliedBoardKey = '';
   private sessionMarkerKey = '';
   private optionListRev = '';
@@ -354,6 +358,8 @@ export class AppComponent implements OnInit, AfterViewInit {
   chartFullHistoryPending = false;
   /** Chart was painted from browser/memory cache before the latest network refresh finished. */
   chartPaintedFromCache = false;
+  /** `chartRequestKey()` for the candles currently on the chart (symbol + interval). */
+  private lastAppliedChartKey = '';
   private readonly chartDataCache = new Map<string, ChartResponse>();
   private readonly chartCacheMax = 16;
   readonly timeframes = [
@@ -407,6 +413,8 @@ export class AppComponent implements OnInit, AfterViewInit {
   strategyDetailId: string | null = BOOT_NAV.strategyDetailId ?? null;
   operationsTab: AppOperationsTab = BOOT_NAV.operationsTab ?? 'risk';
   fullPageRoute = false;
+  /** Full-width routed feature (Select Stock) — keeps titlebar, hides market shell. */
+  featureRoute = false;
   private readonly lazyFeatures = new Map<LazyFeatureKey, Type<unknown>>();
   private readonly lazyFeatureLoading = new Set<LazyFeatureKey>();
   pickerOpen = false;
@@ -482,6 +490,8 @@ export class AppComponent implements OnInit, AfterViewInit {
   changePasswordMessage = '';
 
   ngOnInit(): void {
+    // ── Startup performance instrumentation ───────────────────────────────────
+    performance.mark('twb-ngOnInit');
     this.auth.user$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => this.bumpView());
     this.enforceAuthSession();
     this.http
@@ -539,6 +549,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     const syncRouteChrome = (url: string) => {
       this.fullPageRoute =
         url.includes('/login') || url.includes('/dashboard') || url.includes('/admin');
+      this.featureRoute = url.includes('/market/select-stock');
       if (!this.fullPageRoute) {
         this.applyNavigationState(parseRouterUrl(url));
         this.enforceAuthSession();
@@ -589,7 +600,9 @@ export class AppComponent implements OnInit, AfterViewInit {
 
     merge(
       interval(this.chartRefreshSec * 1000).pipe(
-        startWith(0),
+        // Delay the first poll by 8s so the loadChart fast+full sequence completes first.
+        // After 8s the chart is interactive; subsequent polls catch any delta.
+        delay(8_000),
         filter(
           () =>
             this.shouldPollChartHttp()
@@ -597,7 +610,7 @@ export class AppComponent implements OnInit, AfterViewInit {
         ),
       ),
       interval(this.chartStreamFullRefreshSec * 1000).pipe(
-        startWith(0),
+        // SignalR path: first full refresh not needed until 90s anyway; no startWith(0).
         filter(
           () =>
             this.shouldPollChartHttp()
@@ -1050,6 +1063,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.lastIndicatorCandleKey = '';
     this.sessionMarkerKey = '';
     this.crosshairCandle = undefined;
+    this.lastAppliedChartKey = '';
   }
 
   private setupChartHostVisibility(): void {
@@ -3878,12 +3892,24 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   setChartInterval(id: string): void {
+    if (id === this.chartInterval) {
+      return;
+    }
     this.chartInterval = id;
     this.loadedChartName = '';
     this.chartBusy = false;
+    this.chartPollInFlight = false;
     this.drawTool = 'none';
     this.trendFrom = undefined;
     this.drawingStatus = '';
+    this.prepareChartInstrumentSwitch();
+    const name = this.pendingChartName;
+    if (name) {
+      void this.chartLive.syncWatch(name, this.chartInterval).catch(() => {
+        this.chartStreamReceiving = false;
+        this.bumpView();
+      });
+    }
     this.scheduleChartLoad(true);
     this.bumpView();
   }
@@ -4172,27 +4198,56 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.bumpView();
   }
 
+  /** Drop chart instance + in-memory series; keeps host div for remount. */
+  private teardownChartInstance(): void {
+    this.tvChart?.remove();
+    this.tvChart = undefined;
+    this.candleSeries = undefined;
+    this.chartResize?.disconnect();
+    this.chartResize = undefined;
+    this.zonePriceLines = [];
+    this.indicatorSeries.clear();
+    this.bollingerSeries = undefined;
+    this.rsiSeries = undefined;
+    this.drawingPriceLines.clear();
+    this.drawingTrendSeries.clear();
+    this.lastIndicatorCandleKey = '';
+    this.sessionMarkerKey = '';
+    this.lastAppliedChartKey = '';
+  }
+
+  private markChartApplied(): void {
+    this.lastAppliedChartKey = this.chartRequestKey();
+  }
+
   private prepareChartInstrumentSwitch(): void {
     this.loadedChartName = '';
     this.chartBusy = false;
     this.chartPollInFlight = false;
+    this.chartFullHistoryPending = false;
+    this.chartPaintedFromCache = false;
+    this.chartRefreshPending = false;
     this.crosshairCandle = undefined;
+    this.teardownChartInstance();
+    this.lastChart = undefined;
     const cached = this.chartSnapshotForKey(this.chartRequestKey());
     if (cached?.candles.length) {
       this.chartPaintedFromCache = true;
       this.ngZone.runOutsideAngular(() => {
         this.applyChartData(cached, true);
       });
-    } else if (this.lastChart && this.lastChart.name !== this.pendingChartName) {
-      this.lastChart = undefined;
     }
   }
 
-  /** Never merge candles from a different symbol (e.g. NIFTY history into a stock chart). */
+  /** Never merge candles from a different symbol or timeframe. */
   private chartCandlesPriorForMerge(symbolName: string): ChartBar[] {
     const key = this.chartRequestKey();
     const cached = this.chartSnapshotForKey(key)?.candles ?? [];
-    if (this.lastChart?.name === symbolName && this.lastChart.candles.length) {
+    if (
+      this.lastChart?.name === symbolName &&
+      this.lastChart.candles.length &&
+      this.lastAppliedChartKey === key
+    ) {
       return this.lastChart.candles;
     }
     return cached;
@@ -4315,20 +4370,49 @@ export class AppComponent implements OnInit, AfterViewInit {
       return;
     }
 
+    const wasLoading = this.state === 'loading';
     if (this.state === 'error' || this.state === 'loading' || recovering) {
       this.state = 'ready';
     }
+    // If this is the first successful board response, the chart-pane DOM
+    // (#chartHost) is now being rendered for the first time (it was hidden
+    // behind @if(state !== 'loading')).  Re-run setupChartHostVisibility after
+    // Angular has flushed the DOM (rAF guarantees a full paint cycle has
+    // occurred) so the IntersectionObserver is attached and chartHostVisible
+    // gets set correctly.
+    if ((wasLoading || recovering) && this.centerView === 'market') {
+      requestAnimationFrame(() => {
+        this.setupChartHostVisibility();
+        this.scheduleChartLoad();
+      });
+    }
 
-    const preferred = this.marketKind === 'options' ? this.optionUnderlying : this.selectedName;
-    const preferredRow =
-      this.boardData?.symbols.find((s) => s.name === preferred) ?? this.boardData!.symbols[0];
-    const selectionChanged = this.selected?.name !== preferredRow.name;
-    if (this.selected?.name === preferredRow.name) {
-      Object.assign(this.selected, preferredRow);
+    let selectionChanged = false;
+    const symbolPick = consumeMarketSymbolPick();
+    const pickRow =
+      symbolPick != null
+        ? this.boardData?.symbols.find((s) => s.name.toUpperCase() === symbolPick)
+        : undefined;
+
+    if (pickRow) {
+      if (this.selected?.name !== pickRow.name) {
+        this.select(pickRow);
+        selectionChanged = true;
+      } else {
+        Object.assign(this.selected, pickRow);
+      }
     } else {
-      this.selected = preferredRow;
-      this.selectedName = preferredRow.name;
-      this.pendingChartName = preferredRow.name;
+      const preferred = this.marketKind === 'options' ? this.optionUnderlying : this.selectedName;
+      const preferredRow =
+        this.boardData?.symbols.find((s) => s.name === preferred) ?? this.boardData!.symbols[0];
+      selectionChanged = this.selected?.name !== preferredRow.name;
+      if (this.selected?.name === preferredRow.name) {
+        Object.assign(this.selected, preferredRow);
+      } else {
+        this.selected = preferredRow;
+        this.selectedName = preferredRow.name;
+        this.pendingChartName = preferredRow.name;
+      }
     }
 
     if (boardChanged) {
@@ -4360,6 +4444,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   ngAfterViewInit(): void {
+    performance.mark('twb-ngAfterViewInit');
     this.setupChartHostVisibility();
     this.hydrateChartFromStorageEarly();
     this.scheduleChartLoad();
@@ -4382,6 +4467,7 @@ export class AppComponent implements OnInit, AfterViewInit {
 
   private scheduleChartLoad(force = false): void {
     if (!this.shouldPollChartHost()) {
+      // [CHART-0] silent skip — only log at loadChart entry to avoid console spam on every poll
       return;
     }
     const key = this.chartRequestKey();
@@ -4401,12 +4487,20 @@ export class AppComponent implements OnInit, AfterViewInit {
           (this.optionsChartMode === 'underlying' || !!this.openedOption)) ||
         !!this.pendingChartName;
       if (!host || !instrumentReady || this.chartRequestKey() !== key) {
+        // [CHART-0] rAF guard: host/instrument/key changed between schedule and callback
+        console.log('[CHART-0] scheduleChartLoad rAF guard exit', {
+          hasHost: !!host,
+          instrumentReady,
+          keyStillMatches: this.chartRequestKey() === key,
+          key,
+        });
         return;
       }
       if (!force && this.chartBusy) {
         return;
       }
       if (host.clientWidth < 16 || host.clientHeight < 16) {
+        // Container not sized yet — retry on next animation frame
         this.scheduleChartLoad(force);
         return;
       }
@@ -4561,21 +4655,40 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   private loadChart(name: string, interval: string): void {
+    // [CHART-0] gate: logs the reason if we exit early so "white pane" can be traced
+    // without opening source — just check the console for the last [CHART-0] line.
     if (!this.shouldPollChartHost()) {
+      console.log('[CHART-0] loadChart skipped — shouldPollChartHost=false', {
+        centerView: this.centerView,
+        chartHostVisible: this.chartHostVisible,
+        appState: this.state,
+        name,
+      });
       return;
     }
     const host = this.chartHost?.nativeElement;
     if (!host) {
+      console.error('[CHART-0] loadChart skipped — chartHost element missing (ViewChild not resolved)');
       return;
     }
     const requestKey = this.chartRequestKey();
+    console.log('[CHART-0] loadChart START', {
+      name,
+      interval,
+      requestKey,
+      host: { w: host.clientWidth, h: host.clientHeight },
+      marketKind: this.marketKind,
+    });
     const cachedSnapshot = this.chartSnapshotForKey(requestKey);
+
+    // ── Step 0: instant first paint from memory/localStorage cache ────────────
     if (cachedSnapshot?.candles.length && !this.lastChart?.candles?.length) {
       this.ngZone.runOutsideAngular(() => {
         this.applyChartData(cachedSnapshot, true);
       });
       this.bumpView();
     }
+
     this.chartBusy = true;
     this.chartFullHistoryPending = true;
     this.loadedChartName = requestKey;
@@ -4584,22 +4697,108 @@ export class AppComponent implements OnInit, AfterViewInit {
       this.chartPaintedFromCache = true;
     }
 
-    const priorBars = this.chartCandlesPriorForMerge(name);
-    const needsFastSession =
-      this.marketKind !== 'options'
-      && interval !== 'day'
-      && sessionStartBars(priorBars).length <= 1;
+    void this.chartLive.syncWatch(name, this.chartInterval).catch(() => {
+      this.chartStreamReceiving = false;
+      this.bumpView();
+    });
 
-    if (needsFastSession) {
+    // ── Step 1: fast request (1-2 sessions) → first visible paint ─────────────
+    // Options charts have no fast path; also skip fast for daily charts.
+    const canUseFast =
+      this.marketKind !== 'options' && interval !== 'day';
+
+    // Helper: apply a background history response to the visible chart without remount.
+    const applyBgHistory = (data: ChartResponse, isDeepFull: boolean): void => {
+      if (requestKey !== this.chartRequestKey()) {
+        return;
+      }
+      const row = this.selected?.name === name ? this.selected : this.indexRow(name);
+      const allowIndexFallback = this.marketKind !== 'options' && !!row;
+      // Use valid bars (open > 0). Zero-price bars from BuildSyntheticIntraday when
+      // snap.Last = 0 would otherwise pass the length check but be dropped by normalizeChartCandles.
+      const hasValidBars = data.candles.some((c) => (c.open ?? 0) > 0);
+      const payload =
+        hasValidBars || !allowIndexFallback ? data : this.fallbackChart(name, row!);
+      const mergePrior = this.chartCandlesPriorForMerge(name);
+      const mergedPayload = this.mergeChartPayload(mergePrior, payload);
+      const remount =
+        this.lastChart?.name !== name || this.shouldRemountChart(mergePrior, mergedPayload.candles);
+      this.ngZone.runOutsideAngular(() => {
+        // bgMerge=true → never destroys the painted chart; uses setData only.
+        this.applyChartData(mergedPayload, remount, /* bgMerge= */ true);
+      });
+      this.rememberChartCache(requestKey, mergedPayload);
+      if (isDeepFull) {
+        this.chartBusy = false;
+        this.chartRefreshPending = false;
+        this.chartFullHistoryPending = false;
+        this.chartPaintedFromCache = false;
+      }
+      this.bumpView();
+    };
+
+    const loadDeepFullHistory = (): void => {
+      // ── Stage 3: deep full history (12 sessions) ─────────────────────────────
+      performance.mark('twb-fullHistoryRequest-start');
+      this.chartRequest(name, interval, 'full').subscribe({
+        next: (data) => {
+          performance.mark('twb-fullHistoryRequest-end');
+          performance.measure('twb-chart-full-load', 'twb-fullHistoryRequest-start', 'twb-fullHistoryRequest-end');
+          applyBgHistory(data, true);
+        },
+        error: () => {
+          // Deep full failed — not critical, mid history already visible.
+          this.chartBusy = false;
+          this.chartRefreshPending = false;
+          this.chartFullHistoryPending = false;
+          const row = this.selected?.name === name ? this.selected : this.indexRow(name);
+          if (requestKey === this.chartRequestKey() && row && this.marketKind !== 'options' && !this.lastChart?.candles.length) {
+            this.ngZone.runOutsideAngular(() => {
+              this.applyChartData(this.fallbackChart(name, row), true);
+            });
+          } else if (!this.lastChart?.candles.length) {
+            this.loadedChartName = '';
+          }
+          if (this.marketKind === 'options' && this.openedOption) {
+            this.optionChartError = `No live ${this.brokerDisplayName} quote for ${this.openedOption.label}. Try another expiry or strike, or reconnect the broker.`;
+          }
+          this.scheduleChartLoad();
+          this.bumpView();
+        },
+      });
+    };
+
+    const loadMidHistory = (): void => {
+      // ── Stage 2: mid history (5-6 sessions) → merge silently ─────────────────
+      performance.mark('twb-midHistoryRequest-start');
+      this.chartRequest(name, interval, 'mid')
+        .pipe(catchError(() => EMPTY))
+        .subscribe((data) => {
+          performance.mark('twb-midHistoryRequest-end');
+          performance.measure('twb-chart-mid-load', 'twb-midHistoryRequest-start', 'twb-midHistoryRequest-end');
+          applyBgHistory(data, false);
+          // Mid merged — now fetch the remaining deep history without blocking the UI.
+          loadDeepFullHistory();
+        });
+    };
+
+    if (canUseFast) {
+      // Fire fast first; when it returns and paints, then kick off the background full load.
+      performance.mark('twb-fastRequest-start');
       this.chartRequest(name, interval, 'fast')
         .pipe(catchError(() => EMPTY))
         .subscribe((data) => {
+          performance.mark('twb-fastRequest-end');
+          performance.measure('twb-chart-fast-load', 'twb-fastRequest-start', 'twb-fastRequest-end');
           if (requestKey !== this.chartRequestKey()) {
             return;
           }
           const row = this.selected?.name === name ? this.selected : this.indexRow(name);
+          // Check for valid prices, not just non-empty. Zero-price bars pass length>0
+          // but are dropped by normalizeChartCandles(open>0) → white pane.
+          const hasValidBars = data.candles.some((c) => (c.open ?? 0) > 0);
           const payload =
-            data.candles.length > 0 || !row ? data : this.fallbackChart(name, row);
+            hasValidBars || !row ? data : this.fallbackChart(name, row);
           const mergePrior = this.chartCandlesPriorForMerge(name);
           const mergedPayload = this.mergeChartPayload(mergePrior, payload);
           const remount =
@@ -4609,55 +4808,13 @@ export class AppComponent implements OnInit, AfterViewInit {
           });
           this.rememberChartCache(requestKey, mergedPayload);
           this.bumpView();
+          // ✅ Chart is now interactive (1-2 sessions painted). Silently load more history.
+          loadMidHistory();
         });
+    } else {
+      // Options / daily: skip fast, go straight to full (no mid stage needed).
+      loadDeepFullHistory();
     }
-
-    void this.chartLive.syncWatch(name, this.chartInterval).catch(() => {
-      this.chartStreamReceiving = false;
-      this.bumpView();
-    });
-
-    this.chartRequest(name, interval, 'full').subscribe({
-      next: (data) => {
-        if (requestKey === this.chartRequestKey()) {
-          const row = this.selected?.name === name ? this.selected : this.indexRow(name);
-          const allowIndexFallback = this.marketKind !== 'options' && !!row;
-          const payload =
-            data.candles.length > 0 || !allowIndexFallback ? data : this.fallbackChart(name, row!);
-          const mergePrior = this.chartCandlesPriorForMerge(name);
-          const mergedPayload = this.mergeChartPayload(mergePrior, payload);
-          const remount =
-            this.lastChart?.name !== name || this.shouldRemountChart(mergePrior, mergedPayload.candles);
-          this.ngZone.runOutsideAngular(() => {
-            this.applyChartData(mergedPayload, remount);
-          });
-          this.rememberChartCache(requestKey, mergedPayload);
-        }
-        this.chartBusy = false;
-        this.chartRefreshPending = false;
-        this.chartFullHistoryPending = false;
-        this.chartPaintedFromCache = false;
-        this.bumpView();
-      },
-      error: () => {
-        this.chartBusy = false;
-        this.chartRefreshPending = false;
-        this.chartFullHistoryPending = false;
-        const row = this.selected?.name === name ? this.selected : this.indexRow(name);
-        if (requestKey === this.chartRequestKey() && row && this.marketKind !== 'options') {
-          this.ngZone.runOutsideAngular(() => {
-            this.applyChartData(this.fallbackChart(name, row), true);
-          });
-        } else {
-          this.loadedChartName = '';
-        }
-        if (this.marketKind === 'options' && this.openedOption) {
-          this.optionChartError = `No live ${this.brokerDisplayName} quote for ${this.openedOption.label}. Try another expiry or strike, or reconnect the broker.`;
-        }
-        this.scheduleChartLoad();
-        this.bumpView();
-      },
-    });
   }
 
   /** Disabled for Phase 2 performance — avoids burst chart API calls after broker connect. */
@@ -4729,10 +4886,10 @@ export class AppComponent implements OnInit, AfterViewInit {
   private chartRequest(
     name: string,
     interval: string,
-    depth: 'fast' | 'full' = 'full',
+    depth: 'fast' | 'mid' | 'full' = 'full',
   ): Observable<ChartResponse> {
     if (this.marketKind === 'options' && this.optionsChartMode === 'underlying') {
-      return this.board.chart(this.optionUnderlying, interval, depth);
+      return this.board.chart(this.optionUnderlying, interval, depth === 'mid' ? 'full' : depth);
     }
     if (this.marketKind === 'options' && this.openedOption) {
       return this.board.optionChart(this.openedOption, interval);
@@ -4782,28 +4939,98 @@ export class AppComponent implements OnInit, AfterViewInit {
     return this.selected?.todayOpen ?? this.lastChart?.todayOpen ?? 0;
   }
 
-  private applyChartData(data: ChartResponse, remount: boolean): void {
+  /**
+   * Merge + sanitize incoming chart candles.
+   * Falls back to normalize-only when the strict sanitizer (weekday filter + open>0 guard)
+   * would empty the entire dataset — avoids a silent blank chart.
+   *
+   * [CHART-1] diagnostic: logs raw/merged counts and warns on sanitize fallback.
+   */
+  private resolveChartCandlesForApply(
+    data: ChartResponse,
+    prev: ChartBar[],
+    remount: boolean,
+  ): ChartBar[] {
+    const merged = remount ? data.candles : mergeChartCandlesStable(prev, data.candles);
+    console.log('[CHART-1] resolveChartCandlesForApply', {
+      symbol: data.name,
+      rawCount: data.candles.length,
+      mergePrevCount: prev.length,
+      mergedCount: merged.length,
+      remount,
+      interval: this.chartInterval,
+      firstBar: merged[0],
+      lastBar: merged.at(-1),
+    });
+    let candles = sanitizeChartCandles(merged, this.chartInterval);
+    if (!candles.length && merged.length) {
+      console.warn('[CHART-1] sanitize emptied ALL bars — using normalize-only fallback', {
+        mergedCount: merged.length,
+        interval: this.chartInterval,
+        firstBar: merged[0],
+        lastBar: merged.at(-1),
+      });
+      candles = normalizeChartCandles(merged);
+    }
+    console.log('[CHART-1] resolved', { candleCount: candles.length });
+    return candles;
+  }
+
+  /**
+   * @param data      New chart payload to apply.
+   * @param remount   Force a full chart rebuild (destroy + recreate DOM).
+   * @param bgMerge   True when this is a background history merge after first paint.
+   *                  Prevents `mountChart` even when `remount` would normally be true —
+   *                  uses `replaceChartSeries` (setData only) instead. Requires both
+   *                  `candleSeries` AND `tvChart` to be alive — otherwise falls through
+   *                  to a full mount so we never skip the very first chart creation.
+   */
+  private applyChartData(data: ChartResponse, remount: boolean, bgMerge = false): void {
+    const requestKey = this.chartRequestKey();
+    if (this.lastAppliedChartKey && this.lastAppliedChartKey !== requestKey) {
+      remount = true;
+      bgMerge = false;
+    }
     if (this.lastChart && this.lastChart.name !== data.name) {
       remount = true;
+      bgMerge = false; // symbol changed: full remount required
     }
+    // For background merges (progressive history), never destroy the painted chart.
+    // Fall through to replaceChartSeries (setData) which is fast and viewport-safe.
+    // Require a live tvChart — candleSeries alone is not enough (avoids skipping first mount).
+    if (bgMerge && this.candleSeries && this.tvChart) {
+      remount = false;
+    }
+
     const prev =
-      !remount && this.lastChart?.name === data.name ? (this.lastChart?.candles ?? []) : [];
-    const normalized = sanitizeChartCandles(data.candles, this.chartInterval);
-    const candles = remount
-      ? normalized
-      : sanitizeChartCandles(mergeChartCandlesStable(prev, data.candles), this.chartInterval);
+      !remount &&
+      this.lastChart?.name === data.name &&
+      this.lastAppliedChartKey === requestKey
+        ? (this.lastChart?.candles ?? [])
+        : [];
+    const candles = this.resolveChartCandlesForApply(data, prev, remount);
     const payload: ChartResponse = { ...data, candles };
 
-    if (remount || !this.candleSeries || !candles.length) {
+    if (remount || !this.candleSeries || !this.tvChart || !candles.length) {
       if (!candles.length) {
+        console.warn('[CHART-1] no chart candles after resolve; skip mount', {
+          symbol: data.name,
+          rawCount: data.candles.length,
+          bgMerge,
+          hasSeries: !!this.candleSeries,
+          hasTvChart: !!this.tvChart,
+        });
         return;
       }
+      console.log('[CHART-2] mountChart called', { remount, bgMerge, count: candles.length });
       this.lastChart = { ...payload, candles: [...candles] };
       this.mountChart(payload);
       return;
     }
 
     if (!prev.length) {
+      // prev is empty but candleSeries + tvChart are live — treat as first data-set load.
+      console.log('[CHART-2] mountChart called (prev empty, series/chart alive)', { count: candles.length, bgMerge });
       this.lastChart = { ...payload, candles: [...candles] };
       this.mountChart(payload);
       return;
@@ -4812,6 +5039,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     if (chartCandlesTailOnlyChange(prev, candles)) {
       const from = firstChangedCandle(prev, candles);
       const tvCandles = this.toTvCandles(candles);
+      console.log('[CHART-5] tail-only update', { updateCount: tvCandles.length - from, from, totalBars: candles.length });
       for (let i = from; i < tvCandles.length; i++) {
         this.candleSeries!.update(tvCandles[i]);
       }
@@ -4819,11 +5047,14 @@ export class AppComponent implements OnInit, AfterViewInit {
       this.updateZonePriceLines(this.chartZoneLevels(payload));
       this.updateIndicators();
       this.syncLiveChart();
+      this.markChartApplied();
       return;
     }
 
-    this.replaceChartSeries(payload);
+    console.log('[CHART-5] replaceChartSeries path', { prevBars: prev.length, newBars: candles.length, bgMerge });
+    this.replaceChartSeries(payload, bgMerge);
     this.syncLiveChart();
+    this.markChartApplied();
   }
 
   private syncLiveChart(): void {
@@ -4903,30 +5134,60 @@ export class AppComponent implements OnInit, AfterViewInit {
     }));
   }
 
-  private replaceChartSeries(data: ChartResponse): void {
-    if (!this.candleSeries) {
+  private replaceChartSeries(data: ChartResponse, bgMerge = false): void {
+    if (!this.candleSeries || !this.tvChart) {
+      console.log('[CHART-2] replaceChartSeries → mountChart (no series/chart)', { bgMerge });
       this.mountChart(data);
       return;
     }
     const candles = this.toTvCandles(data.candles);
+    console.log('[CHART-5] setData', { count: candles.length, bgMerge, first: candles[0], last: candles.at(-1) });
+    if (!candles.length) {
+      console.warn('[CHART-5] setData skipped — empty array; remounting');
+      this.mountChart(data);
+      return;
+    }
     this.candleSeries.setData(candles);
     this.lastChart = { ...data, candles: [...data.candles] };
     this.updateZonePriceLines(this.chartZoneLevels(data));
     this.updateSessionMarkers(data);
-    this.updateIndicators();
+    this.markChartApplied();
+    if (bgMerge) {
+      // Background history merge: defer indicator recalculation to idle time
+      // so the setData re-render completes before we burn the main thread on MA/BB/RSI.
+      const candleSnapshot = data.candles;
+      const scheduleIndicators = (): void => {
+        this.ngZone.runOutsideAngular(() => {
+          this.updateIndicators(candleSnapshot, true);
+        });
+      };
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(scheduleIndicators, { timeout: 3_000 });
+      } else {
+        setTimeout(scheduleIndicators, 0);
+      }
+    } else {
+      this.updateIndicators();
+    }
   }
 
   private fallbackChart(name: string, row: SymbolSnapshot): ChartResponse {
     const stepSec = this.chartInterval === 'minute' ? 60 : this.chartInterval === '15minute' ? 900 : this.chartInterval === '60minute' ? 3600 : this.chartInterval === 'day' ? 86400 : 300;
     const bars = 60;
     const t0 = Math.floor(Date.now() / 1000) - stepSec * bars;
-    const tick = Math.max(0.05, row.last * 0.00035);
-    let price = row.todayOpen > 0 ? row.todayOpen : row.last;
+    // Guard: if board row has no price yet (last=0, todayOpen=0) use 100 as placeholder so
+    // the generated bars pass the normalizeChartCandles(open>0) filter and the chart mounts.
+    const anchorPrice = row.todayOpen > 0 ? row.todayOpen : row.last > 0 ? row.last : 100;
+    const tick = Math.max(0.05, anchorPrice * 0.00035);
+    let price = anchorPrice;
     const candles = [];
     for (let i = 0; i < bars; i++) {
       const move = (Math.random() * 2 - 1) * tick;
       const open = price;
-      const close = Math.min(Math.max(open + move, row.s2 * 0.995), row.b2 * 1.005);
+      const close =
+        row.s2 > 0 && row.b2 > 0
+          ? Math.min(Math.max(open + move, row.s2 * 0.995), row.b2 * 1.005)
+          : Math.max(open + move, 0.05);
       const wick = tick * 0.5;
       candles.push({
         time: t0 + i * stepSec,
@@ -4938,7 +5199,7 @@ export class AppComponent implements OnInit, AfterViewInit {
       price = close;
     }
     const last = candles.at(-1);
-    if (last) {
+    if (last && row.last > 0) {
       last.close = row.last;
       last.high = Math.max(last.high, row.last);
       last.low = Math.min(last.low, row.last);
@@ -4947,11 +5208,22 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   private mountChart(data: ChartResponse): void {
+    console.log('[CHART] mountChart entered', { symbol: data.name, bars: data.candles.length });
+    performance.mark(`twb-mountChart-${data.candles.length}bars`);
     const host = this.chartHost?.nativeElement;
     const tv = (window as unknown as { LightweightCharts?: { createChart: (el: HTMLElement, opts: Record<string, unknown>) => TvChart } }).LightweightCharts;
-    if (!host || !tv) {
+    if (!host) {
+      console.error('[CHART-2] mountChart aborted — chartHost missing');
       return;
     }
+    if (!tv) {
+      console.error('[CHART-3] mountChart aborted — LightweightCharts not on window (CDN blocked?)');
+      return;
+    }
+    const inDom = typeof document !== 'undefined' && document.contains(host);
+    const widthProbe = host.clientWidth;
+    const heightProbe = host.clientHeight;
+    console.log('[CHART-2] container', { inDom, width: widthProbe, height: heightProbe });
     this.tvChart?.remove();
     this.chartResize?.disconnect();
     this.lastIndicatorCandleKey = '';
@@ -4967,10 +5239,11 @@ export class AppComponent implements OnInit, AfterViewInit {
     const width = Math.max(host.clientWidth, 320);
     const height = Math.max(host.clientHeight, 360);
     const chartSurface = resolveChartSurfaceFromPalette(resolveThemePalette(this.themeSelection));
-    this.tvChart = tv.createChart(host, {
-      width,
-      height,
-      ...lightweightChartDisplayOptions(chartSurface),
+    try {
+      this.tvChart = tv.createChart(host, {
+        width,
+        height,
+        ...lightweightChartDisplayOptions(chartSurface),
       rightPriceScale: {
         borderColor: chartSurface.chartGrid,
         scaleMargins: { top: 0.08, bottom: 0.08 },
@@ -5000,7 +5273,14 @@ export class AppComponent implements OnInit, AfterViewInit {
         locale: 'en-IN',
         timeFormatter: (time: number) => istDateTime(time, true),
       },
-    });
+      });
+    } catch (err) {
+      console.error('[CHART-3] createChart threw', err);
+      this.tvChart = undefined;
+      this.candleSeries = undefined;
+      return;
+    }
+    console.log('[CHART-3] createChart success', { width, height });
     this.bindChartResize(host);
     this.candleSeries = this.tvChart.addCandlestickSeries({
       ...CHART_CANDLE_STYLE,
@@ -5010,7 +5290,9 @@ export class AppComponent implements OnInit, AfterViewInit {
       priceLineColor: CHART_CANDLE_STYLE.downColor,
     });
     const candles = this.toTvCandles(data.candles);
+    console.log('[CHART-4] series created; setData…', { count: candles.length });
     this.candleSeries.setData(candles);
+    console.log('[CHART-5] setData complete', { count: candles.length });
     const zones = this.chartZoneLevels(data);
     const lines = this.optionsChartTradeEnabled() ? [] : [
       { price: Number(zones.b2), color: '#238636', title: 'B2' },
@@ -5033,16 +5315,34 @@ export class AppComponent implements OnInit, AfterViewInit {
       );
     }
     this.createIndicatorSeries();
-    this.updateIndicators(data.candles);
+    // Session markers and drawings are lightweight; apply them synchronously.
     this.updateSessionMarkers(data);
     this.loadDrawings();
     this.renderDrawings();
     this.tvChart.timeScale().fitContent();
+    console.log('[CHART-6] fitContent complete', {
+      canvasesInHost: host.querySelectorAll('canvas').length,
+      canvasesInDoc: document.querySelectorAll('.tv-chart canvas').length,
+    });
+    // Defer heavy indicator math (MAs, BB, RSI) until after the first frame is painted.
+    // This lets the chart become interactive immediately while indicators load in the background.
+    const candleSnapshot = data.candles;
+    const scheduleIndicators = (): void => {
+      this.ngZone.runOutsideAngular(() => {
+        this.updateIndicators(candleSnapshot, true);
+      });
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(scheduleIndicators, { timeout: 2_000 });
+    } else {
+      setTimeout(scheduleIndicators, 0);
+    }
     this.tvChart.subscribeClick((param) => this.onChartClick(param));
     this.tvChart.subscribeCrosshairMove((param) => this.onCrosshairMove(param));
     this.ngZone.runOutsideAngular(() => {
       this.syncLiveChart();
     });
+    this.markChartApplied();
   }
 
   private createIndicatorSeries(): void {
@@ -5132,7 +5432,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     });
   }
 
-  private updateIndicators(candles = this.lastChart?.candles ?? []): void {
+  private updateIndicators(candles = this.lastChart?.candles ?? [], forceNow = false): void {
     const last = candles.at(-1);
     const candleKey = last ? `${candles.length}:${last.close}:${last.high}:${last.low}` : '';
     const activeKey = [...this.activeIndicators].sort().join(',');
@@ -5140,7 +5440,15 @@ export class AppComponent implements OnInit, AfterViewInit {
     if (revision === this.lastIndicatorCandleKey) {
       return;
     }
+    // Throttle live-tick recalcs to max once every 2 seconds to avoid blocking the main thread
+    // while the user is trading. Full data loads (candle count changes) always recalculate.
+    const now = Date.now();
+    const isLiveTick = candles.length === (this.lastChart?.candles.length ?? 0);
+    if (!forceNow && isLiveTick && now - this.lastIndicatorCalcMs < 2_000) {
+      return;
+    }
     this.lastIndicatorCandleKey = revision;
+    this.lastIndicatorCalcMs = now;
 
     const definitions: Partial<Record<IndicatorKind, { period: number; kind: 'sma' | 'ema' }>> = {
       sma20: { period: 20, kind: 'sma' },

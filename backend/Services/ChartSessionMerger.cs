@@ -213,4 +213,61 @@ public static class ChartSessionMerger
         var low = Math.Min(open, liveLast);
         return [new ChartBar(bucket.ToUnixTimeSeconds(), open, high, low, liveLast)];
     }
+
+    /// <summary>Aggregate intraday bars into NSE session buckets (09:15 anchor).</summary>
+    public static List<ChartBar> ResampleBars(IReadOnlyList<ChartBar> bars, string interval)
+    {
+        if (interval is "minute" or "day" || bars.Count == 0)
+        {
+            return bars.OrderBy(b => b.Time).ToList();
+        }
+
+        var step = StepMinutes(interval);
+        return bars
+            .GroupBy(b =>
+                BucketStartIst(TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(b.Time), Ist), step)
+                    .ToUnixTimeSeconds())
+            .OrderBy(g => g.Key)
+            .Select(g =>
+            {
+                var rows = g.OrderBy(b => b.Time).ToList();
+                return new ChartBar(
+                    g.Key,
+                    rows[0].Open,
+                    rows.Max(r => r.High),
+                    rows.Min(r => r.Low),
+                    rows[^1].Close);
+            })
+            .ToList();
+    }
+
+    /// <summary>True when median bar spacing is finer than the requested interval (broker sent 1m for 5m/15m/1h).</summary>
+    public static bool NeedsResample(IReadOnlyList<ChartBar> bars, string interval)
+    {
+        if (interval is "minute" or "day" || bars.Count < 3)
+        {
+            return false;
+        }
+
+        var expectedSec = StepMinutes(interval) * 60;
+        var deltas = new List<int>();
+        var limit = Math.Min(bars.Count, 40);
+        var ordered = bars.OrderBy(b => b.Time).ToList();
+        for (var i = 1; i < limit; i++)
+        {
+            deltas.Add((int)(ordered[i].Time - ordered[i - 1].Time));
+        }
+
+        if (deltas.Count == 0)
+        {
+            return false;
+        }
+
+        deltas.Sort();
+        var median = deltas[deltas.Count / 2];
+        return median < (int)(expectedSec * 0.6);
+    }
+
+    public static List<ChartBar> EnsureInterval(IReadOnlyList<ChartBar> bars, string interval) =>
+        NeedsResample(bars, interval) ? ResampleBars(bars, interval) : bars.OrderBy(b => b.Time).ToList();
 }

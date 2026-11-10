@@ -24,7 +24,51 @@
           <small class="zone-rollout-version">Policy {{ zoneRollout.policyVersion }}</small>
         </header>
 
-        <h3 class="zone-rollout-subhead">Catalog strategies (paper auto)</h3>
+        <h3 class="gap-strategies-head">Gap down · gap up</h3>
+        <p class="gap-strategies-intro">
+          Four gap clues from the Nifty 50 study — separate from zone and Ten AM.
+          All four gap playbooks can <strong>auto-enter paper</strong> when the pattern fires (09:20–10:45 IST on gap
+          days, Nifty 50) if the paper agent is running, auto-admit is ON, and the universe backtest qualifies that clue.
+        </p>
+        @if (gapStudyVerdict) {
+          <p class="gap-strategies-verdict" role="status">{{ gapStudyVerdict }}</p>
+        }
+        <div class="strategy-pnl-table-wrap">
+          <table class="strategy-pnl-table zone-rollout-table zone-auto-table gap-strategies-table">
+            <colgroup>
+              <col class="col-strategy" />
+              <col class="col-universe" />
+              <col class="col-gap-backtest" />
+              <col class="col-phase-sm" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Gap strategy</th>
+                <th scope="col">Universe</th>
+                <th scope="col">Nifty 50 backtest</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (entry of gapPlaybookRollout; track entry.id) {
+                <tr>
+                  <td>{{ entry.label }}</td>
+                  <td class="rollout-universe">{{ entry.universe }}</td>
+                  <td class="gap-rollout-backtest">{{ gapRolloutBacktestLabel(entry) }}</td>
+                  <td>
+                    @if (entry.paperAuto) {
+                      <span class="rollout-phase rollout-phase-auto">Paper auto</span>
+                    } @else {
+                      <span class="rollout-phase rollout-phase-monitor">Monitor</span>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="zone-rollout-subhead">Zone &amp; session (paper auto)</h3>
         <div class="strategy-pnl-table-wrap">
           <table class="strategy-pnl-table zone-rollout-table zone-auto-table">
             <colgroup>
@@ -213,13 +257,21 @@
       </div>
       <div class="strategy-pnl-stat">
         <span class="strategy-pnl-stat-label">Losses</span>
-        <span class="strategy-pnl-stat-value down">{{ pnlSummary.losingTrades }}</span>
+        <span class="strategy-pnl-stat-value" [class.down]="pnlSummary.losingTrades > 0">{{ pnlSummary.losingTrades }}</span>
       </div>
       <div class="strategy-pnl-stat">
         <span class="strategy-pnl-stat-label">Open</span>
         <span class="strategy-pnl-stat-value">{{ pnlSummary.openTrades }}</span>
       </div>
     </div>
+    @if (pnlRangeNote) {
+      <div class="strategy-pnl-range-note" role="status">{{ pnlRangeNote }}</div>
+    }
+    @if (pnlLoading && !pnlAwaitingCustomDate()) {
+      <p class="strategies-msg strategies-msg-inline strategy-pnl-loading" aria-busy="true">
+        Loading strategy P&amp;L for {{ pnlPeriodLabel() }}…
+      </p>
+    }
     @if (pnlShowEmptyHint()) {
       <div class="strategy-pnl-empty-hint" role="status">
         <p>{{ pnlEmptyHint() }}</p>
@@ -236,6 +288,16 @@
     } @else if (!pnlBreakdown.length) {
       <p class="strategies-msg">No strategy data for this period.</p>
     } @else {
+      @if (pnlBreakdownGap().length) {
+        <h3 class="gap-strategies-head gap-strategies-head--pnl">Gap down · gap up — P&amp;L</h3>
+        <ng-container *ngTemplateOutlet="pnlStrategyTable; context: { rows: pnlBreakdownGap() }" />
+      }
+      @if (pnlBreakdownCore().length) {
+        <h3 class="zone-rollout-subhead zone-rollout-subhead--pnl">Zone &amp; session — P&amp;L</h3>
+        <ng-container *ngTemplateOutlet="pnlStrategyTable; context: { rows: pnlBreakdownCore() }" />
+      }
+    }
+    <ng-template #pnlStrategyTable let-rows="rows">
       <div class="strategy-pnl-table-wrap">
         <table class="strategy-pnl-table">
           <colgroup>
@@ -256,7 +318,7 @@
             </tr>
           </thead>
           <tbody>
-            @for (row of pnlBreakdown; track row.strategy) {
+            @for (row of rows; track row.strategy) {
               <tr
                 class="strategy-pnl-row"
                 [class.active]="isStrategyFocusedInPaper(row.strategy)"
@@ -310,8 +372,10 @@
           </tbody>
         </table>
       </div>
-      <p class="strategy-pnl-footnote">Click a strategy name to open its <strong>Strategy Command Center</strong> (same period as above).</p>
-    }
+    </ng-template>
+      @if (pnlBreakdown.length) {
+        <p class="strategy-pnl-footnote">Click a strategy name to open its <strong>Strategy Command Center</strong> (same period as above).</p>
+      }
   </section>
 
   @if (loading && !feed) {
@@ -333,7 +397,7 @@
             </div>
             <div class="live-monitor-stat">
               <span>Auto setups</span>
-              <strong>{{ zonePaperAutoRowsCache.length + catalogPaperAutoEntries.length }}</strong>
+              <strong>{{ zonePaperAutoRowsCache.length + catalogPaperAutoEntries.length + gapPaperAutoRolloutCount() }}</strong>
             </div>
             <div class="live-monitor-stat">
               <span>Active signals</span>
@@ -362,48 +426,63 @@
           </svg>
         </div>
       } @else {
-        <div class="live-grid live-grid-compact">
-          @for (rec of liveRecommendationsCache; track rec.id) {
-            <article class="live-card">
-              <header>
-                <span class="live-badge">Happening now</span>
-                <strong>{{ rec.strategyName }}</strong>
-                <span class="live-symbol">{{ rec.symbol }} · {{ rec.direction }}</span>
-              </header>
-              <p class="live-headline">{{ rec.headline }}</p>
-              <ul class="live-why">
-                @for (line of rec.whyNow; track line) {
-                  <li>{{ line }}</li>
-                }
-              </ul>
-              <div class="live-levels">
-                <span>Entry <b>{{ rec.entryPrice | number: '1.2-2' }}</b></span>
-                <span>Stop <b class="down">{{ rec.stopLoss | number: '1.2-2' }}</b></span>
-                <span>Target <b class="up">{{ rec.target | number: '1.2-2' }}</b></span>
-                <span>R:R <b>{{ rec.rewardRisk | number: '1.2-2' }}</b></span>
-              </div>
-              <div class="live-pnl">
-                <span class="up">{{ rec.ifTargetHit[0] }}</span>
-                <span class="down">{{ rec.ifStopHit[0] }}</span>
-              </div>
-              <div class="live-rec-actions">
-                <button type="button" class="paper-trade-btn paper-trade-btn--ticket" (click)="openTradeTicket(rec)">
-                  Trade ticket
-                </button>
-                <button
-                  type="button"
-                  class="paper-trade-btn"
-                  [disabled]="paperBusy || !rec.canPaperTrade || !auth.isAdmin"
-                  (click)="takePaperTrade(rec)"
-                >
-                  Execute paper trade
-                </button>
-              </div>
-            </article>
-          }
-        </div>
+        @if (liveGapSignals().length) {
+          <h3 class="gap-strategies-head gap-strategies-head--live">Gap signals</h3>
+          <div class="live-grid live-grid-compact">
+            @for (rec of liveGapSignals(); track rec.id) {
+              <ng-container *ngTemplateOutlet="liveRecCard; context: { rec: rec }" />
+            }
+          </div>
+        }
+        @if (liveCoreSignals().length) {
+          <h3 class="zone-rollout-subhead zone-rollout-subhead--live">Zone &amp; session signals</h3>
+          <div class="live-grid live-grid-compact">
+            @for (rec of liveCoreSignals(); track rec.id) {
+              <ng-container *ngTemplateOutlet="liveRecCard; context: { rec: rec }" />
+            }
+          </div>
+        }
       }
     </section>
+
+    <ng-template #liveRecCard let-rec="rec">
+      <article class="live-card">
+        <header>
+          <span class="live-badge">Happening now</span>
+          <strong>{{ rec.strategyName }}</strong>
+          <span class="live-symbol">{{ rec.symbol }} · {{ rec.direction }}</span>
+        </header>
+        <p class="live-headline">{{ rec.headline }}</p>
+        <ul class="live-why">
+          @for (line of rec.whyNow; track line) {
+            <li>{{ line }}</li>
+          }
+        </ul>
+        <div class="live-levels">
+          <span>Entry <b>{{ rec.entryPrice | number: '1.2-2' }}</b></span>
+          <span>Stop <b class="down">{{ rec.stopLoss | number: '1.2-2' }}</b></span>
+          <span>Target <b class="up">{{ rec.target | number: '1.2-2' }}</b></span>
+          <span>R:R <b>{{ rec.rewardRisk | number: '1.2-2' }}</b></span>
+        </div>
+        <div class="live-pnl">
+          <span class="up">{{ rec.ifTargetHit[0] }}</span>
+          <span class="down">{{ rec.ifStopHit[0] }}</span>
+        </div>
+        <div class="live-rec-actions">
+          <button type="button" class="paper-trade-btn paper-trade-btn--ticket" (click)="openTradeTicket(rec)">
+            Trade ticket
+          </button>
+          <button
+            type="button"
+            class="paper-trade-btn"
+            [disabled]="paperBusy || !rec.canPaperTrade || !auth.isAdmin"
+            (click)="takePaperTrade(rec)"
+          >
+            Execute paper trade
+          </button>
+        </div>
+      </article>
+    </ng-template>
 
     @if (trackRecord) {
       <section class="month-track month-track--global" aria-label="Platform strategy track record">
@@ -471,84 +550,107 @@
       </section>
     }
 
-    <section class="strategy-tracker" aria-label="Strategy list">
+    <section class="strategy-tracker gap-strategies-tracker" aria-label="Gap strategies">
       <header class="strategy-tracker-head">
-        <h2>Your strategies</h2>
-        <span>{{ feed?.strategies?.length ?? 0 }} in catalog</span>
+        <h2 class="gap-strategies-head">Gap down · gap up</h2>
+        <span>{{ gapCatalogStrategies().length }} gap playbook{{ gapCatalogStrategies().length === 1 ? '' : 's' }}</span>
       </header>
       <div class="strategy-card-grid">
-        @for (item of feed?.strategies ?? []; track item.id) {
+        @for (item of gapCatalogStrategies(); track item.id) {
+          @let status = strategyOperationalStatus(item);
+          @let periodRow = pnlBreakdownRow(item.id);
+          @let spark = strategySparkline(item.id);
+          <article class="strategy-rich-card strategy-rich-card--gap" [class.strategy-rich-card-active]="status === 'active'">
+            <ng-container *ngTemplateOutlet="strategyRichCardBody; context: { item: item, status: status, periodRow: periodRow, spark: spark }" />
+          </article>
+        } @empty {
+          <p class="strategies-msg">Gap strategies will appear here (e.g. failed rally → gap down).</p>
+        }
+      </div>
+    </section>
+
+    <section class="strategy-tracker" aria-label="Zone and session strategies">
+      <header class="strategy-tracker-head">
+        <h2>Zone &amp; session strategies</h2>
+        <span>{{ coreCatalogStrategies().length }} in catalog</span>
+      </header>
+      <div class="strategy-card-grid">
+        @for (item of coreCatalogStrategies(); track item.id) {
           @let status = strategyOperationalStatus(item);
           @let periodRow = pnlBreakdownRow(item.id);
           @let spark = strategySparkline(item.id);
           <article class="strategy-rich-card" [class.strategy-rich-card-active]="status === 'active'">
-            <header class="strategy-rich-card-head">
-              <div>
-                <button type="button" class="strategy-rich-card-name" (click)="openStrategyCommandCenter(item.id)">{{ item.name }}</button>
-                <span class="strategy-rich-card-type">{{ strategyTypeLabel(item) }}</span>
-              </div>
-              <span class="strategy-status-pill" [class]="status">{{ strategyStatusLabel(status) }}</span>
-            </header>
-            @if (spark) {
-              <svg class="strategy-rich-sparkline" viewBox="0 0 120 36" aria-hidden="true">
-                <path class="strategy-spark-area" [class.up]="spark.positive" [class.down]="!spark.positive" [attr.d]="spark.areaPath" />
-                <path class="strategy-spark-line" [class.up]="spark.positive" [class.down]="!spark.positive" [attr.d]="spark.linePath" />
-              </svg>
-            }
-            <dl class="strategy-rich-metrics">
-              <div>
-                <dt>Trades (period)</dt>
-                <dd>{{ strategyTradeCountInPeriod(item.id) }}</dd>
-              </div>
-              <div>
-                <dt>This month</dt>
-                <dd>{{ monthlyCount(item.id) }}</dd>
-              </div>
-              <div>
-                <dt>Realized P&amp;L</dt>
-                <dd [class.up]="(periodRow?.realizedPnl ?? 0) > 0" [class.down]="(periodRow?.realizedPnl ?? 0) < 0">
-                  ₹{{ (periodRow?.realizedPnl ?? 0) | number: '1.0-0' }}
-                </dd>
-              </div>
-            </dl>
-            @if (periodRow && periodRow.closed > 0) {
-              <div class="strategy-rich-winrate">
-                <span>Win rate</span>
-                <div class="strategy-winrate-bar">
-                  <div class="strategy-winrate-fill" [style.width.%]="pnlRowWinRate(periodRow)"></div>
-                </div>
-                <b>{{ pnlRowWinRate(periodRow) | number: '1.0-1' }}%</b>
-              </div>
-            }
-            @if (liveForStrategy(item.id).length) {
-              <p class="strategy-rich-live">
-                Live: @for (r of liveForStrategy(item.id); track r.id) { <b>{{ r.symbol }}</b> }
-              </p>
-            }
-            <div class="strategy-rich-actions">
-              <button type="button" class="strategy-action-btn" (click)="openStrategyCommandCenter(item.id)">Command center</button>
-              <button type="button" class="strategy-action-btn subtle" (click)="openStrategyPlaybook(item)">
-                {{ statsExpanded(item.id) ? 'Hide details' : 'Details' }}
-              </button>
-            </div>
-            @if (statsExpanded(item.id)) {
-              <div class="strategy-rich-details">
-                <p>{{ item.summary }}</p>
-                <span class="strategy-rich-meta">{{ item.timeframe }} · {{ item.session }}</span>
-                @if (monthlyStat(item.id); as stat) {
-                  @if (stat.tradesThisMonth > 0) {
-                    <p class="strategy-row-stats">
-                      Month win {{ stat.winRatePercent | number: '1.0-1' }}%
-                      · P&amp;L ₹{{ stat.realizedPnl | number: '1.0-0' }}
-                      · peak capital ₹{{ stat.peakLiveCapital | number: '1.0-0' }}
-                    </p>
-                  }
-                }
-              </div>
-            }
+            <ng-container *ngTemplateOutlet="strategyRichCardBody; context: { item: item, status: status, periodRow: periodRow, spark: spark }" />
           </article>
         }
       </div>
     </section>
+
+    <ng-template #strategyRichCardBody let-item="item" let-status="status" let-periodRow="periodRow" let-spark="spark">
+      <header class="strategy-rich-card-head">
+        <div>
+          <button type="button" class="strategy-rich-card-name" (click)="openStrategyCommandCenter(item.id)">{{ item.name }}</button>
+          <span class="strategy-rich-card-type">{{ strategyTypeLabel(item) }}</span>
+        </div>
+        <span class="strategy-status-pill" [class]="status">{{ strategyStatusLabel(status) }}</span>
+      </header>
+      @if (spark) {
+        <svg class="strategy-rich-sparkline" viewBox="0 0 120 36" aria-hidden="true">
+          <path class="strategy-spark-area" [class.up]="spark.positive" [class.down]="!spark.positive" [attr.d]="spark.areaPath" />
+          <path class="strategy-spark-line" [class.up]="spark.positive" [class.down]="!spark.positive" [attr.d]="spark.linePath" />
+        </svg>
+      }
+      <dl class="strategy-rich-metrics">
+        <div>
+          <dt>Trades (period)</dt>
+          <dd>{{ strategyTradeCountInPeriod(item.id) }}</dd>
+        </div>
+        <div>
+          <dt>This month</dt>
+          <dd>{{ monthlyCount(item.id) }}</dd>
+        </div>
+        <div>
+          <dt>Realized P&amp;L</dt>
+          <dd [class.up]="(periodRow?.realizedPnl ?? 0) > 0" [class.down]="(periodRow?.realizedPnl ?? 0) < 0">
+            ₹{{ (periodRow?.realizedPnl ?? 0) | number: '1.0-0' }}
+          </dd>
+        </div>
+      </dl>
+      @if (periodRow && periodRow.closed > 0) {
+        <div class="strategy-rich-winrate">
+          <span>Win rate</span>
+          <div class="strategy-winrate-bar">
+            <div class="strategy-winrate-fill" [style.width.%]="pnlRowWinRate(periodRow)"></div>
+          </div>
+          <b>{{ pnlRowWinRate(periodRow) | number: '1.0-1' }}%</b>
+        </div>
+      }
+      @if (liveForStrategy(item.id).length) {
+        <p class="strategy-rich-live">
+          Live: @for (r of liveForStrategy(item.id); track r.id) { <b>{{ r.symbol }}</b> }
+        </p>
+      }
+      <div class="strategy-rich-actions">
+        <button type="button" class="strategy-action-btn" (click)="openStrategyCommandCenter(item.id)">Command center</button>
+        <button type="button" class="strategy-action-btn subtle" (click)="openStrategyPlaybook(item)">
+          {{ statsExpanded(item.id) ? 'Hide details' : 'Details' }}
+        </button>
+      </div>
+      @if (statsExpanded(item.id)) {
+        <div class="strategy-rich-details">
+          <p>{{ item.summary }}</p>
+          <span class="strategy-rich-meta">{{ item.timeframe }} · {{ item.session }}</span>
+          @if (monthlyStat(item.id); as stat) {
+            @if (stat.tradesThisMonth > 0) {
+              <p class="strategy-row-stats">
+                Month win {{ stat.winRatePercent | number: '1.0-1' }}%
+                · P&amp;L ₹{{ stat.realizedPnl | number: '1.0-0' }}
+                · peak capital ₹{{ stat.peakLiveCapital | number: '1.0-0' }}
+              </p>
+            }
+          }
+        </div>
+      }
+    </ng-template>
   }
 </section>

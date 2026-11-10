@@ -6,6 +6,8 @@ namespace TradeWithBeast.Services;
 public sealed class StrategyRecommendationEngine(
     MockMarketService market,
     ZoneSessionTracker zoneSessions,
+    GapSessionTracker gapSessions,
+    GapAnalyzerBenchmarkCache gapBenchmarks,
     TradeHistoryStore history)
 {
     private readonly object _backtestGate = new();
@@ -70,6 +72,14 @@ public sealed class StrategyRecommendationEngine(
                     live.Add(b1Rec);
                 }
             }
+
+            if (!isIndex)
+            {
+                if (TryRefreshGapSignal(symbol, istDay, now, ct, out var gapSig) && gapSig is not null)
+                {
+                    live.Add(ToGapRecommendation(gapSig, now));
+                }
+            }
         }
 
         live = live
@@ -94,6 +104,88 @@ public sealed class StrategyRecommendationEngine(
         }).ToList();
 
         return new(live, catalog, monthly, now);
+    }
+
+    /// <summary>Lightweight gap scan for paper agent (sets pending for auto-admit without full strategy feed).</summary>
+    public void RefreshGapLivePending(CancellationToken ct = default)
+    {
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        var now = DateTimeOffset.UtcNow;
+        var istDay = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, ist).DateTime);
+        var board = market.Snapshot();
+        foreach (var symbol in board.Symbols)
+        {
+            if (IndexUniverse.IsIndex(symbol.Name)
+                || !IndexUniverse.Nifty50.Contains(symbol.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            TryRefreshGapSignal(symbol, istDay, now, ct, out _);
+        }
+    }
+
+    private bool TryRefreshGapSignal(
+        SymbolSnapshot symbol,
+        DateOnly istDay,
+        DateTimeOffset now,
+        CancellationToken ct,
+        out GapFailedRallySignal? signal)
+    {
+        signal = null;
+        ChartResponse? chart5;
+        try
+        {
+            chart5 = market.ChartAsync(symbol.Name, GapFailedRallyPattern.ChartInterval, ct)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (chart5 is not { Candles.Count: > 0 }
+            || !GapFailedRallyPattern.TryBuildLiveSignal(symbol, chart5.Candles, now, out signal)
+            || signal is null
+            || !QualifiesGapSymbolForPaper(symbol.Name, signal.Strategy))
+        {
+            signal = null;
+            return false;
+        }
+
+        gapSessions.SetPending(signal, istDay);
+        return true;
+    }
+
+    private bool QualifiesGapSymbolForPaper(string symbol, string clueId)
+    {
+        gapBenchmarks.KickRefreshIfStale(market);
+        var snap = gapBenchmarks.Snapshot;
+        var featured = snap.FeaturedClue;
+        if (featured is not null
+            && string.Equals(featured.ClueId, clueId, StringComparison.OrdinalIgnoreCase)
+            && featured.TotalEvents >= GapDayStudy.MinSamplesPerClue
+            && featured.Qualifies)
+        {
+            return true;
+        }
+
+        var universeClue = snap.UniverseReport?.Clues
+            .FirstOrDefault(c => string.Equals(c.ClueId, clueId, StringComparison.OrdinalIgnoreCase));
+        if (universeClue is { Qualifies: true, TotalEvents: >= GapDayStudy.MinSamplesPerClue })
+        {
+            return true;
+        }
+
+        if (string.Equals(clueId, GapDayStudy.ClueFailedRallyGapDown, StringComparison.OrdinalIgnoreCase))
+        {
+            return QualifiesGapSymbol(symbol);
+        }
+
+        return universeClue is { TradeWins: > 0, TradeLosses: > 0 }
+            && universeClue.TradeWinRatePercent >= ZoneBoardPattern.MinWinRateToRecommend - 5m;
     }
 
     private bool TryBuildB1Recommendation(
@@ -156,6 +248,69 @@ public sealed class StrategyRecommendationEngine(
             true);
         return true;
     }
+
+    private bool QualifiesGapSymbol(string symbol)
+    {
+        gapBenchmarks.KickRefreshIfStale(market);
+        var snap = gapBenchmarks.Snapshot;
+        if (snap.FeaturedClue is { Qualifies: true })
+        {
+            return true;
+        }
+
+        if (snap.FailedRallyBySymbol.TryGetValue(symbol, out var row)
+            && row.TradeWins + row.TradeLosses >= 3)
+        {
+            return row.TradeWinRatePercent >= 50m;
+        }
+
+        return false;
+    }
+
+    private StrategyLiveRecommendation ToGapRecommendation(GapFailedRallySignal signal, DateTimeOffset now)
+    {
+        var catalogId = CatalogIdForGapClue(signal.Strategy);
+        var catalog = StrategyCatalog.Find(catalogId);
+        var entry = signal.Entry;
+        var riskInr = signal.RiskPoints;
+        var rewardInr = signal.RewardPoints;
+        var bullish = signal.Strategy == GapDayStudy.ClueStrongCloseGapUp;
+
+        return new StrategyLiveRecommendation(
+            $"{signal.Strategy}:{signal.Symbol}:{signal.SignalBarUnix}",
+            catalogId,
+            catalog?.Name ?? catalogId,
+            signal.Symbol,
+            bullish ? "BULLISH" : "BEARISH",
+            $"{signal.Symbol} — {catalog?.Name ?? "gap playbook"}. Paper auto eligible.",
+            "LIVE_NOW",
+            entry,
+            signal.StopLoss,
+            signal.Target,
+            signal.RiskPoints,
+            signal.RewardPoints,
+            riskInr,
+            rewardInr,
+            rewardInr / Math.Max(0.01m, riskInr),
+            signal.Evidence.ToList(),
+            [
+                bullish
+                    ? $"If target B2 {signal.Target:0.##} hits → profit about ₹{rewardInr:0.##} per share (paper)."
+                    : $"If target S2 {signal.Target:0.##} hits → profit about ₹{rewardInr:0.##} per share (paper).",
+            ],
+            [$"If stop {signal.StopLoss:0.##} hits → loss about ₹{riskInr:0.##} per share."],
+            signal.SignalBarUnix,
+            now,
+            true);
+    }
+
+    private static string CatalogIdForGapClue(string clueId) => clueId switch
+    {
+        GapDayStudy.ClueDistributionGapDown => StrategyCatalog.GapDistributionGapDownId,
+        GapDayStudy.ClueWeakCloseGapDown => StrategyCatalog.GapWeakCloseGapDownId,
+        GapDayStudy.ClueStrongCloseGapUp => StrategyCatalog.GapStrongCloseGapUpId,
+        _ => StrategyCatalog.GapFailedRallyGapDownId,
+    };
 
     private StrategyLiveRecommendation ToRecommendation(
         TenAmSignal signal,
@@ -235,6 +390,10 @@ public sealed class StrategyRecommendationEngine(
         StrategyCatalog.TenAmHighFadeId or TenAmIntradayPattern.HighFadeStrategy => StrategyCatalog.TenAmHighFadeId,
         StrategyCatalog.TenAmLowBreakToDayOpenId or TenAmIntradayPattern.LowBreakStrategy => StrategyCatalog.TenAmLowBreakToDayOpenId,
         StrategyCatalog.StockB1RejectionId or ZoneRejectionPattern.B1RejectionToS2 => StrategyCatalog.StockB1RejectionId,
+        StrategyCatalog.GapFailedRallyGapDownId or GapDayStudy.ClueFailedRallyGapDown => StrategyCatalog.GapFailedRallyGapDownId,
+        StrategyCatalog.GapDistributionGapDownId or GapDayStudy.ClueDistributionGapDown => StrategyCatalog.GapDistributionGapDownId,
+        StrategyCatalog.GapWeakCloseGapDownId or GapDayStudy.ClueWeakCloseGapDown => StrategyCatalog.GapWeakCloseGapDownId,
+        StrategyCatalog.GapStrongCloseGapUpId or GapDayStudy.ClueStrongCloseGapUp => StrategyCatalog.GapStrongCloseGapUpId,
         StrategyCatalog.ZoneB1BreakId or ZoneBoardPattern.B1BreakLong => StrategyCatalog.ZoneB1BreakId,
         StrategyCatalog.ZoneS1BreakId or ZoneBoardPattern.S1BreakShort => StrategyCatalog.ZoneS1BreakId,
         StrategyCatalog.ZoneS2BounceId or ZoneBoardPattern.S2BounceLong => StrategyCatalog.ZoneS2BounceId,
@@ -246,6 +405,10 @@ public sealed class StrategyRecommendationEngine(
         StrategyCatalog.TenAmHighFadeId => TenAmIntradayPattern.HighFadeStrategy,
         StrategyCatalog.TenAmLowBreakToDayOpenId => TenAmIntradayPattern.LowBreakStrategy,
         StrategyCatalog.StockB1RejectionId => ZoneRejectionPattern.B1RejectionToS2,
+        StrategyCatalog.GapFailedRallyGapDownId => GapDayStudy.ClueFailedRallyGapDown,
+        StrategyCatalog.GapDistributionGapDownId => GapDayStudy.ClueDistributionGapDown,
+        StrategyCatalog.GapWeakCloseGapDownId => GapDayStudy.ClueWeakCloseGapDown,
+        StrategyCatalog.GapStrongCloseGapUpId => GapDayStudy.ClueStrongCloseGapUp,
         StrategyCatalog.ZoneB1BreakId => ZoneBoardPattern.B1BreakLong,
         StrategyCatalog.ZoneS1BreakId => ZoneBoardPattern.S1BreakShort,
         StrategyCatalog.ZoneS2BounceId => ZoneBoardPattern.S2BounceLong,

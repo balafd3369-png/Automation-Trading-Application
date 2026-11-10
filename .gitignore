@@ -25,3 +25,5 @@ backend/_qty-test-out/
 backend/build-out/
 backend/render-publish-check/
 **/_test-out/
+sweep-result.json
+exports/

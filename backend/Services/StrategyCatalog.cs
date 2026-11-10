@@ -12,6 +12,10 @@ public static class StrategyCatalog
 
     public const string TenAmLowBreakToDayOpenId = "ten-am-low-break-to-day-open";
     public const string StockB1RejectionId = "stock-b1-rejection-to-s2";
+    public const string GapFailedRallyGapDownId = "gap-failed-rally-gap-down";
+    public const string GapDistributionGapDownId = "gap-distribution-gap-down";
+    public const string GapWeakCloseGapDownId = "gap-weak-close-gap-down";
+    public const string GapStrongCloseGapUpId = "gap-strong-close-gap-up";
     public const string ZoneB1BreakId = "zone-b1-break-b2";
     public const string ZoneS1BreakId = "zone-s1-break-s2";
     public const string ZoneS2BounceId = "zone-s2-bounce-b1";
@@ -22,6 +26,10 @@ public static class StrategyCatalog
         ZoneS1BreakToS2(),
         ZoneS2BounceToB1(),
         StockB1RejectionToS2(),
+        GapFailedRallyGapDown(),
+        GapDistributionGapDown(),
+        GapWeakCloseGapDown(),
+        GapStrongCloseGapUp(),
         TenAmHighFadeToDayLow(),
         TenAmLowBreakToDayOpen(),
     ];
@@ -158,7 +166,8 @@ public static class StrategyCatalog
         Author: "Trade with Beast",
         Summary:
             "From reference charts: green B1 is the first buy zone. A 5m close above B1 after price was at/below B1 "
-            + "→ LONG. Target B2 (upper buy zone). Stop at pivot S. No trade when B1–S1 is tight.",
+            + "→ LONG when board breadth confirms (Buying count ≥ 5 and Buying/Selling ≥ 1.25 on verified quotes). "
+            + "Target B2. Stop at pivot S. No trade when B1–S1 is tight.",
         Timeframe: "5 minute candles (board zones)",
         Session: "NSE cash & indices · 9:15–15:30 IST",
         Status: "paper-ready",
@@ -235,6 +244,117 @@ public static class StrategyCatalog
             Risk: new StrategyRiskRules(
                 MaxAttemptsPerDay: "2 per setup per symbol.",
                 Notes: "Skip when |B1−S1| is tight (indices/stocks rules). RANGE between S1 and B1 — wait for a zone break or S2 reclaim."));
+
+    private static StrategyCatalogEntry GapFailedRallyGapDown() => new(
+        Id: GapFailedRallyGapDownId,
+        Name: "Failed rally → gap down (short)",
+        Author: "Trade with Beast",
+        Summary:
+            "Nifty 50 equities: prior session opened ≥ B1 but closed below B1 (failed rally); next session gaps down ≥ 0.35%. "
+            + "Paper auto shorts cash equity toward S2 with stop above session high. Full trigger timing and 5m candle context stored on each trade.",
+        Timeframe: "5 minute candles · entry window 09:20–10:45 IST",
+        Session: "Nifty 50 stocks",
+        Status: "paper-ready",
+        Tags: ["stocks", "gap", "zones", "backtest-gated", "paper-auto"],
+        Playbook: new StrategyPlaybook(
+            Intent: "Overnight continuation after failed B1 breakout.",
+            Phases:
+            [
+                new StrategyPhase("Prior", "Failed rally", "Open ≥ B1, close < open and < B1."),
+                new StrategyPhase("Today", "Gap", "Open gaps down vs prior close ≥ 0.35%."),
+                new StrategyPhase("Entry", "Window", "09:20–10:45 IST — short toward S2, stop session high."),
+            ],
+            PrimarySetup: new StrategyTradePlan(
+                Name: "Gap down continuation",
+                Direction: "SHORT stock",
+                ValidFromIst: "09:20–10:45",
+                Trigger: "Gap signal from 5m history + live open.",
+                Target: "Today S2",
+                StopLoss: "Above session high",
+                Reentry: "One auto attempt per symbol per day."),
+            AlternateSetup: null,
+            Risk: new StrategyRiskRules(
+                MaxAttemptsPerDay: "1 per symbol",
+                Notes: "Universe backtest must qualify; per-symbol stats logged when available.")));
+
+    private static StrategyCatalogEntry GapDistributionGapDown() => new(
+        Id: GapDistributionGapDownId,
+        Name: "Distribution → gap down (short)",
+        Author: "Trade with Beast",
+        Summary:
+            "Prior session distribution (open ≥ B1, close ≤ S1); next session gaps down ≥ 0.35%. "
+            + "Paper auto shorts toward S2 when universe backtest qualifies.",
+        Timeframe: "5 minute candles · entry window 09:20–10:45 IST",
+        Session: "Nifty 50 stocks",
+        Status: "paper-ready",
+        Tags: ["stocks", "gap", "zones", "backtest-gated", "paper-auto"],
+        Playbook: GapMonitorPlaybook(
+            "Gunshot / distribution day then overnight gap down.",
+            "SHORT",
+            "Prior distribution + gap down ≥ 0.35%.",
+            "Today S2",
+            "Above session high"));
+
+    private static StrategyCatalogEntry GapWeakCloseGapDown() => new(
+        Id: GapWeakCloseGapDownId,
+        Name: "Weak close → gap down (short)",
+        Author: "Trade with Beast",
+        Summary:
+            "Prior close below S1; gap down next session ≥ 0.35%. Paper auto short toward S2 when backtest qualifies.",
+        Timeframe: "5 minute candles · entry window 09:20–10:45 IST",
+        Session: "Nifty 50 stocks",
+        Status: "paper-ready",
+        Tags: ["stocks", "gap", "zones", "backtest-gated", "paper-auto"],
+        Playbook: GapMonitorPlaybook(
+            "Weak close under S1 then gap down.",
+            "SHORT",
+            "Close < S1 prior day + gap down ≥ 0.35%.",
+            "Today S2",
+            "Above session high"));
+
+    private static StrategyCatalogEntry GapStrongCloseGapUp() => new(
+        Id: GapStrongCloseGapUpId,
+        Name: "Strong close → gap up (long)",
+        Author: "Trade with Beast",
+        Summary:
+            "Prior close ≥ B1; gap up next session ≥ 0.35%. Paper auto long toward B2 when backtest qualifies.",
+        Timeframe: "5 minute candles · entry window 09:20–10:45 IST",
+        Session: "Nifty 50 stocks",
+        Status: "paper-ready",
+        Tags: ["stocks", "gap", "zones", "backtest-gated", "paper-auto"],
+        Playbook: GapMonitorPlaybook(
+            "Strong close at/above B1 then gap up.",
+            "LONG",
+            "Close ≥ B1 prior day + gap up ≥ 0.35%.",
+            "Today B2",
+            "Below session low / S1"));
+
+    private static StrategyPlaybook GapMonitorPlaybook(
+        string intent,
+        string direction,
+        string trigger,
+        string target,
+        string stop) =>
+        new(
+            Intent: intent,
+            Phases:
+            [
+                new StrategyPhase("Prior", "Zone context", trigger),
+                new StrategyPhase("Gap", "Open", "Open vs prior close ≥ 0.35%."),
+                new StrategyPhase("Trade", "Monitor", $"Direction {direction}. Target {target}. Stop {stop}. Verified on Analyzer only."),
+            ],
+            PrimarySetup: new StrategyTradePlan(
+                Name: intent,
+                Direction: direction,
+                ValidFromIst: "At/after open",
+                Trigger: trigger,
+                Target: target,
+                StopLoss: stop,
+                Reentry: "Manual / Analyzer cards only."),
+            AlternateSetup: null,
+            Risk: new StrategyRiskRules(
+                MaxAttemptsPerDay: "Monitor",
+                Notes: "Listed under Gap down · gap up on Strategies — not mixed with zone auto-admit."));
 
     private static StrategyCatalogEntry StockB1RejectionToS2() => new(
         Id: StockB1RejectionId,

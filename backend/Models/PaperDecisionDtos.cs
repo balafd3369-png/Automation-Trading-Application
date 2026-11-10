@@ -140,4 +140,5 @@ public sealed record PaperTradeHistoryResponse(
     string UserId,
     string Range,
     TradeHistorySummary Summary,
-    IReadOnlyList<PaperTradeHistorySnapshot> Trades);
+    IReadOnlyList<PaperTradeHistorySnapshot> Trades,
+    string? RangeNote = null);

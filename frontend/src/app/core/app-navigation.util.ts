@@ -46,6 +46,26 @@ const OPERATIONS_TABS = new Set<AppOperationsTab>([
   'reconciliation',
 ]);
 export const APP_NAV_STORAGE_KEY = 'twb-app-navigation';
+export const MARKET_SYMBOL_PICK_KEY = 'twb-market-symbol-pick';
+
+export function stashMarketSymbolPick(symbolName: string): void {
+  if (typeof window === 'undefined' || !symbolName.trim()) {
+    return;
+  }
+  sessionStorage.setItem(MARKET_SYMBOL_PICK_KEY, symbolName.trim().toUpperCase());
+}
+
+export function consumeMarketSymbolPick(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const raw = sessionStorage.getItem(MARKET_SYMBOL_PICK_KEY);
+  if (!raw) {
+    return null;
+  }
+  sessionStorage.removeItem(MARKET_SYMBOL_PICK_KEY);
+  return raw;
+}
 
 function normalizeAppNavigationState(value: Partial<AppNavigationState> | null | undefined): AppNavigationState {
   const centerView =

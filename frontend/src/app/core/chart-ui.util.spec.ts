@@ -7,6 +7,8 @@ import {
   mergeChartCandlesStable,
   boardDisplayLast,
   clampIntradayBarWicks,
+  ensureChartInterval,
+  istSessionBucketStart,
   normalizeChartCandles,
   bollingerBands,
   extendTrendSegment,
@@ -29,6 +31,21 @@ function bars(values: number[], start = Date.UTC(2026, 8, 15, 3, 45) / 1000): Ch
 }
 
 describe('chart UI utilities', () => {
+  it('ensureChartInterval collapses 60s spacing into 5m buckets', () => {
+    const sessionStart = istSessionBucketStart(Math.floor(Date.now() / 1000), 5);
+    const minuteBars: ChartBar[] = [];
+    for (let i = 0; i < 25; i++) {
+      const t = sessionStart + i * 60;
+      minuteBars.push({ time: t, open: 100, high: 101, low: 99, close: 100 + i * 0.1 });
+    }
+    const five = ensureChartInterval(minuteBars, '5minute');
+    expect(five.length).toBeLessThan(minuteBars.length);
+    expect(five.length).toBeGreaterThanOrEqual(5);
+    for (let i = 1; i < five.length; i++) {
+      expect(five[i].time - five[i - 1].time).toBe(300);
+    }
+  });
+
   it('calculates SMA values at the matching candle timestamps', () => {
     const result = movingAverage(bars([10, 20, 30, 40]), 3, 'sma');
     expect(result).toEqual([

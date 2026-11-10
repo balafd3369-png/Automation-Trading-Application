@@ -21,6 +21,10 @@ public static class FeedPaperCandidateBuilder
             TenAmIntradayPattern.HighFadeStrategy or TenAmIntradayPattern.LowBreakStrategy
                 => BuildTenAm(rec, strategyCode, context),
             ZoneRejectionPattern.B1RejectionToS2 => BuildB1(rec, context),
+            GapDayStudy.ClueFailedRallyGapDown
+            or GapDayStudy.ClueDistributionGapDown
+            or GapDayStudy.ClueWeakCloseGapDown
+            or GapDayStudy.ClueStrongCloseGapUp => BuildGapPlaybook(rec, context),
             _ => null,
         };
     }
@@ -107,6 +111,55 @@ public static class FeedPaperCandidateBuilder
             risk,
             reward,
             indexSpot.Quote.DataTimestamp);
+    }
+
+    private static StrategyCandidate? BuildGapPlaybook(
+        StrategyLiveRecommendation rec,
+        IReadOnlyList<MarketContextSnapshot> context)
+    {
+        if (IndexUniverse.IsIndex(rec.Symbol))
+        {
+            return null;
+        }
+
+        var spot = context.FirstOrDefault(x =>
+            x.Symbol.Equals(rec.Symbol, StringComparison.OrdinalIgnoreCase)
+            && x.InstrumentType == "STOCK");
+        if (spot is null || spot.Last <= 0)
+        {
+            return null;
+        }
+
+        var bullish = rec.Direction.Equals("BULLISH", StringComparison.OrdinalIgnoreCase);
+        var side = bullish ? "BUY" : "SELL";
+        var risk = bullish ? spot.Last - rec.StopLoss : rec.StopLoss - spot.Last;
+        var reward = bullish ? rec.Target - spot.Last : spot.Last - rec.Target;
+        if (risk <= 0 || reward <= 0)
+        {
+            risk = rec.RiskPoints;
+            reward = rec.RewardPoints;
+        }
+
+        if (risk <= 0 || reward <= 0)
+        {
+            return null;
+        }
+
+        var strategyCode = StrategyRecommendationEngine.StrategyCodeFromCatalog(
+            StrategyRecommendationEngine.MapStrategyCode(rec.StrategyId));
+
+        return new StrategyCandidate(
+            strategyCode,
+            rec.Symbol,
+            bullish ? "BULLISH" : "BEARISH",
+            82m,
+            rec.WhyNow,
+            [new(spot.Symbol, spot.Symbol, "STOCK", side, 1, spot.Last, Quote: spot.Quote)],
+            rec.StopLoss,
+            rec.Target,
+            risk,
+            reward,
+            spot.Quote.DataTimestamp);
     }
 
     private static StrategyCandidate? BuildB1(

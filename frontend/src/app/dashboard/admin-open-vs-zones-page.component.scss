@@ -1,0 +1,170 @@
+﻿.admin-zones {
+  min-height: 100vh;
+  padding: 1.25rem 1.75rem 2rem;
+  background: #0d1118;
+  color: #e8ecf4;
+}
+
+.admin-zones-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.admin-zones-head h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+}
+
+.admin-zones-head p {
+  margin: 0;
+  max-width: 42rem;
+  font-size: 0.9rem;
+  opacity: 0.85;
+}
+
+.admin-zones-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.admin-zones-actions a,
+.admin-zones-actions button,
+.admin-zones-filter button,
+.admin-zones-kind button,
+.trade-btn {
+  color: #8ec8ff;
+  background: #121820;
+  border: 1px solid #3a4558;
+  border-radius: 6px;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+
+.admin-zones-meta {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin: 0 0 0.75rem;
+}
+
+.admin-zones-kind,
+.admin-zones-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.admin-zones-kind button.active,
+.admin-zones-filter button.active {
+  border-color: #3fb950;
+  color: #3fb950;
+}
+
+.admin-zones-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.88rem;
+}
+
+.admin-zones-table-wrap {
+  overflow: auto;
+  border: 1px solid #2a3344;
+  border-radius: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  min-width: 960px;
+}
+
+th,
+td {
+  border-bottom: 1px solid #2a3344;
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+th {
+  background: #121820;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.zone-b1,
+.zone-b2 {
+  color: #3fb950;
+}
+
+.zone-s1,
+.zone-s2 {
+  color: #f85149;
+}
+
+.zone-s {
+  color: #79b8ff;
+}
+
+.band {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  background: #1a2332;
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
+.flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.2rem;
+}
+
+.flag {
+  font-size: 0.68rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+}
+
+.flag.up {
+  color: #3fb950;
+  border: 1px solid rgba(63, 185, 80, 0.35);
+}
+
+.flag.down {
+  color: #f85149;
+  border: 1px solid rgba(248, 81, 73, 0.35);
+}
+
+.trade-btn {
+  font-weight: 600;
+}
+
+.empty {
+  text-align: center;
+  opacity: 0.7;
+  padding: 1.5rem !important;
+}
+
+.admin-zones-error {
+  color: #f85149;
+}
+
+.admin-zones-foot {
+  margin-top: 1rem;
+  font-size: 0.78rem;
+  opacity: 0.65;
+}

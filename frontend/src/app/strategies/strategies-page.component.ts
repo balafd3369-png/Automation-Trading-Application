@@ -1,8 +1,6 @@
-import { DecimalPipe } from '@angular/common';
+import { DecimalPipe, NgTemplateOutlet } from '@angular/common';
 
 import {
-
-  AfterViewInit,
 
   ChangeDetectionStrategy,
 
@@ -46,6 +44,8 @@ import {
 
   switchMap,
 
+  tap,
+
 } from 'rxjs';
 
 import { buildStrategyCommandCenterUrl } from '../core/strategy-command-center-navigation.util';
@@ -78,6 +78,18 @@ import {
   tradeMatchesCatalogStrategy,
 
 } from '../core/trading-ui.util';
+
+import {
+  GAP_PLAYBOOK_ROLLOUT,
+  GapPlaybookRolloutEntry,
+  catalogEntryIsGapStrategy,
+  isGapCatalogStrategyId,
+  liveRecommendationIsGap,
+} from '../core/gap-strategy.util';
+import {
+  GapStudyClueSummary,
+  GapStudyUniverseResponse,
+} from '../core/user-dashboard.models';
 
 import {
 
@@ -113,7 +125,7 @@ import { StrategiesPageStore, StrategyPnlQuery } from './strategies-page.store';
 
   standalone: true,
 
-  imports: [DecimalPipe, FormsModule, RouterLink],
+  imports: [DecimalPipe, FormsModule, NgTemplateOutlet, RouterLink],
 
   templateUrl: './strategies-page.component.html',
 
@@ -123,7 +135,7 @@ import { StrategiesPageStore, StrategyPnlQuery } from './strategies-page.store';
 
 })
 
-export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges {
+export class StrategiesPageComponent implements OnInit, OnChanges {
 
   private readonly board = inject(BoardService);
   readonly auth = inject(AuthService);
@@ -170,6 +182,8 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
   pnlLoading = true;
 
   pnlLoadError = '';
+
+  pnlRangeNote = '';
 
   error = '';
 
@@ -261,6 +275,15 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
   ];
 
+  /** Gap playbooks (all paper-auto when backtest qualifies) — separate from zone / Ten AM / B1. */
+  readonly gapPlaybookRollout = GAP_PLAYBOOK_ROLLOUT;
+
+  gapStudyByClue = new Map<string, GapStudyClueSummary>();
+
+  gapStudyLoading = false;
+
+  gapStudyVerdict = '';
+
 
 
   private static readonly ZONE_CANONICAL_TO_ROLLOUT_CODE: Record<string, string> = {
@@ -277,7 +300,9 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
   ngOnChanges(changes: SimpleChanges): void {
 
-    if (changes['active']?.currentValue === true) {
+    const activeChange = changes['active'];
+
+    if (activeChange?.currentValue === true && activeChange.previousValue !== true) {
 
       queueMicrotask(() => this.scrollPageToTop());
 
@@ -287,41 +312,44 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
 
 
-  ngAfterViewInit(): void {
+  private scrollPageToTop(): void {
 
-    if (this.active) {
+    const page = this.scrollContainer();
 
-      this.scrollPageToTop();
+    if (!page) {
+
+      return;
+
+    }
+
+    page.scrollTop = 0;
+
+  }
+
+  /** Keep scroll position when live polls refresh tables (feed / P&L / rollout). */
+  private withScrollPreserved(run: () => void): void {
+
+    const page = this.scrollContainer();
+
+    const y = page?.scrollTop ?? 0;
+
+    run();
+
+    if (page && y > 0) {
+
+      queueMicrotask(() => {
+
+        page.scrollTop = y;
+
+      });
 
     }
 
   }
 
+  private scrollContainer(): HTMLElement | null {
 
-
-  private scrollPageToTop(): void {
-
-    const run = (): void => {
-
-      const page = this.host.nativeElement.querySelector('.strategies-page') as HTMLElement | null;
-
-      if (page) {
-
-        page.scrollTop = 0;
-
-      }
-
-    };
-
-    run();
-
-    requestAnimationFrame(() => {
-
-      run();
-
-      requestAnimationFrame(run);
-
-    });
+    return this.host.nativeElement.querySelector('.strategies-page');
 
   }
 
@@ -342,6 +370,8 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
     this.refreshRolloutRows();
 
     this.refreshLiveRecommendations();
+
+    this.loadGapStudyBenchmark();
 
 
     const initialPnl = this.pnlPaperTradesQuery();
@@ -368,15 +398,19 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
       .subscribe((feed) => {
 
-        this.feed = feed;
+        this.withScrollPreserved(() => {
 
-        this.error = feed ? '' : this.store.snapshotFeedError();
+          this.feed = feed;
 
-        this.loading = false;
+          this.error = feed ? '' : this.store.snapshotFeedError();
 
-        this.refreshLiveRecommendations();
+          this.loading = false;
 
-        this.cdr.markForCheck();
+          this.refreshLiveRecommendations();
+
+          this.cdr.markForCheck();
+
+        });
 
       });
 
@@ -390,9 +424,13 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
       .subscribe((record) => {
 
-        this.trackRecord = record;
+        this.withScrollPreserved(() => {
 
-        this.cdr.markForCheck();
+          this.trackRecord = record;
+
+          this.cdr.markForCheck();
+
+        });
 
       });
 
@@ -406,17 +444,15 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
       .subscribe((rollout) => {
 
-        this.zoneRollout = rollout;
+        this.withScrollPreserved(() => {
 
-        this.refreshRolloutRows();
+          this.zoneRollout = rollout;
 
-        if (this.active) {
+          this.refreshRolloutRows();
 
-          this.scrollPageToTop();
+          this.cdr.markForCheck();
 
-        }
-
-        this.cdr.markForCheck();
+        });
 
       });
 
@@ -425,6 +461,30 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
     this.pnlQuery$
 
       .pipe(
+
+        tap((query) => {
+
+          if (this.pnlAwaitingCustomDateForQuery(query)) {
+
+            return;
+
+          }
+
+          const cached = this.store.snapshotPaperTrades(query);
+
+          this.pnlLoading = !cached;
+
+          if (cached) {
+
+            this.paperHistoryTrades = filterExecutedPaperHistoryTrades(cached);
+
+            this.refreshPnlDerived();
+
+          }
+
+          this.cdr.markForCheck();
+
+        }),
 
         switchMap((query) => {
 
@@ -436,7 +496,9 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
           const cached = this.store.snapshotPaperTrades(query);
 
-          return this.store.watchPaperTrades(query).pipe(startWith(cached ?? []));
+          const stream = this.store.watchPaperTrades(query);
+
+          return cached ? stream.pipe(startWith(cached)) : stream;
 
         }),
 
@@ -446,15 +508,21 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
       .subscribe((trades) => {
 
-        this.paperHistoryTrades = filterExecutedPaperHistoryTrades(trades);
+        this.withScrollPreserved(() => {
 
-        this.pnlLoading = false;
+          this.paperHistoryTrades = filterExecutedPaperHistoryTrades(trades);
 
-        this.pnlLoadError = this.store.snapshotPnlError();
+          this.pnlLoading = false;
 
-        this.refreshPnlDerived();
+          this.pnlLoadError = this.store.snapshotPnlError();
 
-        this.cdr.markForCheck();
+          this.pnlRangeNote = this.store.snapshotPnlRangeNote(this.pnlPaperTradesQuery());
+
+          this.refreshPnlDerived();
+
+          this.cdr.markForCheck();
+
+        });
 
       });
 
@@ -472,7 +540,9 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
     this.pnlDateTo = null;
 
-    this.pushPnlQuery();
+    this.pnlLoadError = '';
+
+    this.pushPnlQuery(true);
 
   }
 
@@ -721,7 +791,10 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
       return this.pnlLoadError;
     }
     if (this.pnlRange === 'today') {
-      return 'No catalog paper trades for today (IST). Older closes count under 1 Week or 1 Month — the table below still lists every strategy with zero until there is activity.';
+      return 'No strategy paper trades for today (IST) on your account. Trades from earlier days show under 1 Week or 1 Month — not under 1 Day.';
+    }
+    if (this.pnlRange === '1w') {
+      return 'No strategy paper trades in the last 7 IST calendar days. If you see activity on 1 Month, those closes are older than a week.';
     }
     return 'No catalog paper trades in this period. Start the paper agent (Trade Details → Agent) or widen the date range.';
   }
@@ -771,7 +844,61 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
 
 
+  loadGapStudyBenchmark(): void {
+    this.gapStudyLoading = true;
+    this.board
+      .gapStudyUniverse(120, 'nifty50')
+      .pipe(
+        catchError(() => of(null)),
+        finalize(() => {
+          this.gapStudyLoading = false;
+          this.cdr.markForCheck();
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((payload: GapStudyUniverseResponse | null) => {
+        this.gapStudyByClue.clear();
+        if (payload?.report?.clues) {
+          for (const clue of payload.report.clues) {
+            this.gapStudyByClue.set(clue.clueId, clue);
+          }
+          this.gapStudyVerdict = payload.report.verdict ?? '';
+        }
+        this.cdr.markForCheck();
+      });
+  }
+
+  gapClueStats(clueId: string): GapStudyClueSummary | null {
+    return this.gapStudyByClue.get(clueId) ?? null;
+  }
+
+  gapRolloutBacktestLabel(entry: GapPlaybookRolloutEntry): string {
+    const s = this.gapClueStats(entry.clueId);
+    if (!s) {
+      return this.gapStudyLoading ? 'Loading…' : '—';
+    }
+    const trades = s.tradeWins + s.tradeLosses;
+    const cont = `${s.avgContinuationRatePercent.toFixed(0)}% gap-day cont`;
+    if (trades === 0) {
+      return `${cont} · ${s.totalEvents} pattern hits`;
+    }
+    return `${s.tradeWinRatePercent.toFixed(1)}% sim (${s.tradeWins}W/${s.tradeLosses}L) · ${cont}`;
+  }
+
+  gapPaperAutoRolloutCount(): number {
+    return this.gapPlaybookRollout.filter((e: GapPlaybookRolloutEntry) => e.paperAuto).length;
+  }
+
   strategyRowPaperAutoLabel(canonicalStrategyId: string): string | null {
+
+    const gapPlaybook = this.gapPlaybookRollout.find(
+      (e: GapPlaybookRolloutEntry) => e.id === canonicalStrategyId,
+    );
+    if (gapPlaybook) {
+      return gapPlaybook.paperAuto
+        ? `Paper auto · ${gapPlaybook.universe}`
+        : 'Monitor · Select Stock · Analyzer';
+    }
 
     const catalogEntry = this.catalogPaperAutoEntries.find((e) => e.id === canonicalStrategyId);
 
@@ -1045,6 +1172,9 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
 
   strategyOperationalStatus(item: StrategyCatalogEntry): StrategyOperationalStatus {
     if (item.status === 'planned') {
+      if (catalogEntryIsGapStrategy(item)) {
+        return 'idle';
+      }
       return 'disabled';
     }
     const autoLabel = this.strategyRowPaperAutoLabel(item.id);
@@ -1075,7 +1205,37 @@ export class StrategiesPageComponent implements OnInit, AfterViewInit, OnChanges
     }
   }
 
+  gapCatalogStrategies(): StrategyCatalogEntry[] {
+    return (this.feed?.strategies ?? []).filter((item) => catalogEntryIsGapStrategy(item));
+  }
+
+  coreCatalogStrategies(): StrategyCatalogEntry[] {
+    return (this.feed?.strategies ?? []).filter((item) => !catalogEntryIsGapStrategy(item));
+  }
+
+  liveGapSignals(): StrategyLiveRecommendation[] {
+    return this.liveRecommendationsCache.filter((rec) => liveRecommendationIsGap(rec));
+  }
+
+  liveCoreSignals(): StrategyLiveRecommendation[] {
+    return this.liveRecommendationsCache.filter((rec) => !liveRecommendationIsGap(rec));
+  }
+
+  pnlBreakdownGap(): PaperHistoryStrategyBreakdownRow[] {
+    return this.pnlBreakdown.filter((row) => isGapCatalogStrategyId(row.strategy));
+  }
+
+  pnlBreakdownCore(): PaperHistoryStrategyBreakdownRow[] {
+    return this.pnlBreakdown.filter((row) => !isGapCatalogStrategyId(row.strategy));
+  }
+
   strategyTypeLabel(item: StrategyCatalogEntry): string {
+    if (catalogEntryIsGapStrategy(item)) {
+      if (item.id.includes('gap-up') || item.name.toLowerCase().includes('gap up')) {
+        return 'Gap up';
+      }
+      return item.status === 'planned' ? 'Gap · monitor' : 'Gap down';
+    }
     if (item.id.startsWith('zone-')) {
       return 'Zone breakout';
     }

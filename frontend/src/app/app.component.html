@@ -1,4 +1,4 @@
-<div class="ide" [class.ide-auth-route]="fullPageRoute">
+<div class="ide" [class.ide-auth-route]="fullPageRoute" [class.ide-feature-route]="featureRoute">
   @if (pickerOpen) {
     <div
       id="symbolSearchPanel"
@@ -122,6 +122,12 @@
       >
         OPTIONS
       </button>
+      <a
+        class="top-nav-btn top-nav-btn-select"
+        routerLink="/market/select-stock"
+        routerLinkActive="active"
+        >SELECT STOCK</a
+      >
       <button
         type="button"
         class="top-nav-btn top-nav-btn-strategies"

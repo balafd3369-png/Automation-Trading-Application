@@ -42,7 +42,7 @@ public static class ZoneStrategyRollout
             return index switch
             {
                 "BANKNIFTY" or "FINNIFTY" or "SENSEX" => PhasePaperAuto,
-                "NIFTY" => PhaseMonitor,
+                "NIFTY" => PhasePaperAuto,
                 _ => PhaseMonitor,
             };
         }
@@ -79,7 +79,7 @@ public static class ZoneStrategyRollout
 
         if (pattern == ZoneBoardPattern.B1BreakLong && index == "NIFTY")
         {
-            return "90d backtest: win rate below 55%; monitor and review before auto.";
+            return "B1 break with board breadth gate (buying≥5, ratio≥1.25); paper auto enabled.";
         }
 
         if (pattern == ZoneBoardPattern.S1BreakShort && (index == "BANKNIFTY" || index == "FINNIFTY"))

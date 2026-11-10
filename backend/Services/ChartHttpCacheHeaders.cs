@@ -8,8 +8,8 @@ public static class ChartHttpCacheHeaders
 {
     public static void Apply(HttpResponse response, ChartLoadDepth depth, ChartResponse chart)
     {
-        var maxAge = depth == ChartLoadDepth.Fast ? 15 : 45;
-        var stale = depth == ChartLoadDepth.Fast ? 90 : 180;
+        var maxAge = depth switch { ChartLoadDepth.Fast => 15, ChartLoadDepth.Mid => 30, _ => 45 };
+        var stale  = depth switch { ChartLoadDepth.Fast => 90, ChartLoadDepth.Mid => 120, _ => 180 };
         response.GetTypedHeaders().CacheControl = new CacheControlHeaderValue
         {
             Public = true,
@@ -25,7 +25,7 @@ public static class ChartHttpCacheHeaders
             var tag =
                 $"\"twb-{chart.Name.ToUpperInvariant()}-{tail.Time}-{tail.Close:0.####}-{chart.Candles.Count}\"";
             response.Headers.ETag = tag;
-            response.Headers["X-Chart-Depth"] = depth == ChartLoadDepth.Fast ? "fast" : "full";
+            response.Headers["X-Chart-Depth"] = depth switch { ChartLoadDepth.Fast => "fast", ChartLoadDepth.Mid => "mid", _ => "full" };
         }
     }
 }

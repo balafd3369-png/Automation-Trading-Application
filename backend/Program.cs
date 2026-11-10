@@ -73,6 +73,7 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{listenPort}");
 
 
 builder.Services.AddControllers();
+builder.Services.AddMemoryCache();
 
 builder.Services.AddSignalR(options =>
 
@@ -204,7 +205,13 @@ builder.Services.AddSingleton<ZoneBoardBrokerOptionPremiumService>();
 
 builder.Services.AddSingleton<TenAmSessionTracker>();
 
+builder.Services.AddSingleton<GapSessionTracker>();
 
+builder.Services.AddSingleton<ZoneAnalyzerSignalStore>();
+builder.Services.AddSingleton<ZoneAnalyzerDetailService>();
+builder.Services.AddSingleton<ZoneStockAnalyzerService>();
+builder.Services.AddSingleton<GapAnalyzerBenchmarkCache>();
+builder.Services.AddSingleton<GapAnalyzerService>();
 
 builder.Services.AddSingleton<StrategyRecommendationEngine>();
 
@@ -216,7 +223,7 @@ builder.Services.AddSingleton<IPaperStrategy, ZoneBoardIntradayStrategy>();
 
 builder.Services.AddSingleton<IPaperStrategy, StockB1RejectionStrategy>();
 
-
+builder.Services.AddSingleton<IPaperStrategy, GapFailedRallyPaperStrategy>();
 
 builder.Services.AddSingleton<IPaperStrategy, TenAmIntradayStrategy>();
 

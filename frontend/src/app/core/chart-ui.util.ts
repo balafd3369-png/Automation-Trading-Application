@@ -146,6 +146,72 @@ export function isIstCashSessionOpen(timeSec: number): boolean {
   return minutes >= open && minutes < close;
 }
 
+export function chartStepMinutes(interval: string): number {
+  switch (interval) {
+    case 'minute':
+      return 1;
+    case '5minute':
+      return 5;
+    case '15minute':
+      return 15;
+    case '60minute':
+      return 60;
+    default:
+      return 5;
+  }
+}
+
+/** Snap timestamps to NSE session buckets and merge duplicate buckets (fixes 5m/15m/1h alignment). */
+export function alignIntradayBarTimes(candles: ChartBar[], interval: string): ChartBar[] {
+  if (interval === 'day' || !candles.length) {
+    return candles;
+  }
+  const step = chartStepMinutes(interval);
+  if (step <= 1) {
+    return candles;
+  }
+
+  const byBucket = new Map<number, ChartBar>();
+  for (const bar of candles) {
+    const t = istSessionBucketStart(bar.time, step);
+    const existing = byBucket.get(t);
+    if (!existing) {
+      byBucket.set(t, { ...bar, time: t });
+      continue;
+    }
+    byBucket.set(t, {
+      time: t,
+      open: existing.open,
+      high: Math.max(existing.high, bar.high),
+      low: Math.min(existing.low, bar.low),
+      close: bar.close,
+    });
+  }
+  return [...byBucket.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, bar]) => bar);
+}
+
+/** Resample when API returns 1m spacing for a higher selected timeframe. */
+export function ensureChartInterval(candles: ChartBar[], interval: string): ChartBar[] {
+  if (interval === 'day' || interval === 'minute' || candles.length < 3) {
+    return alignIntradayBarTimes(candles, interval);
+  }
+  const step = chartStepMinutes(interval);
+  const expected = step * 60;
+  const ordered = [...candles].sort((a, b) => a.time - b.time);
+  const deltas: number[] = [];
+  for (let i = 1; i < Math.min(ordered.length, 40); i++) {
+    deltas.push(ordered[i].time - ordered[i - 1].time);
+  }
+  deltas.sort((a, b) => a - b);
+  const median = deltas[Math.floor(deltas.length / 2)] ?? expected;
+  if (median < expected * 0.6) {
+    return alignIntradayBarTimes(candles, interval);
+  }
+  return alignIntradayBarTimes(candles, interval);
+}
+
 /** Start of the intraday bucket that contains `timeSec` (matches backend BucketStartIst). */
 export function istSessionBucketStart(timeSec: number, stepMinutes: number): number {
   const parts = istParts(timeSec);
@@ -209,7 +275,7 @@ export interface BollingerBandPoint {
   lower: number;
 }
 
-/** Bollinger bands (SMA ± multiplier × σ) on close. */
+/** Bollinger bands (SMA ± multiplier × σ) on close — O(n) rolling window. */
 export function bollingerBands(
   candles: ChartBar[],
   period = 20,
@@ -219,17 +285,33 @@ export function bollingerBands(
     return [];
   }
   const result: BollingerBandPoint[] = [];
-  for (let i = period - 1; i < candles.length; i++) {
-    const window = candles.slice(i - period + 1, i + 1);
-    const mean = window.reduce((sum, bar) => sum + bar.close, 0) / period;
-    const variance = window.reduce((sum, bar) => sum + (bar.close - mean) ** 2, 0) / period;
-    const std = Math.sqrt(variance);
-    result.push({
-      time: candles[i].time,
-      middle: mean,
-      upper: mean + multiplier * std,
-      lower: mean - multiplier * std,
-    });
+
+  // Welford-style O(n) rolling mean + sum-of-squares.
+  // sumX  = Σ close over the window
+  // sumX2 = Σ close² over the window
+  // variance = (sumX2 / n) - (sumX / n)² = E[X²] - E[X]²
+  let sumX = 0;
+  let sumX2 = 0;
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i].close;
+    sumX += c;
+    sumX2 += c * c;
+    if (i >= period) {
+      const out = candles[i - period].close;
+      sumX -= out;
+      sumX2 -= out * out;
+    }
+    if (i >= period - 1) {
+      const mean = sumX / period;
+      const variance = Math.max(0, sumX2 / period - mean * mean);
+      const std = Math.sqrt(variance);
+      result.push({
+        time: candles[i].time,
+        middle: mean,
+        upper: mean + multiplier * std,
+        lower: mean - multiplier * std,
+      });
+    }
   }
   return result;
 }
@@ -349,7 +431,8 @@ export function clampIntradayBarWicks(bar: ChartBar, interval = '5minute'): Char
 
 /** Calendar filter + OHLC normalize + wick clamp (no live LTP on closed sessions). */
 export function sanitizeChartCandles(candles: ChartBar[], interval = '5minute'): ChartBar[] {
-  return filterIntradayToTradingWeekdays(normalizeChartCandles(candles)).map((bar) =>
+  const intervalAligned = interval === 'day' ? candles : ensureChartInterval(candles, interval);
+  return filterIntradayToTradingWeekdays(normalizeChartCandles(intervalAligned)).map((bar) =>
     clampIntradayBarWicks(bar, interval),
   );
 }

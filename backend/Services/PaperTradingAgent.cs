@@ -434,6 +434,15 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
                 if (_running && _config is not null && _pending is null
                     && now - _lastDecisionScan >= TimeSpan.FromSeconds(5))
                 {
+                    try
+                    {
+                        _strategyFeed.RefreshGapLivePending(CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogDebug(ex, "Gap pending refresh skipped.");
+                    }
+
                     ScanEntriesUnsafe(context, now);
                     _lastDecisionScan = now;
                 }

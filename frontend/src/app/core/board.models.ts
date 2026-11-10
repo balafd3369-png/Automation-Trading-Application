@@ -57,6 +57,7 @@ export interface ChartBar {
   high: number;
   low: number;
   close: number;
+  volume?: number | null;
 }
 
 export interface ChartLiveUpdate {
@@ -72,6 +73,12 @@ export interface ChartLiveUpdate {
   serverTime: string;
 }
 
+export interface ChartHistoryBeforeMeta {
+  requestedSessions: number;
+  returnedSessions: number;
+  exhausted: boolean;
+}
+
 export interface ChartResponse {
   name: string;
   tradingSymbol?: string;
@@ -84,6 +91,7 @@ export interface ChartResponse {
   s: number;
   s1: number;
   s2: number;
+  historyBefore?: ChartHistoryBeforeMeta | null;
 }
 
 export interface OptionMarketQuote {
@@ -379,6 +387,7 @@ export interface PaperTradeHistoryResponse {
   range: TradeHistoryRange;
   summary: TradeHistoryResponse['summary'];
   trades: PaperTradeHistoryItem[];
+  rangeNote?: string | null;
 }
 
 export interface LiveOrder {

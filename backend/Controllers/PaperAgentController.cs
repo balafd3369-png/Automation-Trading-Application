@@ -311,4 +311,79 @@ public sealed class PaperAgentController : ControllerBase
         trades = trades.OrderBy(t => t.EntryTime).ToList();
         return (trades, lookbackDays, patternNorm);
     }
+
+    /// <summary>Per-symbol gap-up / gap-down clue study (prior zone context + continuation backtest).</summary>
+    [HttpGet("backtest/gap-study/{name}")]
+    public async Task<IActionResult> GapStudySymbol(string name, [FromQuery] int lookbackDays = 90, CancellationToken ct = default)
+    {
+        lookbackDays = Math.Clamp(lookbackDays, 21, 365);
+        await _market.EnsureSymbolAsync(name, ct);
+        var chart = await _market.ChartForBacktestAsync(name, ZoneBoardPattern.ChartInterval, lookbackDays, ct);
+        if (chart is null || chart.Candles.Count == 0)
+        {
+            return NotFound(new { message = "Chart data unavailable for gap study." });
+        }
+
+        var result = GapDayStudy.Analyze(name, chart.Candles);
+        return Ok(new
+        {
+            lookbackDays,
+            candleCount = chart.Candles.Count,
+            result,
+            clueDefinitions = GapStudyReportBuilder.ClueDefinitions(),
+        });
+    }
+
+    /// <summary>Runs gap study across Nifty 50 equities (broker history required).</summary>
+    [HttpGet("backtest/gap-study")]
+    public async Task<IActionResult> GapStudyUniverse(
+        [FromQuery] int lookbackDays = 90,
+        [FromQuery] string universe = "nifty50",
+        CancellationToken ct = default)
+    {
+        lookbackDays = Math.Clamp(lookbackDays, 21, 120);
+        var symbols = ResolveGapUniverse(universe);
+        var results = new List<GapStudySymbolResult>();
+
+        foreach (var sym in symbols)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                await _market.EnsureSymbolAsync(sym, ct);
+                var chart = await _market.ChartForBacktestAsync(sym, ZoneBoardPattern.ChartInterval, lookbackDays, ct);
+                if (chart is null || chart.Candles.Count < 100)
+                {
+                    continue;
+                }
+
+                results.Add(GapDayStudy.Analyze(sym, chart.Candles));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Skip illiquid / missing history names in universe sweep.
+            }
+        }
+
+        var report = GapDayStudy.Aggregate(universe, results);
+        return Ok(new
+        {
+            lookbackDays,
+            report,
+            symbolsAnalyzed = results.Select(r => r.Symbol).ToList(),
+        });
+    }
+
+    private static IReadOnlyList<string> ResolveGapUniverse(string universe)
+    {
+        var key = (universe ?? "nifty50").Trim().ToLowerInvariant();
+        return key switch
+        {
+            "banknifty" or "banknifty_stocks" => IndexUniverse.BankNifty.Where(n => !IndexUniverse.IsIndex(n)).ToArray(),
+            "finnifty" or "finnifty_stocks" => IndexUniverse.FinNifty.Where(n => !IndexUniverse.IsIndex(n)).ToArray(),
+            "sensex30" or "sensex" => IndexUniverse.Sensex,
+            "all_equity" or "all_equity_union" => IndexUniverse.Equities,
+            _ => IndexUniverse.Nifty50,
+        };
+    }
 }
