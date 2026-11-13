@@ -13,6 +13,8 @@ export type AppOperationsTab =
 export type AppTradePanelTab = 'paper' | 'live' | 'history' | 'agent';
 export type AppMarketKind = 'stocks' | 'options';
 export type AppMarketNavTab = 'dashboard' | 'options';
+export type AppOptionsChartMode = 'underlying' | 'contract';
+export type AppOptionSide = 'CE' | 'PE';
 
 export interface AppNavigationState {
   centerView: AppCenterView;
@@ -21,7 +23,16 @@ export interface AppNavigationState {
   marketNavTab: AppMarketNavTab;
   strategyDetailId: string | null;
   operationsTab: AppOperationsTab;
+  /** Dashboard selected symbol (index or stock). */
+  selectedSymbol: string | null;
+  optionUnderlying: string | null;
+  optionExpiry: string | null;
+  optionStrike: number | null;
+  optionSide: AppOptionSide | null;
+  optionsChartMode: AppOptionsChartMode | null;
 }
+
+export const MARKET_INDEX_SYMBOLS = new Set(['NIFTY', 'SENSEX', 'BANKNIFTY', 'FINNIFTY']);
 
 const DEFAULT_NAV: AppNavigationState = {
   centerView: 'market',
@@ -30,6 +41,12 @@ const DEFAULT_NAV: AppNavigationState = {
   marketNavTab: 'dashboard',
   strategyDetailId: null,
   operationsTab: 'risk',
+  selectedSymbol: 'NIFTY',
+  optionUnderlying: null,
+  optionExpiry: null,
+  optionStrike: null,
+  optionSide: null,
+  optionsChartMode: null,
 };
 
 const TRADE_TABS = new Set<AppTradePanelTab>(['paper', 'live', 'history', 'agent']);
@@ -45,8 +62,11 @@ const OPERATIONS_TABS = new Set<AppOperationsTab>([
   'broker',
   'reconciliation',
 ]);
+
 export const APP_NAV_STORAGE_KEY = 'twb-app-navigation';
 export const MARKET_SYMBOL_PICK_KEY = 'twb-market-symbol-pick';
+
+export const CHART_INTERVAL_STORAGE_KEY = 'twb-chart-interval';
 
 export function stashMarketSymbolPick(symbolName: string): void {
   if (typeof window === 'undefined' || !symbolName.trim()) {
@@ -65,6 +85,44 @@ export function consumeMarketSymbolPick(): string | null {
   }
   sessionStorage.removeItem(MARKET_SYMBOL_PICK_KEY);
   return raw;
+}
+
+function parseSide(raw: string | null): AppOptionSide | null {
+  const v = raw?.trim().toUpperCase();
+  return v === 'CE' || v === 'PE' ? v : null;
+}
+
+function parseChartMode(raw: string | null): AppOptionsChartMode | null {
+  const v = raw?.trim().toLowerCase();
+  if (v === 'underlying' || v === 'spot') {
+    return 'underlying';
+  }
+  if (v === 'contract' || v === 'premium') {
+    return 'contract';
+  }
+  return null;
+}
+
+function parseStrike(raw: string | null): number | null {
+  if (!raw?.trim()) {
+    return null;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function splitRouterPathAndQuery(url: string): { path: string; query: URLSearchParams } {
+  const normalized = url.replace(/^\//, '');
+  const qIndex = normalized.indexOf('?');
+  const path = (qIndex >= 0 ? normalized.slice(0, qIndex) : normalized).replace(/^\//, '');
+  const query =
+    qIndex >= 0 ? new URLSearchParams(normalized.slice(qIndex + 1)) : new URLSearchParams();
+  return { path, query };
+}
+
+function normalizeSymbol(symbol: string | null | undefined): string | null {
+  const s = symbol?.trim().toUpperCase();
+  return s ? s : null;
 }
 
 function normalizeAppNavigationState(value: Partial<AppNavigationState> | null | undefined): AppNavigationState {
@@ -97,7 +155,30 @@ function normalizeAppNavigationState(value: Partial<AppNavigationState> | null |
   const operationsTab = OPERATIONS_TABS.has(value?.operationsTab as AppOperationsTab)
     ? (value!.operationsTab as AppOperationsTab)
     : DEFAULT_NAV.operationsTab;
-  return { centerView, tradePanelTab, marketKind, marketNavTab, strategyDetailId, operationsTab };
+  const selectedSymbol = normalizeSymbol(value?.selectedSymbol ?? null);
+  const optionUnderlying = normalizeSymbol(value?.optionUnderlying ?? null);
+  const optionExpiry = value?.optionExpiry?.trim() || null;
+  const optionStrike =
+    typeof value?.optionStrike === 'number' && value.optionStrike > 0 ? value.optionStrike : null;
+  const optionSide = parseSide(value?.optionSide ?? null);
+  const optionsChartMode =
+    value?.optionsChartMode === 'underlying' || value?.optionsChartMode === 'contract'
+      ? value.optionsChartMode
+      : null;
+  return {
+    centerView,
+    tradePanelTab,
+    marketKind,
+    marketNavTab,
+    strategyDetailId,
+    operationsTab,
+    selectedSymbol,
+    optionUnderlying,
+    optionExpiry,
+    optionStrike,
+    optionSide,
+    optionsChartMode,
+  };
 }
 
 function readStoredNavigationState(): AppNavigationState | null {
@@ -115,30 +196,69 @@ function readStoredNavigationState(): AppNavigationState | null {
   }
 }
 
-export function buildAppNavigationHash(state: AppNavigationState): string {
-  if (state.centerView === 'strategies') {
-    return '#/strategies';
+function marketOptionsQuery(state: AppNavigationState): URLSearchParams {
+  const params = new URLSearchParams();
+  if (state.optionExpiry) {
+    params.set('expiry', state.optionExpiry);
   }
-  if (state.centerView === 'intelligence') {
-    return '#/intelligence';
+  if (state.optionStrike != null && state.optionStrike > 0) {
+    params.set('strike', String(state.optionStrike));
   }
-  if (state.centerView === 'manual') {
-    return '#/manual';
+  if (state.optionSide) {
+    params.set('side', state.optionSide);
   }
-  if (state.centerView === 'operations') {
-    return `#/operations/${state.operationsTab}`;
+  if (state.optionsChartMode === 'underlying') {
+    params.set('mode', 'underlying');
   }
-  if (state.centerView === 'trades') {
-    return `#/trades/${state.tradePanelTab}`;
+  return params;
+}
+
+export function routerPathForState(state: Partial<AppNavigationState> & Pick<AppNavigationState, 'centerView'>): string {
+  const nav = normalizeAppNavigationState(state);
+  if (nav.centerView === 'strategies') {
+    if (nav.strategyDetailId) {
+      return `/strategies/${encodeURIComponent(nav.strategyDetailId)}`;
+    }
+    return '/strategies';
   }
-  if (state.marketKind === 'options') {
-    return '#/market/options';
+  if (nav.centerView === 'intelligence') {
+    return '/intelligence';
   }
-  return '#/market';
+  if (nav.centerView === 'manual') {
+    return '/manual';
+  }
+  if (nav.centerView === 'operations') {
+    return `/operations/${nav.operationsTab}`;
+  }
+  if (nav.centerView === 'trades') {
+    return `/trades/${nav.tradePanelTab}`;
+  }
+  if (nav.marketKind === 'options') {
+    const underlying = nav.optionUnderlying ?? nav.selectedSymbol ?? 'NIFTY';
+    const base = `/market/options/${encodeURIComponent(underlying)}`;
+    const params = marketOptionsQuery({
+      ...nav,
+      optionUnderlying: underlying,
+    });
+    const q = params.toString();
+    return q ? `${base}?${q}` : base;
+  }
+  const symbol = nav.selectedSymbol;
+  if (symbol && MARKET_INDEX_SYMBOLS.has(symbol)) {
+    return `/market/index/${encodeURIComponent(symbol)}`;
+  }
+  if (symbol) {
+    return `/market?symbol=${encodeURIComponent(symbol)}`;
+  }
+  return '/market';
+}
+
+export function buildAppNavigationHash(state: Partial<AppNavigationState> & Pick<AppNavigationState, 'centerView'>): string {
+  return `#${routerPathForState(state)}`;
 }
 
 export function parseRouterUrl(url: string): AppNavigationState {
-  const path = url.split('?')[0].replace(/^\//, '');
+  const { path, query } = splitRouterPathAndQuery(url);
   const segments = path.split('/').filter(Boolean);
 
   if (segments[0] === 'strategies') {
@@ -147,17 +267,18 @@ export function parseRouterUrl(url: string): AppNavigationState {
         ...DEFAULT_NAV,
         centerView: 'strategies',
         strategyDetailId: decodeURIComponent(segments[1]),
+        selectedSymbol: null,
       };
     }
-    return { ...DEFAULT_NAV, centerView: 'strategies', strategyDetailId: null };
+    return { ...DEFAULT_NAV, centerView: 'strategies', strategyDetailId: null, selectedSymbol: null };
   }
 
   if (segments[0] === 'intelligence') {
-    return { ...DEFAULT_NAV, centerView: 'intelligence' };
+    return { ...DEFAULT_NAV, centerView: 'intelligence', selectedSymbol: null };
   }
 
   if (segments[0] === 'manual') {
-    return { ...DEFAULT_NAV, centerView: 'manual' };
+    return { ...DEFAULT_NAV, centerView: 'manual', selectedSymbol: null };
   }
 
   if (segments[0] === 'operations') {
@@ -166,6 +287,7 @@ export function parseRouterUrl(url: string): AppNavigationState {
       ...DEFAULT_NAV,
       centerView: 'operations',
       operationsTab: OPERATIONS_TABS.has(tab) ? tab : 'risk',
+      selectedSymbol: null,
     };
   }
 
@@ -175,17 +297,48 @@ export function parseRouterUrl(url: string): AppNavigationState {
       ...DEFAULT_NAV,
       centerView: 'trades',
       tradePanelTab: TRADE_TABS.has(tab) ? tab : 'paper',
+      selectedSymbol: null,
     };
   }
 
   if (segments[0] === 'market') {
-    const kind = segments[1] === 'options' ? 'options' : 'stocks';
-    if (kind === 'options') {
-      return { ...DEFAULT_NAV, centerView: 'market', marketKind: 'options', marketNavTab: 'options' };
+    if (segments[1] === 'index' && segments[2]) {
+      const symbol = normalizeSymbol(decodeURIComponent(segments[2]));
+      return {
+        ...DEFAULT_NAV,
+        centerView: 'market',
+        marketKind: 'stocks',
+        marketNavTab: 'dashboard',
+        selectedSymbol: symbol ?? DEFAULT_NAV.selectedSymbol,
+      };
     }
-    const stored = readStoredNavigationState();
-    const marketNavTab = 'dashboard';
-    return { ...DEFAULT_NAV, centerView: 'market', marketKind: 'stocks', marketNavTab };
+
+    if (segments[1] === 'options') {
+      const underlying = normalizeSymbol(
+        segments[2] ? decodeURIComponent(segments[2]) : query.get('underlying'),
+      );
+      return {
+        ...DEFAULT_NAV,
+        centerView: 'market',
+        marketKind: 'options',
+        marketNavTab: 'options',
+        selectedSymbol: underlying ?? DEFAULT_NAV.selectedSymbol,
+        optionUnderlying: underlying ?? 'NIFTY',
+        optionExpiry: query.get('expiry')?.trim() || null,
+        optionStrike: parseStrike(query.get('strike')),
+        optionSide: parseSide(query.get('side')) ?? 'CE',
+        optionsChartMode: parseChartMode(query.get('mode')) ?? 'contract',
+      };
+    }
+
+    const symbol = normalizeSymbol(query.get('symbol'));
+    return {
+      ...DEFAULT_NAV,
+      centerView: 'market',
+      marketKind: 'stocks',
+      marketNavTab: 'dashboard',
+      selectedSymbol: symbol ?? DEFAULT_NAV.selectedSymbol,
+    };
   }
 
   return { ...DEFAULT_NAV };
@@ -205,31 +358,6 @@ export function readBootNavigationState(): AppNavigationState {
     return readAppNavigationFromLocation();
   }
   return restoreAppNavigationState();
-}
-
-export function routerPathForState(state: AppNavigationState): string {
-  if (state.centerView === 'strategies') {
-    if (state.strategyDetailId) {
-      return `/strategies/${encodeURIComponent(state.strategyDetailId)}`;
-    }
-    return '/strategies';
-  }
-  if (state.centerView === 'intelligence') {
-    return '/intelligence';
-  }
-  if (state.centerView === 'manual') {
-    return '/manual';
-  }
-  if (state.centerView === 'operations') {
-    return `/operations/${state.operationsTab}`;
-  }
-  if (state.centerView === 'trades') {
-    return `/trades/${state.tradePanelTab}`;
-  }
-  if (state.marketKind === 'options') {
-    return '/market/options';
-  }
-  return '/market';
 }
 
 export function parseAppNavigationHash(rawHash: string): AppNavigationState {

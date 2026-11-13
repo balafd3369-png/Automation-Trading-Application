@@ -1,5 +1,7 @@
 using System.Globalization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Hosting;
 using TradeWithBeast.Configuration;
 using TradeWithBeast.Models;
 
@@ -11,14 +13,17 @@ public sealed class UserIdentityStore
     private readonly string _connectionString;
     private readonly SystemIdentityOptions _options;
     private readonly ILogger<UserIdentityStore> _log;
+    private readonly IWebHostEnvironment _env;
 
     public UserIdentityStore(
         IConfiguration configuration,
         DatabaseOptions database,
         SystemIdentityOptions options,
+        IWebHostEnvironment env,
         ILogger<UserIdentityStore> log)
     {
         _options = options;
+        _env = env;
         var path = DatabaseConnectionResolver.ResolveSqliteDatabasePath(configuration, database);
         _connectionString = DatabaseConnectionResolver.BuildSqliteConnectionString(path);
         _log = log;
@@ -377,17 +382,33 @@ public sealed class UserIdentityStore
 
     private void EnsureSeedAdmin()
     {
-        if (FindByEmail(_options.AdminEmail) is not null)
+        var existing = FindByEmail(_options.AdminEmail);
+        if (existing is null)
+        {
+            var admin = CreateUser(
+                _options.AdminEmail,
+                PasswordHasher.Hash(_options.AdminPassword),
+                _options.AdminDisplayName,
+                UserRoles.Admin);
+            _log.LogInformation("Seeded admin user {Email} (id {Id})", admin.Email, admin.Id);
+            return;
+        }
+
+        if (!_env.IsDevelopment())
         {
             return;
         }
 
-        var admin = CreateUser(
-            _options.AdminEmail,
-            PasswordHasher.Hash(_options.AdminPassword),
-            _options.AdminDisplayName,
-            UserRoles.Admin);
-        _log.LogInformation("Seeded admin user {Email} (id {Id})", admin.Email, admin.Id);
+        var hash = GetPasswordHash(existing.Id);
+        if (PasswordHasher.Verify(_options.AdminPassword, hash ?? ""))
+        {
+            return;
+        }
+
+        UpdatePassword(existing.Id, PasswordHasher.Hash(_options.AdminPassword));
+        _log.LogWarning(
+            "Development: aligned admin password for {Email} with SystemIdentity:AdminPassword.",
+            existing.Email);
     }
 
     private static void TouchSession(SqliteConnection connection, string token)

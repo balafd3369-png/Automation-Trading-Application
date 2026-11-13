@@ -32,8 +32,10 @@ export const routes: Routes = [
     canActivate: [adminGuard],
   },
   { path: '', pathMatch: 'full', redirectTo: 'market' },
-  { path: 'market', component: EmptyRouteComponent, ...protectedShell },
+  { path: 'market/index/:symbol', component: EmptyRouteComponent, ...protectedShell },
+  { path: 'market/options/:underlying', component: EmptyRouteComponent, ...protectedShell },
   { path: 'market/options', component: EmptyRouteComponent, ...protectedShell },
+  { path: 'market', component: EmptyRouteComponent, ...protectedShell },
   {
     path: 'market/select-stock',
     loadComponent: () =>

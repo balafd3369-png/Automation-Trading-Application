@@ -198,6 +198,8 @@ After login: **Admin** → `#/admin`, **Trader** → `#/dashboard`, then use Mar
 
 | Problem | Fix |
 |---------|-----|
+| Login says "Invalid email or password" | Use **platform** login at `#/login` (not broker OTP). Default admin: `admin@tradewithbeast.local` / `ChangeMe-Admin-123!` unless you set `SystemIdentity:AdminPassword` in user secrets. New users: password ≥ 8 characters. Restart backend after changing admin password (dev syncs hash on startup). |
+| Login fails with no message (fixed in latest UI) | Hard-refresh the frontend; errors now show on the login form. |
 | Board shows "Could not load board" | Start backend on 45211 first |
 | Footer **m.Stock (quotes empty)** | Re-verify OTP; check API key and user secrets |
 | Chart shows two fat candles | Restart backend (intraday fallback fix); hard refresh frontend |

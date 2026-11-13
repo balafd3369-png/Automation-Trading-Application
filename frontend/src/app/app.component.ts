@@ -189,9 +189,9 @@ import {
   saveThemeSelection,
 } from './core/app-theme';
 import {
-  APP_NAV_STORAGE_KEY,
   consumeMarketSymbolPick,
   parseRouterUrl,
+  persistAppNavigationState,
   readBootNavigationState,
   routerPathForState,
 } from './core/app-navigation.util';
@@ -373,7 +373,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   state: UiState = 'loading';
   errorMessage = '';
   boardData: BoardResponse | null = null;
-  selectedName = 'NIFTY';
+  selectedName = (BOOT_NAV.selectedSymbol ?? 'NIFTY').toUpperCase();
   selected: SymbolSnapshot | null = null;
   otp = '';
   otpRequested = false;
@@ -427,11 +427,14 @@ export class AppComponent implements OnInit, AfterViewInit {
     typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K';
   pickerCatalogHits: SymbolSearchHit[] = [];
   private readonly pickerSearchQuery$ = new Subject<string>();
-  optionUnderlying = 'NIFTY';
-  optionExpiry = '';
-  optionSide: OptionSide = 'CE';
+  optionUnderlying = (BOOT_NAV.optionUnderlying ?? BOOT_NAV.selectedSymbol ?? 'NIFTY').toUpperCase();
+  optionExpiry = BOOT_NAV.optionExpiry ?? '';
+  optionSide: OptionSide = BOOT_NAV.optionSide === 'PE' ? 'PE' : 'CE';
   openedOption: OptionContract | null = null;
-  optionsChartMode: OptionsChartMode = 'contract';
+  optionsChartMode: OptionsChartMode =
+    BOOT_NAV.marketKind === 'options' && BOOT_NAV.optionsChartMode === 'underlying'
+      ? 'underlying'
+      : 'contract';
   optionChartError = '';
   optionQuotes = new Map<string, OptionMarketQuote>();
   paperAgent: PaperAgentSnapshot | null = null;
@@ -636,11 +639,11 @@ export class AppComponent implements OnInit, AfterViewInit {
         if (requestKey !== this.chartRequestKey()) {
           return;
         }
-        const prior = this.chartCandlesPriorForMerge(data.name);
+        const prior = this.chartCandlesPriorForMerge();
         const mergedPayload = this.mergeChartPayload(prior, data);
         const remount = this.shouldRemountChart(prior, mergedPayload.candles);
         this.ngZone.runOutsideAngular(() => {
-          this.applyChartData(mergedPayload, remount);
+          this.applyChartData(mergedPayload, remount, true);
         });
         this.rememberChartCache(requestKey, mergedPayload);
       });
@@ -971,31 +974,34 @@ export class AppComponent implements OnInit, AfterViewInit {
     }
   }
 
-  private syncNavigationHash(): void {
-    this.navigateApp({
+  private navigationStateFromComponent(): ReturnType<typeof parseRouterUrl> {
+    return {
       centerView: this.centerView,
       tradePanelTab: this.tradePanelTab,
       marketKind: this.marketKind,
       marketNavTab: this.marketNavTab,
       strategyDetailId: this.strategyDetailId,
       operationsTab: this.operationsTab,
-    });
-    this.saveNavigationToStorage();
+      selectedSymbol: this.selectedName?.trim() ? this.selectedName.toUpperCase() : null,
+      optionUnderlying: this.marketKind === 'options' ? this.optionUnderlying.toUpperCase() : null,
+      optionExpiry: this.marketKind === 'options' ? this.optionExpiry || null : null,
+      optionStrike:
+        this.marketKind === 'options' && this.optionsChartMode === 'contract'
+          ? (this.openedOption?.strike ?? null)
+          : null,
+      optionSide: this.marketKind === 'options' ? this.optionSide : null,
+      optionsChartMode: this.marketKind === 'options' ? this.optionsChartMode : null,
+    };
+  }
+
+  private syncNavigationHash(): void {
+    const state = this.navigationStateFromComponent();
+    persistAppNavigationState(state);
+    this.navigateApp(state);
   }
 
   private saveNavigationToStorage(): void {
-    if (typeof localStorage === 'undefined') {
-      return;
-    }
-    localStorage.setItem(
-      APP_NAV_STORAGE_KEY,
-      JSON.stringify({
-        centerView: this.centerView,
-        tradePanelTab: this.tradePanelTab,
-        marketKind: this.marketKind,
-        marketNavTab: this.marketNavTab,
-      }),
-    );
+    persistAppNavigationState(this.navigationStateFromComponent());
   }
 
   private persistNavigationHash(): void {
@@ -1111,21 +1117,53 @@ export class AppComponent implements OnInit, AfterViewInit {
       this.marketKind = state.marketKind;
       if (state.marketKind === 'options') {
         this.marketNavTab = 'options';
-        this.optionUnderlying = this.isIndex(this.selectedName) ? this.selectedName : 'NIFTY';
+        if (state.optionUnderlying) {
+          this.optionUnderlying = state.optionUnderlying;
+        } else if (!this.isIndex(this.selectedName)) {
+          this.optionUnderlying = 'NIFTY';
+        }
+        if (state.optionSide) {
+          this.optionSide = state.optionSide;
+        }
+        if (state.optionExpiry) {
+          this.optionExpiry = state.optionExpiry;
+        }
+        this.optionsChartMode =
+          state.optionsChartMode === 'underlying' ? 'underlying' : 'contract';
         this.selectIndex(this.optionUnderlying);
         this.ensureOptionExpiry();
-        if (!this.openedOption) {
+        if (state.optionsChartMode === 'underlying') {
+          this.openedOption = null;
+        } else if (
+          state.optionStrike != null &&
+          state.optionStrike > 0 &&
+          this.optionExpiry
+        ) {
+          this.openedOption = this.makeContract(
+            this.optionUnderlying,
+            this.optionExpiry,
+            state.optionStrike,
+            state.optionSide ?? this.optionSide,
+          );
+        } else if (!this.openedOption) {
           this.openedOption = this.atmContract(this.optionUnderlying, this.optionExpiry, this.optionSide);
         }
         this.loadedChartName = '';
         this.optionChainReload.next();
       } else {
+        this.marketNavTab = state.marketNavTab;
         this.openedOption = null;
         this.optionChartError = '';
         this.loadedChartName = '';
+        if (state.selectedSymbol) {
+          this.selectedName = state.selectedSymbol;
+          this.pendingChartName = state.selectedSymbol;
+        }
       }
       if (this.selected) {
         this.pendingChartName = this.selected.name;
+      } else if (state.selectedSymbol && state.marketKind !== 'options') {
+        this.pendingChartName = state.selectedSymbol;
       }
       queueMicrotask(() => {
         this.setupChartHostVisibility();
@@ -2478,14 +2516,9 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   showTradeDetails(): void {
-    void this.router.navigateByUrl(routerPathForState({
-      centerView: 'trades',
-      tradePanelTab: this.tradePanelTab,
-      marketKind: this.marketKind,
-      marketNavTab: this.marketNavTab,
-      strategyDetailId: null,
-      operationsTab: this.operationsTab,
-    }));
+    void this.router.navigateByUrl(
+      routerPathForState({ ...this.navigationStateFromComponent(), centerView: 'trades' }),
+    );
   }
 
   showStrategies(): void {
@@ -2497,26 +2530,18 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   showOperations(): void {
-    void this.router.navigateByUrl(routerPathForState({
-      centerView: 'operations',
-      operationsTab: this.operationsTab,
-      tradePanelTab: this.tradePanelTab,
-      marketKind: this.marketKind,
-      marketNavTab: this.marketNavTab,
-      strategyDetailId: null,
-    }));
+    void this.router.navigateByUrl(
+      routerPathForState({ ...this.navigationStateFromComponent(), centerView: 'operations' }),
+    );
   }
 
   openOperationsAlerts(): void {
     this.operationsTab = 'notifications';
     void this.router.navigateByUrl(
       routerPathForState({
+        ...this.navigationStateFromComponent(),
         centerView: 'operations',
         operationsTab: 'notifications',
-        tradePanelTab: this.tradePanelTab,
-        marketKind: this.marketKind,
-        marketNavTab: this.marketNavTab,
-        strategyDetailId: null,
       }),
     );
     this.bumpView();
@@ -2591,7 +2616,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   showDashboard(): void {
     this.exitOptionsWorkbench();
     this.marketNavTab = 'dashboard';
-    void this.router.navigateByUrl('/market');
+    this.marketKind = 'stocks';
     this.persistNavigationHash();
     this.scheduleChartLoad();
     this.bumpView();
@@ -2600,7 +2625,6 @@ export class AppComponent implements OnInit, AfterViewInit {
   showOptions(): void {
     this.setMarketKind('options');
     this.marketNavTab = 'options';
-    void this.router.navigateByUrl('/market/options');
     this.persistNavigationHash();
     this.scheduleChartLoad();
     this.bumpView();
@@ -2614,6 +2638,7 @@ export class AppComponent implements OnInit, AfterViewInit {
       return;
     }
     this.selectIndex(name);
+    this.persistNavigationHash();
     this.scheduleChartLoad(true);
     this.bumpView();
   }
@@ -2628,6 +2653,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.pendingChartName = name;
     this.prepareChartInstrumentSwitch();
     this.optionChainReload.next();
+    this.persistNavigationHash();
     this.scheduleChartLoad(true);
     this.bumpView();
   }
@@ -2812,8 +2838,6 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.openedOption = null;
     this.mergeBoardSymbol(row);
     this.select(row);
-    void this.router.navigateByUrl('/market');
-    this.persistNavigationHash();
     this.scheduleChartLoad();
     this.closePicker();
     this.bumpView();
@@ -2844,7 +2868,6 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.optionChartError = '';
     this.loadedChartName = '';
     this.optionChainReload.next();
-    void this.router.navigateByUrl('/market/options');
     this.persistNavigationHash();
     this.scheduleChartLoad();
     this.closePicker();
@@ -2871,6 +2894,7 @@ export class AppComponent implements OnInit, AfterViewInit {
       this.loadedChartName = '';
       this.optionQuotes = new Map();
       this.optionChainReload.next();
+      this.persistNavigationHash();
       this.scheduleChartLoad();
     }
   }
@@ -2887,6 +2911,7 @@ export class AppComponent implements OnInit, AfterViewInit {
       );
       this.optionChartError = '';
       this.loadedChartName = '';
+      this.persistNavigationHash();
       this.scheduleChartLoad();
     }
   }
@@ -4194,6 +4219,9 @@ export class AppComponent implements OnInit, AfterViewInit {
     if (this.tradePanelTab === 'paper' && !this.isIndex(symbol.name)) {
       this.zoneBacktestReload.next();
     }
+    if (this.centerView === 'market') {
+      this.persistNavigationHash();
+    }
     this.scheduleChartLoad(true);
     this.bumpView();
   }
@@ -4239,15 +4267,11 @@ export class AppComponent implements OnInit, AfterViewInit {
     }
   }
 
-  /** Never merge candles from a different symbol or timeframe. */
-  private chartCandlesPriorForMerge(symbolName: string): ChartBar[] {
+  /** Never merge candles from a different instrument or timeframe (options use contract key, not underlying). */
+  private chartCandlesPriorForMerge(): ChartBar[] {
     const key = this.chartRequestKey();
     const cached = this.chartSnapshotForKey(key)?.candles ?? [];
-    if (
-      this.lastChart?.name === symbolName &&
-      this.lastChart.candles.length &&
-      this.lastAppliedChartKey === key
-    ) {
+    if (this.lastChart?.candles.length && this.lastAppliedChartKey === key) {
       return this.lastChart.candles;
     }
     return cached;
@@ -4719,10 +4743,11 @@ export class AppComponent implements OnInit, AfterViewInit {
       const hasValidBars = data.candles.some((c) => (c.open ?? 0) > 0);
       const payload =
         hasValidBars || !allowIndexFallback ? data : this.fallbackChart(name, row!);
-      const mergePrior = this.chartCandlesPriorForMerge(name);
+      const mergePrior = this.chartCandlesPriorForMerge();
       const mergedPayload = this.mergeChartPayload(mergePrior, payload);
       const remount =
-        this.lastChart?.name !== name || this.shouldRemountChart(mergePrior, mergedPayload.candles);
+        this.lastAppliedChartKey !== requestKey ||
+        this.shouldRemountChart(mergePrior, mergedPayload.candles);
       this.ngZone.runOutsideAngular(() => {
         // bgMerge=true → never destroys the painted chart; uses setData only.
         this.applyChartData(mergedPayload, remount, /* bgMerge= */ true);
@@ -4799,10 +4824,11 @@ export class AppComponent implements OnInit, AfterViewInit {
           const hasValidBars = data.candles.some((c) => (c.open ?? 0) > 0);
           const payload =
             hasValidBars || !row ? data : this.fallbackChart(name, row);
-          const mergePrior = this.chartCandlesPriorForMerge(name);
+          const mergePrior = this.chartCandlesPriorForMerge();
           const mergedPayload = this.mergeChartPayload(mergePrior, payload);
           const remount =
-            this.lastChart?.name !== name || this.shouldRemountChart(mergePrior, mergedPayload.candles);
+            this.lastAppliedChartKey !== requestKey ||
+            this.shouldRemountChart(mergePrior, mergedPayload.candles);
           this.ngZone.runOutsideAngular(() => {
             this.applyChartData(mergedPayload, remount);
           });

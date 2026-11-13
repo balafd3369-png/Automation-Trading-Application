@@ -25,6 +25,24 @@
         }
       } else if (h.indexOf('market/options') !== -1) {
         nav.marketKind = 'options';
+        nav.marketNavTab = 'options';
+        var opt = h.match(/market\/options\/([^?&]+)/i);
+        if (opt && opt[1]) {
+          nav.optionUnderlying = decodeURIComponent(opt[1]).toUpperCase();
+        }
+        var qs = h.indexOf('?');
+        if (qs >= 0) {
+          var params = new URLSearchParams(h.slice(qs + 1));
+          if (params.get('expiry')) nav.optionExpiry = params.get('expiry');
+          if (params.get('strike')) nav.optionStrike = Number(params.get('strike'));
+          if (params.get('side')) nav.optionSide = params.get('side').toUpperCase();
+          if (params.get('mode')) nav.optionsChartMode = params.get('mode');
+        }
+      } else if (h.indexOf('market/index/') !== -1) {
+        var idx = h.match(/market\/index\/([^?&]+)/i);
+        if (idx && idx[1]) {
+          nav.selectedSymbol = decodeURIComponent(idx[1]).toUpperCase();
+        }
       } else if (h.length <= 1) {
         try {
           var raw = localStorage.getItem(NAV_KEY);

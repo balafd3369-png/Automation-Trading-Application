@@ -765,6 +765,10 @@ public sealed class MockMarketService : IHostedService, IDisposable
         if (mapped != "day")
         {
             bars = ChartSessionMerger.TrimIntradayBarsBeforeSessionOpen(bars);
+            if (mapped is not "minute")
+            {
+                bars = ChartSessionMerger.EnsureInterval(bars, mapped);
+            }
         }
 
         bars = SanitizeBars(bars, optionLast);

@@ -1,4 +1,7 @@
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using TradeWithBeast.Models;
 using TradeWithBeast.Configuration;
@@ -61,6 +64,7 @@ public sealed class MultiUserIsolationTests : IDisposable
             Config(),
             new DatabaseOptions(),
             new SystemIdentityOptions { AdminEmail = $"admin-{Guid.NewGuid():N}@test.local" },
+            new TestWebHostEnvironment { ContentRootPath = AppContext.BaseDirectory },
             NullLogger<UserIdentityStore>.Instance);
         users.CreateUser($"trader-{Guid.NewGuid():N}@test.local", PasswordHasher.Hash("password-123"), "Trader", UserRoles.Trader);
         Assert.True(users.ListUsers().Count >= 2);
@@ -178,5 +182,15 @@ public sealed class MultiUserIsolationTests : IDisposable
         {
             File.Delete(_dbPath);
         }
+    }
+
+    private sealed class TestWebHostEnvironment : IWebHostEnvironment
+    {
+        public string ApplicationName { get; set; } = "tests";
+        public IFileProvider WebRootFileProvider { get; set; } = new NullFileProvider();
+        public string WebRootPath { get; set; } = "";
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public required string ContentRootPath { get; set; }
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 }
