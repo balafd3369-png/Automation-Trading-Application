@@ -17,3 +17,4 @@
 
 - `LiveTrading:Enabled` defaults to **false**.
 - Parent folder `trade with beast` is not the git root; use `Automation-Trading-Application` for all git commands.
+- **Version 2 (multi-broker):** [V2-BRANCHES.md](./V2-BRANCHES.md) — use `dev/v2-multi-broker`, not this release line.
