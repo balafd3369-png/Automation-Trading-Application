@@ -49,6 +49,23 @@ public sealed class BrokerQuoteGateTests
     }
 
     [Fact]
+    public void Accepts_index_ltp_when_broker_today_open_is_corrupt()
+    {
+        if (!NseCashSession.IsLiveIntradayWindowNow())
+        {
+            return;
+        }
+
+        var decision = BrokerQuoteGate.EvaluateLastPrice(
+            "SENSEX",
+            incomingLast: 81911m,
+            storedLast: 0m,
+            todayOpen: 76620m,
+            previousClose: 81500m);
+        Assert.True(decision.Accept);
+    }
+
+    [Fact]
     public void ShouldApplyTodayOpen_rejects_open_far_from_anchor_when_session_live()
     {
         if (!NseCashSession.IsLiveIntradayWindowNow())

@@ -1870,6 +1870,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
 
         symbol.Last = last;
         symbol.DataTimestamp = DateTimeOffset.UtcNow;
+        RepairCorruptIndexTodayOpen(symbol);
         RecordIntradayTick(symbol.Name, last, symbol.TodayOpen);
         return true;
     }
@@ -1890,6 +1891,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
         if (lastDecision.Accept)
         {
             symbol.Last = q.Last;
+            RepairCorruptIndexTodayOpen(symbol);
             RecordIntradayTick(symbol.Name, q.Last, q.Open > 0 ? q.Open : symbol.TodayOpen);
         }
         else
@@ -2131,6 +2133,8 @@ public sealed class MockMarketService : IHostedService, IDisposable
             symbol.HistoryLoaded = true;
 
             todayOpen = symbol.TodayOpen;
+            todayOpen = RepairIndexTodayOpenIfCorrupt(symbol, todayOpen, yesterday);
+            symbol.TodayOpen = todayOpen;
         }
 
         var b1 = NiftyZoneFormula.B1(yesterday.High, todayOpen);
@@ -2329,6 +2333,75 @@ public sealed class MockMarketService : IHostedService, IDisposable
 
             _demoZoneSeedsApplied = true;
         }
+    }
+
+    private static void RepairCorruptIndexTodayOpen(LiveSymbol symbol)
+    {
+        if (!IndexUniverse.IsIndex(symbol.Name) || symbol.TodayOpen <= 0 || symbol.Last <= 0)
+        {
+            return;
+        }
+
+        var reference = symbol.PreviousClose > 0 ? symbol.PreviousClose : symbol.Last;
+        if (reference <= 0)
+        {
+            return;
+        }
+
+        if (Math.Abs(symbol.TodayOpen - reference) / reference <= 0.07m)
+        {
+            return;
+        }
+
+        if (Math.Abs(symbol.Last - reference) / reference <= 0.07m)
+        {
+            symbol.TodayOpen = symbol.Last;
+        }
+    }
+
+    private static decimal RepairIndexTodayOpenIfCorrupt(LiveSymbol symbol, decimal todayOpen, DayCandle yesterday)
+    {
+        if (!IndexUniverse.IsIndex(symbol.Name) || todayOpen <= 0)
+        {
+            return todayOpen;
+        }
+
+        var reference = symbol.Last > 0 ? symbol.Last : symbol.PreviousClose;
+        if (reference <= 0 && yesterday.Close > 0)
+        {
+            reference = yesterday.Close;
+        }
+
+        if (reference <= 0)
+        {
+            return todayOpen;
+        }
+
+        if (Math.Abs(todayOpen - reference) / reference <= 0.07m)
+        {
+            return todayOpen;
+        }
+
+        if (symbol.Candles.Count > 0)
+        {
+            var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            var today = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ist).Date;
+            var todayBar = symbol.Candles
+                .Select(c => (c, local: TimeZoneInfo.ConvertTime(c.Time, ist).Date))
+                .Where(t => t.local == today)
+                .Select(t => t.c)
+                .LastOrDefault();
+            if (todayBar is not null)
+            {
+                var repaired = todayBar.Open > 0 ? todayBar.Open : todayBar.Close;
+                if (repaired > 0)
+                {
+                    return repaired;
+                }
+            }
+        }
+
+        return reference;
     }
 
     private decimal ResolveIndexDisplayLast(LiveSymbol s)

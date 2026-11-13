@@ -45,7 +45,8 @@ public static class BrokerQuoteGate
             return new(false, RejectReason.OffSession, ResolveAnchor(storedLast, todayOpen, previousClose));
         }
 
-        var anchor = ResolveAnchor(storedLast, todayOpen, previousClose, incomingLast);
+        var openForAnchor = SanitizeTodayOpenForAnchor(symbolName, todayOpen, previousClose, storedLast);
+        var anchor = ResolveAnchor(storedLast, openForAnchor, previousClose, incomingLast);
         if (anchor > 0)
         {
             var deviation = Math.Abs(incomingLast - anchor) / anchor;
@@ -57,6 +58,35 @@ public static class BrokerQuoteGate
         }
 
         return new(true, RejectReason.None, anchor);
+    }
+
+    /// <summary>
+    /// Broker index quotes sometimes ship a stale/wrong session open (e.g. SENSEX open 76k while LTP ~81k).
+    /// Using that open as the deviation anchor rejects every live tick and freezes non-NIFTY charts.
+    /// </summary>
+    internal static decimal SanitizeTodayOpenForAnchor(
+        string symbolName,
+        decimal todayOpen,
+        decimal previousClose,
+        decimal storedLast)
+    {
+        if (!IndexUniverse.IsIndex(symbolName) || todayOpen <= 0)
+        {
+            return todayOpen;
+        }
+
+        var reference = storedLast > 0 ? storedLast : previousClose;
+        if (reference <= 0)
+        {
+            return todayOpen;
+        }
+
+        if (Math.Abs(todayOpen - reference) / reference > MaxIndexDeviation * 2)
+        {
+            return 0;
+        }
+
+        return todayOpen;
     }
 
     public static bool ShouldApplyTodayOpen(
@@ -76,7 +106,8 @@ public static class BrokerQuoteGate
             return false;
         }
 
-        var anchor = ResolveAnchor(storedLast, todayOpen, previousClose, incomingOpen);
+        var openForAnchor = SanitizeTodayOpenForAnchor(symbolName, todayOpen, previousClose, storedLast);
+        var anchor = ResolveAnchor(storedLast, openForAnchor, previousClose, incomingOpen);
         if (anchor <= 0)
         {
             return true;

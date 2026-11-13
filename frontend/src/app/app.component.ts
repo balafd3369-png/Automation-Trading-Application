@@ -4215,6 +4215,10 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.pendingChartName = symbol.name;
     if (instrumentChanged) {
       this.prepareChartInstrumentSwitch();
+      void this.chartLive.syncWatch(symbol.name, this.chartInterval).catch(() => {
+        this.chartStreamReceiving = false;
+        this.bumpView();
+      });
     }
     if (this.tradePanelTab === 'paper' && !this.isIndex(symbol.name)) {
       this.zoneBacktestReload.next();
