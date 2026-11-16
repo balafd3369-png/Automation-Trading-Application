@@ -18,6 +18,9 @@ public sealed class DeploymentStartupValidatorTests
         var database = new DatabaseOptions();
         var cors = new CorsOptions();
 
+        var infrastructure = new InfrastructureOptions();
+        var productionSafety = new ProductionSafetyOptions();
+
         Assert.Throws<InvalidOperationException>(() =>
             DeploymentStartupValidator.ValidateForStartup(
                 new TestHostEnvironment("Production"),
@@ -26,6 +29,8 @@ public sealed class DeploymentStartupValidatorTests
                 broker,
                 database,
                 cors,
+                infrastructure,
+                productionSafety,
                 NullLogger.Instance));
     }
 
@@ -38,6 +43,9 @@ public sealed class DeploymentStartupValidatorTests
         var database = new DatabaseOptions();
         var cors = new CorsOptions();
 
+        var infrastructure = new InfrastructureOptions();
+        var productionSafety = new ProductionSafetyOptions();
+
         DeploymentStartupValidator.ValidateForStartup(
             new TestHostEnvironment("Production"),
             identity,
@@ -45,6 +53,8 @@ public sealed class DeploymentStartupValidatorTests
             broker,
             database,
             cors,
+            infrastructure,
+            productionSafety,
             NullLogger.Instance);
     }
 

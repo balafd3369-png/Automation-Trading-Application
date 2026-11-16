@@ -1,21 +1,12 @@
-using Microsoft.Extensions.Configuration;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
+using TradeWithBeast.Tests.TestSupport;
 
 namespace TradeWithBeast.Tests.Services;
 
 public sealed class ZoneBoardOptionEstimatorTests
 {
-    static ZoneBoardOptionEstimatorTests()
-    {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["InstrumentLots:Index:NIFTY"] = "75",
-            })
-            .Build();
-        InstrumentLotMetadata.Configure(config);
-    }
+    static ZoneBoardOptionEstimatorTests() => InstrumentLotTestSetup.EnsureDefaultIndexLots();
 
     [Fact]
     public void Long_trade_recommends_ce_with_itm_and_otm_strikes()

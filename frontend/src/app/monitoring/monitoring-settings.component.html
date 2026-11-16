@@ -1,0 +1,69 @@
+<header class="monitor-head">
+  <div>
+    <h1>Notification settings</h1>
+    <p>Non-secret routing and recipients. SMTP passwords and Telegram bot tokens are configured on the server only.</p>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+@if (toast) {
+  <p class="toast" [class.ok]="!toastErr" [class.err]="toastErr">{{ toast }}</p>
+}
+
+@if (!settings) {
+  <p class="monitor-loading">Loading…</p>
+} @else {
+  <form class="settings-form" (ngSubmit)="save()">
+    <label><input type="checkbox" [(ngModel)]="form.notificationsEnabled" name="notificationsEnabled" /> Notifications enabled</label>
+    <label><input type="checkbox" [(ngModel)]="form.emailEnabled" name="emailEnabled" /> Email enabled</label>
+    <label><input type="checkbox" [(ngModel)]="form.telegramEnabled" name="telegramEnabled" /> Telegram enabled</label>
+    <label><input type="checkbox" [(ngModel)]="form.telegramOnMediumSeverity" name="telegramOnMediumSeverity" /> Telegram on medium severity</label>
+    <label><input type="checkbox" [(ngModel)]="form.notifyOnLowSeverity" name="notifyOnLowSeverity" /> Notify on low severity</label>
+
+    <label>
+      Sender email
+      <input [(ngModel)]="form.senderEmail" name="senderEmail" />
+    </label>
+    <label>
+      Primary email recipients (comma-separated)
+      <input [(ngModel)]="primaryEmails" name="primaryEmails" />
+    </label>
+    <label>
+      Secondary email recipients
+      <input [(ngModel)]="secondaryEmails" name="secondaryEmails" />
+    </label>
+    <label>
+      Primary Telegram chat IDs
+      <input [(ngModel)]="primaryChats" name="primaryChats" />
+    </label>
+    <label>
+      Secondary Telegram chat IDs
+      <input [(ngModel)]="secondaryChats" name="secondaryChats" />
+    </label>
+    <label>
+      Incident page URL template (<code>{{ '{id}' }}</code>)
+      <input [(ngModel)]="form.incidentPageUrlTemplate" name="incidentPageUrlTemplate" placeholder="https://host/#/admin/monitoring/incidents/{id}" />
+    </label>
+    <label>
+      Throttle seconds
+      <input type="number" [(ngModel)]="form.notificationThrottleSeconds" name="notificationThrottleSeconds" min="0" />
+    </label>
+
+    <p class="readonly-meta">
+      Retry: base {{ settings.retryBaseDelaySeconds }}s · max {{ settings.retryMaxDelaySeconds }}s · attempts
+      {{ settings.maximumDeliveryAttempts }} · worker interval {{ settings.notificationWorkerIntervalSeconds }}s
+    </p>
+
+    <button type="submit" [disabled]="saving">Save settings</button>
+  </form>
+
+  <h3>Channel tests</h3>
+  <div class="monitor-toolbar">
+    <input [(ngModel)]="testEmailOverride" name="testEmailOverride" placeholder="Email override (optional)" />
+    <button type="button" (click)="testEmail()">Test email</button>
+    <input [(ngModel)]="testChatOverride" name="testChatOverride" placeholder="Chat ID override (optional)" />
+    <button type="button" (click)="testTelegram()">Test Telegram</button>
+  </div>
+}

@@ -1,0 +1,79 @@
+<header class="monitor-head">
+  <div>
+    <h1>Recovery center</h1>
+    <p>Audit history and policy defaults. Trading-critical workers remain deny-by-default for automatic recovery.</p>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+@if (message) {
+  <p class="monitor-info">{{ message }}</p>
+}
+
+<section class="monitor-section">
+  <h2>Recovery policies</h2>
+  @if (!policies.length) {
+    <p class="monitor-empty">No policies loaded.</p>
+  } @else {
+    <div class="monitor-table-wrap">
+      <table class="monitor-table">
+        <thead>
+          <tr>
+            <th>Worker</th>
+            <th>Automatic</th>
+            <th>Max attempts</th>
+            <th>Cooldown (s)</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (p of policies; track p.workerName) {
+            <tr>
+              <td>{{ p.workerName }}</td>
+              <td>{{ p.automaticRecoveryAllowed ? 'yes' : 'no' }}</td>
+              <td>{{ p.maxAttempts }}</td>
+              <td>{{ p.cooldownSeconds }}</td>
+              <td>{{ p.notes }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+
+<section class="monitor-section">
+  <h2>Recent recovery history</h2>
+  @if (!history.length) {
+    <p class="monitor-empty">No recovery events recorded.</p>
+  } @else {
+    <div class="monitor-table-wrap">
+      <table class="monitor-table">
+        <thead>
+          <tr>
+            <th>Worker</th>
+            <th>Result</th>
+            <th>Attempt</th>
+            <th>Started</th>
+            <th>Correlation</th>
+            <th>Failure</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (h of history; track h.id) {
+            <tr>
+              <td>{{ h.workerName }}</td>
+              <td>{{ h.result }}</td>
+              <td>{{ h.attemptNumber }}</td>
+              <td>{{ h.startedUtc | date: 'short' }}</td>
+              <td><code>{{ h.correlationId }}</code></td>
+              <td>{{ h.failureReason ?? '—' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

@@ -158,6 +158,9 @@ public static class IndexUniverse
         [999901] = "SENSEX",
     };
 
+    public static IEnumerable<int> AllKnownIndexInstrumentTokens() =>
+        NseInstrumentTokens.Keys.Concat(BseInstrumentTokens.Keys).Distinct();
+
     private static Dictionary<string, string[]> BuildQuoteKeys()
     {
         var map = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)

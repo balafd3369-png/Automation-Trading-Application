@@ -31,6 +31,100 @@ export const routes: Routes = [
       import('./dashboard/admin-dashboard.component').then((m) => m.AdminDashboardComponent),
     canActivate: [adminGuard],
   },
+  {
+    path: 'admin/monitoring',
+    loadComponent: () =>
+      import('./monitoring/monitoring-shell.component').then((m) => m.MonitoringShellComponent),
+    canActivate: [adminGuard],
+    children: [
+      { path: '', pathMatch: 'full', redirectTo: 'overview' },
+      {
+        path: 'overview',
+        loadComponent: () =>
+          import('./monitoring/monitoring-overview.component').then((m) => m.MonitoringOverviewComponent),
+      },
+      {
+        path: 'components',
+        loadComponent: () =>
+          import('./monitoring/monitoring-components.component').then((m) => m.MonitoringComponentsComponent),
+      },
+      {
+        path: 'incidents',
+        loadComponent: () =>
+          import('./monitoring/monitoring-incidents.component').then((m) => m.MonitoringIncidentsComponent),
+      },
+      {
+        path: 'incidents/:id',
+        loadComponent: () =>
+          import('./monitoring/monitoring-incident-detail.component').then(
+            (m) => m.MonitoringIncidentDetailComponent,
+          ),
+      },
+      {
+        path: 'notifications',
+        loadComponent: () =>
+          import('./monitoring/monitoring-notifications.component').then(
+            (m) => m.MonitoringNotificationsComponent,
+          ),
+      },
+      {
+        path: 'settings',
+        loadComponent: () =>
+          import('./monitoring/monitoring-settings.component').then((m) => m.MonitoringSettingsComponent),
+      },
+      {
+        path: 'escalation',
+        loadComponent: () =>
+          import('./monitoring/monitoring-escalation.component').then((m) => m.MonitoringEscalationComponent),
+      },
+      {
+        path: 'analytics',
+        loadComponent: () =>
+          import('./monitoring/monitoring-analytics.component').then((m) => m.MonitoringAnalyticsComponent),
+      },
+      {
+        path: 'reliability',
+        loadComponent: () =>
+          import('./monitoring/monitoring-reliability.component').then((m) => m.MonitoringReliabilityComponent),
+      },
+      {
+        path: 'instances',
+        loadComponent: () =>
+          import('./monitoring/monitoring-instances.component').then((m) => m.MonitoringInstancesComponent),
+      },
+      {
+        path: 'coordination-workers',
+        loadComponent: () =>
+          import('./monitoring/monitoring-coordination-workers.component').then(
+            (m) => m.MonitoringCoordinationWorkersComponent,
+          ),
+      },
+      {
+        path: 'locks',
+        loadComponent: () =>
+          import('./monitoring/monitoring-locks.component').then((m) => m.MonitoringLocksComponent),
+      },
+      {
+        path: 'recovery',
+        loadComponent: () =>
+          import('./monitoring/monitoring-recovery.component').then((m) => m.MonitoringRecoveryComponent),
+      },
+      {
+        path: 'production-safety',
+        loadComponent: () =>
+          import('./monitoring/monitoring-production-safety.component').then(
+            (m) => m.MonitoringProductionSafetyComponent,
+          ),
+      },
+      {
+        path: 'trading-safety',
+        loadComponent: () =>
+          import('./monitoring/monitoring-trading-safety.component').then(
+            (m) => m.MonitoringTradingSafetyComponent,
+          ),
+      },
+    ],
+  },
   { path: '', pathMatch: 'full', redirectTo: 'market' },
   { path: 'market/index/:symbol', component: EmptyRouteComponent, ...protectedShell },
   { path: 'market/options/:underlying', component: EmptyRouteComponent, ...protectedShell },

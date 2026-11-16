@@ -1,22 +1,12 @@
-using Microsoft.Extensions.Configuration;
 using TradeWithBeast.Services;
+using TradeWithBeast.Tests.TestSupport;
 using Xunit;
 
 namespace TradeWithBeast.Tests.Services;
 
 public sealed class TradingQuantityRulesTests
 {
-    static TradingQuantityRulesTests()
-    {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["InstrumentLots:Index:NIFTY"] = "75",
-                ["InstrumentLots:Index:BANKNIFTY"] = "30",
-            })
-            .Build();
-        InstrumentLotMetadata.Configure(config);
-    }
+    static TradingQuantityRulesTests() => InstrumentLotTestSetup.EnsureDefaultIndexLots();
 
     [Fact]
     public void Stock_rules_use_step_one()

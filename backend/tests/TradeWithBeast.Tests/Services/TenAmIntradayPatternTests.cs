@@ -26,7 +26,7 @@ public sealed class TenAmIntradayPatternTests
         Assert.True(ok);
         Assert.NotNull(signal);
         Assert.Equal(TenAmIntradayPattern.HighFadeStrategy, signal!.Strategy);
-        Assert.Equal(22725m + 10m, signal.StopLoss);
+        Assert.Equal(22750m + TenAmIntradayPattern.StopBufferPoints, signal.StopLoss);
     }
 
     private static ChartBar Bar(

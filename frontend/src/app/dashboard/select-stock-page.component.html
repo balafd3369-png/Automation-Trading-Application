@@ -274,6 +274,42 @@
         </button>
       </header>
 
+      @if (trapFall) {
+        <section class="ws-reversal ws-trap-fall" aria-label="Trap fall forming">
+          <header class="ws-reversal-head">
+            <h2>Trap fall · forming now</h2>
+            <p class="ws-reversal-stats">
+              Armed (B1 tested)
+              <strong>{{ trapFall.armedCount }}</strong>
+              · Enter (S1 break)
+              <strong>{{ trapFall.enterNowCount }}</strong>
+              · {{ trapFall.playbook }}
+            </p>
+          </header>
+          <ol class="ws-reversal-stages">
+            <li>Week watch — lower highs / weak close into session</li>
+            <li>Approach B1 — price near buy zone (trap setup building)</li>
+            <li>Armed — B1 tested, S1 still holds (prepare short)</li>
+            <li>Enter — 5m close below S1 after B1 test → target S2</li>
+          </ol>
+          <ul class="ws-reversal-list">
+            @for (r of trapFallActionable(); track r.name + r.stage) {
+              <li>
+                <button type="button" class="ws-reversal-row" [ngClass]="trapFallStageClass(r.stage)" (click)="openChartFromTrap(r)">
+                  <span class="r-sym">{{ r.name }}{{ r.isIndex ? ' · index' : '' }}</span>
+                  <span class="r-stage">{{ r.stage }}</span>
+                  <span class="r-bands">{{ r.weekBias.replace('_', ' ') }}</span>
+                  <span class="r-move">{{ r.headline }}</span>
+                  <span class="r-gap">B1 {{ r.b1 | number: '1.2-2' }} · S1 {{ r.s1 | number: '1.2-2' }}</span>
+                </button>
+              </li>
+            } @empty {
+              <li class="ws-muted">No trap forming at this stage — scan runs every 12s.</li>
+            }
+          </ul>
+        </section>
+      }
+
       @if (reversal) {
         <section class="ws-reversal" aria-label="Reversal radar">
           <header class="ws-reversal-head">

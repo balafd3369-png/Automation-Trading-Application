@@ -1,0 +1,78 @@
+<header class="monitor-head">
+  <div>
+    <h1>Notification center</h1>
+    <p>Phase 4 delivery history. Secrets are never shown.</p>
+  </div>
+</header>
+
+@if (toast) {
+  <p class="toast ok">{{ toast }}</p>
+}
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+
+<div class="monitor-toolbar">
+  <select [(ngModel)]="channel" (change)="reload()">
+    <option value="">All channels</option>
+    <option value="Email">Email</option>
+    <option value="Telegram">Telegram</option>
+  </select>
+  <select [(ngModel)]="status" (change)="reload()">
+    <option value="">All statuses</option>
+    <option value="Pending">Pending</option>
+    <option value="Processing">Processing</option>
+    <option value="Sent">Sent</option>
+    <option value="Failed">Failed</option>
+    <option value="RetryScheduled">Retry scheduled</option>
+    <option value="Cancelled">Cancelled</option>
+  </select>
+  <button type="button" (click)="reload()" [disabled]="busy">Refresh</button>
+</div>
+
+@if (!rows.length && !error) {
+  <p class="monitor-loading">Loading notifications…</p>
+} @else if (!rows.length) {
+  <p class="monitor-empty">No notifications found.</p>
+} @else {
+  <div class="monitor-table-wrap">
+    <table class="monitor-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Incident</th>
+          <th>Channel</th>
+          <th>Type</th>
+          <th>Recipient</th>
+          <th>Status</th>
+          <th>Attempts</th>
+          <th>Created</th>
+          <th>Sent</th>
+          <th>Failure</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (n of rows; track n.id) {
+          <tr>
+            <td>{{ n.id.slice(0, 8) }}…</td>
+            <td><a [routerLink]="['/admin/monitoring/incidents', n.incidentId]">{{ n.incidentId.slice(0, 8) }}…</a></td>
+            <td>{{ n.channel }}</td>
+            <td>{{ n.notificationType }}</td>
+            <td>{{ n.recipient }}</td>
+            <td>{{ n.deliveryStatus }}</td>
+            <td>{{ n.attemptCount }}</td>
+            <td>{{ n.createdUtc | date: 'short' }}</td>
+            <td>{{ n.sentUtc ? (n.sentUtc | date: 'short') : '—' }}</td>
+            <td>{{ n.failureReason || '—' }}</td>
+            <td>
+              @if (canRetry(n)) {
+                <button type="button" (click)="retry(n.id)" [disabled]="busy">Retry</button>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

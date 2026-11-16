@@ -1,0 +1,142 @@
+<header class="monitor-head">
+  <div>
+    <h1>Trading execution safety</h1>
+    <p>
+      Emergency gate, broker circuit breaker, and non-terminal live order counts. No automatic resubmission or
+      corrective orders.
+    </p>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+@if (message) {
+  <p class="monitor-info">{{ message }}</p>
+}
+
+@if (!summary && !error) {
+  <p class="monitor-loading">Loading trading safety summary…</p>
+} @else if (summary) {
+  <section class="panel">
+    <h2>Emergency gate</h2>
+    <div class="monitor-grid">
+      <div class="monitor-card" [class.warn]="summary.emergencyGate.isHalted">
+        <span>State</span>
+        <strong>{{ summary.emergencyGate.isHalted ? 'HALTED' : 'Clear' }}</strong>
+        <small>{{ summary.emergencyGate.reason || '—' }}</small>
+      </div>
+      <div class="monitor-card">
+        <span>Last change</span>
+        <strong>{{
+          summary.emergencyGate.changedUtc ? (summary.emergencyGate.changedUtc | date: 'short') : '—'
+        }}</strong>
+        <small>{{ summary.emergencyGate.changedBy ?? '—' }}</small>
+      </div>
+    </div>
+    <div class="admin-actions">
+      <label>
+        Reason
+        <input [(ngModel)]="gateReason" name="gateReason" placeholder="Optional reason" />
+      </label>
+      <label>
+        Confirmation (type exactly)
+        <input [(ngModel)]="confirmation" name="confirmation" [placeholder]="confirmPhrase" />
+      </label>
+      <div class="btn-row">
+        <button type="button" class="monitor-btn danger" (click)="haltGate()">Halt new live orders</button>
+        <button type="button" class="monitor-btn" (click)="clearGate()">Clear halt</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Broker circuit breaker</h2>
+    <div class="monitor-grid">
+      <div class="monitor-card" [class.warn]="summary.circuitBreaker.liveOrdersBlocked">
+        <span>State</span>
+        <strong>{{ summary.circuitBreaker.state }}</strong>
+        <small>{{ summary.circuitBreaker.tripReason ?? '—' }}</small>
+      </div>
+      <div class="monitor-card">
+        <span>Consecutive failures</span>
+        <strong>{{ summary.circuitBreaker.consecutiveFailures }}</strong>
+      </div>
+      <div class="monitor-card">
+        <span>Last success</span>
+        <strong>{{
+          summary.circuitBreaker.lastSuccessAt ? (summary.circuitBreaker.lastSuccessAt | date: 'short') : '—'
+        }}</strong>
+      </div>
+      <div class="monitor-card">
+        <span>Last heartbeat</span>
+        <strong>{{
+          summary.circuitBreaker.lastHeartbeatAt ? (summary.circuitBreaker.lastHeartbeatAt | date: 'short') : '—'
+        }}</strong>
+      </div>
+    </div>
+    <div class="admin-actions">
+      <label>
+        Reset reason
+        <input [(ngModel)]="breakerReason" name="breakerReason" placeholder="Broker restored" />
+      </label>
+      <button type="button" class="monitor-btn" (click)="resetBreaker()">Reset breaker</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Order safety</h2>
+    <div class="monitor-grid">
+      <div class="monitor-card">
+        <span>Manual live (non-terminal)</span>
+        <strong>{{ summary.nonTerminalManualLiveOrders }}</strong>
+      </div>
+      <div class="monitor-card">
+        <span>Strategy live (non-terminal)</span>
+        <strong>{{ summary.nonTerminalStrategyOrders }}</strong>
+      </div>
+      <div class="monitor-card" [class.warn]="summary.unknownOrderCount > 0">
+        <span>Unknown / timeout</span>
+        <strong>{{ summary.unknownOrderCount }}</strong>
+      </div>
+      <div class="monitor-card" [class.warn]="summary.stuckSubmittedCount > 0">
+        <span>Stuck submitted</span>
+        <strong>{{ summary.stuckSubmittedCount }}</strong>
+      </div>
+    </div>
+    <p class="hint">
+      Resolve unknown manual orders via admin API <code>POST /api/admin/trading-safety/orders/&lt;id&gt;/resolve</code>.
+      Database backups and reconciliation counts: Production safety monitoring page.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Gate audit (recent)</h2>
+    @if (audit.length === 0) {
+      <p class="hint">No audit entries yet.</p>
+    } @else {
+      <table class="audit-table">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Action</th>
+            <th>Detail</th>
+            <th>Actor</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of audit; track row.createdUtc + row.action) {
+            <tr>
+              <td>{{ row.createdUtc | date: 'short' }}</td>
+              <td>{{ row.action }}</td>
+              <td>{{ row.detail }}</td>
+              <td>{{ row.actor }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+
+  <p class="generated">Snapshot {{ summary.generatedUtc | date: 'medium' }}</p>
+}

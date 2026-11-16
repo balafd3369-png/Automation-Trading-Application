@@ -1,0 +1,54 @@
+<header class="monitor-head">
+  <div>
+    <h1>Instance management</h1>
+    <p>Registered application instances and leadership heartbeats from the coordination store.</p>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+@if (actionMessage) {
+  <p class="monitor-info">{{ actionMessage }}</p>
+}
+
+@if (!instances.length && !error) {
+  <p class="monitor-loading">Loading instances…</p>
+} @else if (!instances.length) {
+  <p class="monitor-empty">No instances registered. Reliability coordinator may be disabled.</p>
+} @else {
+  <div class="monitor-table-wrap">
+    <table class="monitor-table">
+      <thead>
+        <tr>
+          <th>Instance</th>
+          <th>Host</th>
+          <th>Version</th>
+          <th>Leader</th>
+          <th>Draining</th>
+          <th>Last heartbeat</th>
+          <th>Lease expires</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of instances; track row.instanceId) {
+          <tr>
+            <td><code>{{ row.instanceId }}</code></td>
+            <td>{{ row.hostName }}</td>
+            <td>{{ row.applicationVersion }}</td>
+            <td>{{ row.isLeader ? row.leaderRole ?? 'yes' : 'no' }}</td>
+            <td>{{ row.isDraining ? 'yes' : 'no' }}</td>
+            <td>{{ row.lastHeartbeatUtc | date: 'short' }}</td>
+            <td>{{ row.leaseExpiresUtc ? (row.leaseExpiresUtc | date: 'short') : '—' }}</td>
+            <td>
+              @if (!row.isDraining) {
+                <button type="button" class="monitor-btn" (click)="drain(row)">Drain</button>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

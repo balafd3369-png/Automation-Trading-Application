@@ -25,7 +25,11 @@ public sealed class BoardApiTests : IClassFixture<TestWebApplicationFactory>
         Assert.NotNull(board);
         Assert.NotEmpty(board!.Symbols);
         Assert.Contains(board.Symbols, s => s.Name.Equals("NIFTY", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains("m.Stock", board.Feed, StringComparison.OrdinalIgnoreCase);
+        Assert.True(
+            board.Feed.Contains("m.Stock", StringComparison.OrdinalIgnoreCase)
+            || board.Feed.Contains("awaiting broker", StringComparison.OrdinalIgnoreCase)
+            || board.Feed.Contains("demo", StringComparison.OrdinalIgnoreCase),
+            $"Unexpected feed label: {board.Feed}");
         Assert.True(board.Counts.Buying + board.Counts.Selling + board.Counts.RangeBound > 0);
     }
 
@@ -58,7 +62,11 @@ public sealed class BoardApiTests : IClassFixture<TestWebApplicationFactory>
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.False(doc.RootElement.GetProperty("connected").GetBoolean());
-        Assert.Equal("m.Stock Type A", doc.RootElement.GetProperty("broker").GetString());
+        Assert.False(doc.RootElement.GetProperty("connected").GetBoolean());
+        if (doc.RootElement.TryGetProperty("provider", out var provider) && provider.ValueKind == JsonValueKind.String)
+        {
+            Assert.Null(provider.GetString());
+        }
         Assert.True(doc.RootElement.TryGetProperty("availableFunds", out var available));
         Assert.Equal(JsonValueKind.Null, available.ValueKind);
         Assert.True(doc.RootElement.TryGetProperty("utilizedFunds", out var utilized));

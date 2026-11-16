@@ -1,6 +1,8 @@
 using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using TradeWithBeast.Configuration;
+using TradeWithBeast.Tests.TestSupport;
 using TradeWithBeast.Broker;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
@@ -83,18 +85,17 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
 
     private LiveExecutionCoordinator Create(PaperTradeProposal proposal, FakeBroker broker)
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["TradeHistory:DatabasePath"] = _path })
-            .Build();
         var auth = CreateAuth();
         var brokers = new BrokerConnectionManager(auth, broker);
         brokers.OnMStockSessionEstablished();
         return new(
             brokers,
             new FakeProposalSource(proposal),
-            new TradeHistoryStore(configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger<TradeHistoryStore>.Instance),
+            TradeHistoryStoreTestHelper.Create(_path),
             new LiveExecutionOptions { Enabled = true, OrderTimeoutSeconds = 3, TreatMarketAsOpen = true },
             new TradingPlatformOptions { FuturesEnabled = false },
+            new WorkerHeartbeatRegistry(new SystemMonitoringOptions()),
+            CreateSafety(brokers),
             NullLogger<LiveExecutionCoordinator>.Instance);
     }
 
@@ -178,6 +179,24 @@ public sealed class LiveExecutionCoordinatorTests : IDisposable
             id, symbol, "NIFTY", "OPTION", side, 1, 65, price, 25_000m, "CE",
             DateTimeOffset.UtcNow.AddDays(2),
             new("test", "NFO", 123, DateTimeOffset.UtcNow, 0, true, price - 1, price + 1, 1000, 1000, []));
+
+    private static LiveTradingExecutionSafetyService CreateSafety(BrokerConnectionManager brokers)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:SqlitePath"] = Path.GetTempFileName() })
+            .Build();
+        var breaker = new BrokerCircuitBreaker(
+            new Lazy<BrokerConnectionManager>(() => brokers),
+            new OperationsStore(configuration, new DatabaseOptions(), new CurrentUserAccessor(), new SystemIdentityOptions { AllowAnonymousLocalUser = true }, NullLogger<OperationsStore>.Instance),
+            NullLogger<BrokerCircuitBreaker>.Instance);
+        breaker.RecordHeartbeat();
+        return new LiveTradingExecutionSafetyService(
+            new LiveTradingEmergencyGate(),
+            breaker,
+            new TradingExecutionSafetyOptions { PersistEmergencyGateState = false },
+            new TradingSafetyStore(configuration, new DatabaseOptions()),
+            NullLogger<LiveTradingExecutionSafetyService>.Instance);
+    }
 
     public void Dispose()
     {

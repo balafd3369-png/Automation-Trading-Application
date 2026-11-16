@@ -12,7 +12,7 @@ public sealed class EquitySymbolCatalogTests
     {
         var env = new TestWebHostEnvironment
         {
-            ContentRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "backend")),
+            ContentRootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..")),
         };
         var catalog = new EquitySymbolCatalog(env, NullLogger<EquitySymbolCatalog>.Instance);
         var hits = catalog.Search("TATAELXSI", 5);

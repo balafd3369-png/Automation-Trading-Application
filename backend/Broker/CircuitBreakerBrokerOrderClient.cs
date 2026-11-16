@@ -16,6 +16,15 @@ public sealed class CircuitBreakerBrokerOrderClient : IBrokerOrderClient
 
     public async Task<BrokerApiResult<string>> PlaceOrderAsync(BrokerOrderRequest order, CancellationToken ct)
     {
+        if (!IsRiskReductionPlacement(order))
+        {
+            var allowed = _breaker.AssertLiveOrderAllowed();
+            if (!allowed.Allowed)
+            {
+                return new BrokerApiResult<string>(false, null, allowed.Message, "CircuitOpen");
+            }
+        }
+
         var result = await _inner.PlaceOrderAsync(order, ct);
         Track(result.Success, result.Message);
         return result;
@@ -27,6 +36,12 @@ public sealed class CircuitBreakerBrokerOrderClient : IBrokerOrderClient
         int remainingQuantity,
         CancellationToken ct)
     {
+        var allowed = _breaker.AssertLiveOrderAllowed();
+        if (!allowed.Allowed)
+        {
+            return new BrokerApiResult<string>(false, null, allowed.Message, "CircuitOpen");
+        }
+
         var result = await _inner.ModifyOrderAsync(orderId, order, remainingQuantity, ct);
         Track(result.Success, result.Message);
         return result;
@@ -102,6 +117,13 @@ public sealed class CircuitBreakerBrokerOrderClient : IBrokerOrderClient
             ct);
         Track(result.Success, result.Message);
         return result;
+    }
+
+    private static bool IsRiskReductionPlacement(BrokerOrderRequest order)
+    {
+        var tag = order.Tag ?? "";
+        return tag.Contains("-EXI", StringComparison.Ordinal)
+            || tag.Contains("-COM", StringComparison.Ordinal);
     }
 
     private void Track(bool success, string message)

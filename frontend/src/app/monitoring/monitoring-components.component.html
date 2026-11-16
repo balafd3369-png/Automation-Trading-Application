@@ -1,0 +1,69 @@
+<header class="monitor-head">
+  <div>
+    <h1>Component health</h1>
+    <p>Infrastructure components from admin system-health APIs. Trading safety systems are shown when exposed as workers or probes only.</p>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+
+<div class="monitor-toolbar">
+  <label>
+    Category
+    <select (change)="onCategory(($any($event.target)).value)">
+      <option value="">All</option>
+      @for (c of categories(); track c) {
+        <option [value]="c">{{ c }}</option>
+      }
+    </select>
+  </label>
+  <label>
+    Status
+    <select (change)="onStatus(($any($event.target)).value)">
+      <option value="">All</option>
+      <option value="HEALTHY">Healthy</option>
+      <option value="DEGRADED">Degraded</option>
+      <option value="UNHEALTHY">Unhealthy</option>
+      <option value="UNKNOWN">Unknown</option>
+    </select>
+  </label>
+</div>
+
+@if (!rows.length && !error) {
+  <p class="monitor-loading">Loading components…</p>
+} @else if (!filtered.length) {
+  <p class="monitor-empty">No components match the selected filters.</p>
+} @else {
+  <div class="monitor-table-wrap">
+    <table class="monitor-table">
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Component</th>
+          <th>Identifier</th>
+          <th>Status</th>
+          <th>Last success</th>
+          <th>Last check</th>
+          <th>Response</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of filtered; track row.name + row.identifier) {
+          <tr>
+            <td>{{ row.category }}</td>
+            <td>{{ row.name }}</td>
+            <td>{{ row.identifier }}</td>
+            <td><span class="badge" [class]="statusClass(row.status)">{{ row.status }}</span></td>
+            <td>{{ row.lastSuccess ? (row.lastSuccess | date: 'short') : '—' }}</td>
+            <td>{{ row.lastCheck ? (row.lastCheck | date: 'short') : '—' }}</td>
+            <td>{{ row.responseMs != null ? row.responseMs + ' ms' : '—' }}</td>
+            <td>{{ row.lastError || '—' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

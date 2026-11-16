@@ -1,0 +1,43 @@
+<header class="monitor-head">
+  <div>
+    <h1>Distributed locks</h1>
+    <p>SQLite-backed exclusive locks with fencing tokens (safe when all instances share one database file).</p>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+
+@if (!locks.length && !error) {
+  <p class="monitor-loading">Loading locks…</p>
+} @else if (!locks.length) {
+  <p class="monitor-empty">No active lock records.</p>
+} @else {
+  <div class="monitor-table-wrap">
+    <table class="monitor-table">
+      <thead>
+        <tr>
+          <th>Lock</th>
+          <th>Owner</th>
+          <th>Fencing</th>
+          <th>Status</th>
+          <th>Expires</th>
+          <th>Last renewed</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (l of locks; track l.lockName) {
+          <tr>
+            <td><code>{{ l.lockName }}</code></td>
+            <td>{{ l.ownerInstanceId }}</td>
+            <td>{{ l.fencingToken }}</td>
+            <td>{{ l.isExpired ? 'expired' : 'active' }}</td>
+            <td>{{ l.expiresUtc | date: 'short' }}</td>
+            <td>{{ l.lastRenewedUtc | date: 'short' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

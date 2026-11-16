@@ -12,7 +12,8 @@ public sealed record ManualTradingPlaceOrderRequest(
     decimal? LimitPrice = null,
     decimal? Strike = null,
     string? OptionRight = null,
-    DateTimeOffset? Expiry = null);
+    DateTimeOffset? Expiry = null,
+    string? IdempotencyKey = null);
 
 public sealed record ManualTradingCancelOrderRequest(string OrderId);
 

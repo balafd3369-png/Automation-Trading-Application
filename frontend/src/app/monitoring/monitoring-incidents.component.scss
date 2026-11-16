@@ -1,0 +1,7 @@
+@use './monitoring.styles.scss';
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}

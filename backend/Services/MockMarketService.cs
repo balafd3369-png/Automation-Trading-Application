@@ -6,7 +6,7 @@ using TradeWithBeast.Models;
 
 namespace TradeWithBeast.Services;
 
-public sealed class MockMarketService : IHostedService, IDisposable
+public sealed class MockMarketService : IHostedService, IDisposable, ISystemHealthBoardProbeSource
 {
     private static readonly TimeSpan ChartRequestBudget = TimeSpan.FromSeconds(22);
 
@@ -21,7 +21,11 @@ public sealed class MockMarketService : IHostedService, IDisposable
     private readonly EquitySymbolCatalog _catalog;
     private readonly ILogger<MockMarketService> _log;
     private readonly ChartLiveStreamService _chartLiveStream;
+    private readonly MStockMarketDataWebSocketHealth? _wsHealth;
+    private readonly WorkerHeartbeatRegistry _workerHeartbeats;
     private readonly Dictionary<string, List<IntradayTickBuilder.Tick>> _intradayTicks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<IntradayTickBuilder.Tick>> _optionIntradayTicks =
+        new(StringComparer.OrdinalIgnoreCase);
     private Timer? _timer;
     private CancellationTokenSource? _historyCts;
     private DateTimeOffset _updatedAt = DateTimeOffset.UtcNow;
@@ -39,12 +43,16 @@ public sealed class MockMarketService : IHostedService, IDisposable
         BrokerConnectionManager brokers,
         EquitySymbolCatalog catalog,
         ChartLiveStreamService chartLiveStream,
+        MStockMarketDataWebSocketHealth wsHealth,
+        WorkerHeartbeatRegistry workerHeartbeats,
         ILogger<MockMarketService> log)
     {
         _store = new SeedStore(Path.Combine(env.ContentRootPath, "data", "mock-board.json"));
         _brokers = brokers;
         _catalog = catalog;
         _chartLiveStream = chartLiveStream;
+        _wsHealth = wsHealth;
+        _workerHeartbeats = workerHeartbeats;
         _log = log;
     }
 
@@ -94,15 +102,21 @@ public sealed class MockMarketService : IHostedService, IDisposable
             _updatedAt = DateTimeOffset.UtcNow;
         }
 
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.MockMarketService, WorkerRunStatus.Starting);
         _timer = new Timer(_ => _ = TickAsync(), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5));
         _historyCts = new CancellationTokenSource();
         _ = Task.Run(() => LoadHistoryLoopAsync(_historyCts.Token));
+        _workerHeartbeats.Pulse(
+            MonitoredWorkerNames.MockMarketService,
+            WorkerRunStatus.Running,
+            markSuccessfulExecution: true);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _timer?.Change(Timeout.Infinite, 0);
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.MockMarketService, WorkerRunStatus.Stopped);
         return Task.CompletedTask;
     }
 
@@ -125,6 +139,222 @@ public sealed class MockMarketService : IHostedService, IDisposable
 
         _ = Task.Run(() => PrimeBrokerZoneHistoryAsync(CancellationToken.None));
         _ = Task.Run(() => PrimeAllBoardQuotesAsync(CancellationToken.None));
+    }
+
+    public IReadOnlyList<int> GetWebSocketInstrumentTokens()
+    {
+        var set = new HashSet<int>();
+        foreach (var token in IndexUniverse.AllKnownIndexInstrumentTokens())
+        {
+            set.Add(token);
+        }
+
+        foreach (var token in GetWatchedOptionInstrumentTokens())
+        {
+            set.Add(token);
+        }
+
+        lock (_gate)
+        {
+            foreach (var symbol in _symbols)
+            {
+                if (symbol.InstrumentToken > 0)
+                {
+                    set.Add(symbol.InstrumentToken);
+                }
+            }
+        }
+
+        return set.OrderBy(t => t).ToList();
+    }
+
+    public async Task PublishWatchedOptionChartsLiveAsync(CancellationToken ct = default)
+    {
+        if (!Broker.HasSession || !NseCashSession.IsLiveIntradayWindowNow())
+        {
+            return;
+        }
+
+        foreach (var (chartName, interval) in ChartLiveStreamService.WatchedCharts())
+        {
+            if (!OptionChartLabelParser.LooksLikeOptionChartName(chartName))
+            {
+                continue;
+            }
+
+            if (!OptionChartLabelParser.TryParse(chartName, out var spec))
+            {
+                continue;
+            }
+
+            OptionQuoteSnap? quote;
+            try
+            {
+                quote = await Broker.GetOptionQuoteAsync(spec.Underlying, spec.Expiry, spec.Strike, spec.Side, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Option live quote failed for {Chart}", chartName);
+                continue;
+            }
+
+            if (quote is null || quote.Last <= 0)
+            {
+                continue;
+            }
+
+            var todayOpen = quote.Open > 0 ? quote.Open : quote.Last;
+            RecordOptionIntradayTick(chartName, quote.Last, todayOpen);
+
+            List<IntradayTickBuilder.Tick> ticks;
+            lock (_gate)
+            {
+                _optionIntradayTicks.TryGetValue(chartName, out ticks!);
+                ticks ??= [];
+            }
+
+            if (ticks.Count == 0)
+            {
+                continue;
+            }
+
+            var bars = IntradayTickBuilder.BuildBars(ticks, interval, todayOpen);
+            if (bars.Count == 0)
+            {
+                continue;
+            }
+
+            var bar = bars[^1];
+            SymbolSnapshot underlyingSnap;
+            lock (_gate)
+            {
+                var underlying = _symbols.FirstOrDefault(s =>
+                    s.Name.Equals(spec.Underlying, StringComparison.OrdinalIgnoreCase));
+                underlyingSnap = underlying is null
+                    ? new SymbolSnapshot(spec.Underlying, quote.Last, todayOpen, 0, 0, 0, 0, 0, 0, 0, 0, 0, "RANGE BOUND", false, 0)
+                    : ToSnapshot(underlying);
+            }
+
+            await _chartLiveStream.PublishAsync(
+                new ChartLiveUpdate(
+                    chartName,
+                    interval,
+                    bar,
+                    quote.Last,
+                    underlyingSnap.B2,
+                    underlyingSnap.B1,
+                    underlyingSnap.S,
+                    underlyingSnap.S1,
+                    underlyingSnap.S2,
+                    DateTimeOffset.UtcNow),
+                ct);
+
+            if (quote.InstrumentToken > 0)
+            {
+                lock (_gate)
+                {
+                    _optionInstrumentTokens[chartName] = quote.InstrumentToken;
+                }
+            }
+        }
+    }
+
+    private readonly Dictionary<string, int> _optionInstrumentTokens = new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<int> GetWatchedOptionInstrumentTokens()
+    {
+        lock (_gate)
+        {
+            return _optionInstrumentTokens.Values.Where(t => t > 0).Distinct().ToList();
+        }
+    }
+
+    private void RecordOptionIntradayTick(string chartName, decimal last, decimal todayOpen)
+    {
+        if (last <= 0 || !ChartSessionMerger.IsCashSessionOpen(ChartSessionMerger.IstNow()))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_optionIntradayTicks.TryGetValue(chartName, out var ticks))
+            {
+                ticks = [];
+                _optionIntradayTicks[chartName] = ticks;
+            }
+
+            if (ticks.Count == 0 && todayOpen > 0)
+            {
+                IntradayTickBuilder.BootstrapFromOpen(ticks, todayOpen, last);
+            }
+
+            IntradayTickBuilder.Record(ticks, last);
+        }
+    }
+
+    public async Task IngestWebSocketTicksAsync(IReadOnlyList<MStockWebSocketTick> ticks, CancellationToken ct = default)
+    {
+        if (ticks.Count == 0 || !Broker.HasSession || !NseCashSession.IsLiveIntradayWindowNow())
+        {
+            return;
+        }
+
+        var pushNames = new List<string>();
+        lock (_gate)
+        {
+            foreach (var tick in ticks)
+            {
+                var symbol = ResolveSymbolForWebSocketTick(tick);
+                if (symbol is null)
+                {
+                    continue;
+                }
+
+                var decision = BrokerQuoteGate.EvaluateLastPrice(
+                    symbol.Name,
+                    tick.Last,
+                    symbol.Last,
+                    symbol.TodayOpen,
+                    symbol.PreviousClose);
+                if (!decision.Accept)
+                {
+                    LogQuoteReject(symbol.Name, tick.Last, decision);
+                    continue;
+                }
+
+                symbol.Last = tick.Last;
+                symbol.DataTimestamp = tick.ExchangeTimestamp ?? DateTimeOffset.UtcNow;
+                if (tick.InstrumentToken > 0)
+                {
+                    symbol.InstrumentToken = tick.InstrumentToken;
+                }
+
+                if (BrokerQuoteGate.ShouldApplyTodayOpen(symbol.Name, tick.Open, symbol.Last, symbol.TodayOpen, symbol.PreviousClose))
+                {
+                    symbol.TodayOpen = tick.Open;
+                }
+
+                RepairCorruptIndexTodayOpen(symbol);
+                RecordIntradayTick(symbol.Name, tick.Last, symbol.TodayOpen);
+                if (_chartLiveStream.HasWatchers(symbol.Name))
+                {
+                    pushNames.Add(symbol.Name);
+                }
+            }
+
+            _feed = $"{_brokers.ActiveDisplayName} websocket";
+            _updatedAt = DateTimeOffset.UtcNow;
+        }
+
+        foreach (var name in pushNames.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            await PublishChartLiveAsync(name);
+        }
     }
 
     public BoardResponse Snapshot()
@@ -272,8 +502,9 @@ public sealed class MockMarketService : IHostedService, IDisposable
             _ => "5minute",
         };
 
+        var cacheKey = ChartCacheKey(name, mapped, depth);
         if (depth == ChartLoadDepth.Full
-            && _chartResponseCache.TryGetValue(ChartCacheKey(name, mapped), out var warm)
+            && _chartResponseCache.TryGetValue(cacheKey, out var warm)
             && warm.Chart.Candles.Count >= 8
             && (DateTimeOffset.UtcNow - warm.SavedAt).TotalMinutes < 3)
         {
@@ -306,7 +537,6 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            var cacheKey = ChartCacheKey(name, mapped);
             if (_chartResponseCache.TryGetValue(cacheKey, out var cached) && cached.Chart.Candles.Count >= 8)
             {
                 _log.LogWarning(
@@ -324,8 +554,8 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
     }
 
-    private static string ChartCacheKey(string name, string mapped) =>
-        $"{name.ToUpperInvariant()}|{mapped}";
+    private static string ChartCacheKey(string name, string mapped, ChartLoadDepth depth) =>
+        $"{name.ToUpperInvariant()}|{mapped}|{depth}";
 
     private async Task<ChartResponse> ChartAsyncCore(
         LiveSymbol symbol,
@@ -411,7 +641,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
         else
         {
-            bars = BuildSyntheticIntraday(snap, mapped);
+            bars = BuildSyntheticIntraday(snap, mapped, depth);
         }
 
         if (mapped != "day")
@@ -457,7 +687,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
 
         if (mapped != "day" && bars.Count < 8 && !Broker.HasSession)
         {
-            var synthetic = BuildSyntheticIntraday(snap, mapped);
+            var synthetic = BuildSyntheticIntraday(snap, mapped, depth);
             if (synthetic.Count > bars.Count)
             {
                 bars = synthetic;
@@ -475,7 +705,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
             var response = new ChartResponse(snap.Name, bars, snap.Last, snap.B2, snap.B1, snap.S, snap.S1, snap.S2);
             if (bars.Count >= 8)
             {
-                _chartResponseCache[ChartCacheKey(name, mapped)] = (response, DateTimeOffset.UtcNow);
+                _chartResponseCache[ChartCacheKey(name, mapped, depth)] = (response, DateTimeOffset.UtcNow);
             }
 
             return response;
@@ -494,7 +724,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
             }
             else
             {
-                bars = BuildSyntheticIntraday(snap, mapped);
+                bars = BuildSyntheticIntraday(snap, mapped, ChartLoadDepth.Full);
             }
 
             if (mapped != "day")
@@ -506,7 +736,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
             bars = SanitizeBars(bars, snap.Last);
             if (bars.Count == 0)
             {
-                bars = BuildSyntheticIntraday(snap, mapped);
+                bars = BuildSyntheticIntraday(snap, mapped, ChartLoadDepth.Full);
             }
 
             return new ChartResponse(snap.Name, bars, snap.Last, snap.B2, snap.B1, snap.S, snap.S1, snap.S2);
@@ -1248,6 +1478,16 @@ public sealed class MockMarketService : IHostedService, IDisposable
         }
     }
 
+    private LiveSymbol? ResolveSymbolForWebSocketTick(MStockWebSocketTick tick)
+    {
+        if (IndexUniverse.TryResolveBoardByInstrumentToken(tick.InstrumentToken, tick.Exchange, out var indexName))
+        {
+            return _symbols.FirstOrDefault(s => s.Name.Equals(indexName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return _symbols.FirstOrDefault(s => s.InstrumentToken == tick.InstrumentToken && tick.InstrumentToken > 0);
+    }
+
     private void RecordIntradayTick(string name, decimal last, decimal todayOpen)
     {
         if (last <= 0)
@@ -1467,7 +1707,56 @@ public sealed class MockMarketService : IHostedService, IDisposable
         return ([], exchanges.FirstOrDefault() ?? "NSE");
     }
 
-    private static List<ChartBar> BuildSyntheticIntraday(SymbolSnapshot snap, string interval)
+    private static int SyntheticTradingDayCount(string mapped, ChartLoadDepth depth) =>
+        depth switch
+        {
+            ChartLoadDepth.Fast => mapped switch
+            {
+                "minute" => 1,
+                "5minute" => 2,
+                "15minute" => 2,
+                "60minute" => 4,
+                "day" => 60,
+                _ => 2,
+            },
+            ChartLoadDepth.Mid => mapped switch
+            {
+                "minute" => 2,
+                "5minute" => 6,
+                "15minute" => 6,
+                "60minute" => 10,
+                "day" => 90,
+                _ => 6,
+            },
+            _ => mapped switch
+            {
+                "minute" => 2,
+                "5minute" => 12,
+                "15minute" => 12,
+                "60minute" => 21,
+                "day" => 120,
+                _ => 12,
+            },
+        };
+
+    private static List<DateOnly> CollectRecentTradingDays(int count)
+    {
+        var list = new List<DateOnly>();
+        var cursor = NseCashSession.IstToday();
+        while (list.Count < count)
+        {
+            if (NseCashSession.IsTradingDay(cursor))
+            {
+                list.Add(cursor);
+            }
+
+            cursor = cursor.AddDays(-1);
+        }
+
+        return list;
+    }
+
+    private static List<ChartBar> BuildSyntheticIntraday(SymbolSnapshot snap, string interval, ChartLoadDepth depth = ChartLoadDepth.Full)
     {
         var stepMinutes = interval switch
         {
@@ -1478,55 +1767,87 @@ public sealed class MockMarketService : IHostedService, IDisposable
             _ => 5,
         };
 
-        if (interval == "day")
-        {
-            var day = DateTimeOffset.UtcNow;
-            var last = snap.Last > 0 ? snap.Last : 100m;
-            var open = snap.TodayOpen > 0 ? snap.TodayOpen : last;
-            return
-            [
-                new ChartBar(day.AddDays(-1).ToUnixTimeSeconds(), open, Math.Max(open, last), Math.Min(open, last), last),
-                new ChartBar(day.ToUnixTimeSeconds(), open, Math.Max(open, last), Math.Min(open, last), last),
-            ];
-        }
-
         var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
         var now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ist);
-        var sessionStart = now.Date.AddHours(9).AddMinutes(15);
-        if (now < sessionStart)
-        {
-            sessionStart = sessionStart.AddDays(-1);
-        }
-
-        // Guard: if both prices are zero (broker not connected, market data not arrived),
-        // use a placeholder of 100 so bars pass open>0 filtering on the frontend.
         var anchorPrice = snap.TodayOpen > 0 ? snap.TodayOpen : snap.Last > 0 ? snap.Last : 100m;
         var tick = Math.Max(0.05m, anchorPrice * 0.00035m);
-        var price = anchorPrice;
-        var rng = new Random(HashCode.Combine(snap.Name, interval, now.Date));
-        var bars = new List<ChartBar>();
-        for (var t = sessionStart; t <= now; t = t.AddMinutes(stepMinutes))
+        var tradingDays = CollectRecentTradingDays(SyntheticTradingDayCount(interval, depth));
+        tradingDays.Sort();
+
+        if (interval == "day")
         {
-            var move = ((decimal)rng.NextDouble() * 2m - 1m) * tick;
-            var open = price;
-            var close = Math.Clamp(open + move, snap.S2 * 0.995m, snap.B2 * 1.005m);
-            var wick = tick * 0.6m;
-            var high = Math.Max(open, close) + wick;
-            var low = Math.Min(open, close) - wick;
-            var utc = new DateTimeOffset(t, ist.GetUtcOffset(t));
-            bars.Add(new ChartBar(utc.ToUnixTimeSeconds(), open, high, low, close));
-            price = close;
+            var bars = new List<ChartBar>();
+            var price = anchorPrice;
+            foreach (var day in tradingDays)
+            {
+                var rng = new Random(HashCode.Combine(snap.Name, "day", day));
+                var open = price;
+                var move = ((decimal)rng.NextDouble() * 2m - 1m) * tick * 8m;
+                var close = Math.Clamp(open + move, snap.S2 > 0 ? snap.S2 * 0.99m : open * 0.98m, snap.B2 > 0 ? snap.B2 * 1.01m : open * 1.02m);
+                var high = Math.Max(open, close) + tick * 2m;
+                var low = Math.Min(open, close) - tick * 2m;
+                var sessionOpen = new DateTime(day.Year, day.Month, day.Day, 9, 15, 0, DateTimeKind.Unspecified);
+                var utc = new DateTimeOffset(sessionOpen, ist.GetUtcOffset(sessionOpen));
+                bars.Add(new ChartBar(utc.ToUnixTimeSeconds(), open, high, low, close));
+                price = close;
+            }
+
+            if (bars.Count > 0 && snap.Last > 0)
+            {
+                var last = bars[^1] with
+                {
+                    Close = snap.Last,
+                    High = Math.Max(bars[^1].High, snap.Last),
+                    Low = Math.Min(bars[^1].Low, snap.Last),
+                };
+                bars[^1] = last;
+            }
+
+            return bars;
         }
 
-        if (bars.Count == 0)
+        var intraday = new List<ChartBar>();
+        var carryPrice = anchorPrice;
+        var today = NseCashSession.IstToday();
+        foreach (var day in tradingDays)
+        {
+            var sessionStart = new DateTime(day.Year, day.Month, day.Day, 9, 15, 0, DateTimeKind.Unspecified);
+            var sessionEnd = new DateTime(day.Year, day.Month, day.Day, 15, 30, 0, DateTimeKind.Unspecified);
+            var loopEnd = day == today ? now.DateTime : sessionEnd;
+            if (loopEnd < sessionStart)
+            {
+                continue;
+            }
+
+            var rng = new Random(HashCode.Combine(snap.Name, interval, day));
+            var price = carryPrice;
+            for (var t = sessionStart; t <= loopEnd; t = t.AddMinutes(stepMinutes))
+            {
+                var move = ((decimal)rng.NextDouble() * 2m - 1m) * tick;
+                var open = price;
+                var close = Math.Clamp(
+                    open + move,
+                    snap.S2 > 0 ? snap.S2 * 0.995m : open * 0.99m,
+                    snap.B2 > 0 ? snap.B2 * 1.005m : open * 1.01m);
+                var wick = tick * 0.6m;
+                var high = Math.Max(open, close) + wick;
+                var low = Math.Min(open, close) - wick;
+                var utc = new DateTimeOffset(t, ist.GetUtcOffset(t));
+                intraday.Add(new ChartBar(utc.ToUnixTimeSeconds(), open, high, low, close));
+                price = close;
+            }
+
+            carryPrice = price;
+        }
+
+        if (intraday.Count == 0)
         {
             var utcNow = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            // anchorPrice is guaranteed > 0 (floored at 100 above)
-            bars.Add(new ChartBar(utcNow - 300, anchorPrice, anchorPrice + tick, anchorPrice - tick, anchorPrice));
-            bars.Add(new ChartBar(utcNow, anchorPrice, anchorPrice + tick, anchorPrice - tick, anchorPrice));
+            intraday.Add(new ChartBar(utcNow - 300, anchorPrice, anchorPrice + tick, anchorPrice - tick, anchorPrice));
+            intraday.Add(new ChartBar(utcNow, anchorPrice, anchorPrice + tick, anchorPrice - tick, anchorPrice));
         }
 
-        return bars;
+        return intraday;
     }
 
     private async Task TickAsync()
@@ -1536,19 +1857,55 @@ public sealed class MockMarketService : IHostedService, IDisposable
             return;
         }
 
+        var cycleFailed = false;
+        string? cycleError = null;
         try
         {
             if (Broker.HasSession)
             {
-                await RefreshLiveAsync();
+                if (_wsHealth?.ReceivedWithin(TimeSpan.FromSeconds(12)) == true)
+                {
+                    lock (_gate)
+                    {
+                        _updatedAt = DateTimeOffset.UtcNow;
+                    }
+                }
+                else
+                {
+                    await RefreshLiveAsync();
+                }
             }
             else
             {
                 MockWalk();
+                var pushNames = new List<string>();
+                lock (_gate)
+                {
+                    foreach (var symbol in _symbols)
+                    {
+                        if (symbol.Last <= 0)
+                        {
+                            continue;
+                        }
+
+                        RecordIntradayTick(symbol.Name, symbol.Last, symbol.TodayOpen);
+                        if (_chartLiveStream.HasWatchers(symbol.Name))
+                        {
+                            pushNames.Add(symbol.Name);
+                        }
+                    }
+                }
+
+                foreach (var name in pushNames)
+                {
+                    await PublishChartLiveAsync(name);
+                }
             }
         }
         catch (Exception ex)
         {
+            cycleFailed = true;
+            cycleError = ex.Message;
             _log.LogWarning(ex, "Board tick failed; keeping last snapshot.");
             lock (_gate)
             {
@@ -1558,6 +1915,20 @@ public sealed class MockMarketService : IHostedService, IDisposable
         finally
         {
             Interlocked.Exchange(ref _busy, 0);
+            if (cycleFailed)
+            {
+                _workerHeartbeats.Pulse(
+                    MonitoredWorkerNames.MockMarketService,
+                    WorkerRunStatus.Degraded,
+                    cycleError);
+            }
+            else
+            {
+                _workerHeartbeats.Pulse(
+                    MonitoredWorkerNames.MockMarketService,
+                    WorkerRunStatus.Running,
+                    markSuccessfulExecution: true);
+            }
         }
     }
 
@@ -2426,7 +2797,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
             }
         }
 
-        if (_chartResponseCache.TryGetValue(ChartCacheKey(s.Name, "5minute"), out var cached)
+        if (_chartResponseCache.TryGetValue(ChartCacheKey(s.Name, "5minute", ChartLoadDepth.Full), out var cached)
             && cached.Chart.Candles.Count > 0)
         {
             return cached.Chart.Candles[^1].Close;
@@ -2536,7 +2907,7 @@ public sealed class MockMarketService : IHostedService, IDisposable
             }
         }
 
-        if (_chartResponseCache.TryGetValue(ChartCacheKey(s.Name, "5minute"), out var cached)
+        if (_chartResponseCache.TryGetValue(ChartCacheKey(s.Name, "5minute", ChartLoadDepth.Full), out var cached)
             && cached.Chart.Candles.Count > 0)
         {
             var barTime = cached.Chart.Candles[^1].Time;

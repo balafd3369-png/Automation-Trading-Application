@@ -620,16 +620,17 @@ public sealed class TradeHistoryStore
     public PaperTradeHistoryResponse QueryPaperTrades(string range, DateTimeOffset now, decimal capitalPerTrade)
     {
         var normalized = range.Trim().ToLowerInvariant();
+        string? rangeNote = null;
         var from = normalized switch
         {
-            "today" => StartOfIstDay(now),
+            "today" => ResolveTodayRangeFrom(now, out rangeNote),
             "1w" => StartOfIstDay(now).AddDays(-6),
             "1m" => now.AddMonths(-1),
             "3m" => now.AddMonths(-3),
             _ => now.AddMonths(-12),
         };
         var label = normalized is "today" or "1w" or "1m" or "3m" ? normalized : "all";
-        return QueryPaperTradesBetween(from, now, label, capitalPerTrade);
+        return QueryPaperTradesBetween(from, now, label, capitalPerTrade, rangeNote);
     }
 
     public PaperTradeHistoryResponse QueryPaperTradesForIstDates(
@@ -646,14 +647,15 @@ public sealed class TradeHistoryStore
         }
 
         var label = $"custom:{fromYmd}:{toYmd ?? fromYmd}";
-        return QueryPaperTradesBetween(from, to > now ? now : to, label, capitalPerTrade);
+        return QueryPaperTradesBetween(from, to > now ? now : to, label, capitalPerTrade, null);
     }
 
     public PaperTradeHistoryResponse QueryPaperTradesBetween(
         DateTimeOffset from,
         DateTimeOffset to,
         string label,
-        decimal capitalPerTrade)
+        decimal capitalPerTrade,
+        string? rangeNote = null)
     {
         lock (_gate)
         {
@@ -674,7 +676,8 @@ public sealed class TradeHistoryStore
                     exitStats.StopLossHits,
                     exitStats.TrailingStopHits,
                     exitStats.BreakevenTrades),
-                trades);
+                trades,
+                rangeNote);
         }
     }
 
@@ -866,6 +869,25 @@ public sealed class TradeHistoryStore
             command.ExecuteNonQuery();
             InsertLiveEvent(connection, transaction, tradeId, status, reason ?? status, DateTimeOffset.UtcNow);
             transaction.Commit();
+        }
+    }
+
+    public IReadOnlyList<LiveOrderSnapshot> ListNonTerminalLiveOrders()
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT o.id,o.trade_id,o.leg_id,o.broker_order_id,o.exchange,o.symbol,o.transaction_type,o.product,o.purpose,
+                       o.status,o.quantity,o.filled_quantity,o.average_price,o.broker_message,o.tag,o.updated_at
+                FROM live_orders o
+                INNER JOIN live_trades t ON t.id = o.trade_id
+                WHERE o.status NOT IN ('COMPLETE','COMPLETED','FILLED','REJECTED','CANCELLED','CANCELED')
+                ORDER BY o.updated_at DESC;
+                """;
+            return ReadLiveOrdersFromCommand(command);
         }
     }
 
@@ -1135,13 +1157,44 @@ public sealed class TradeHistoryStore
         }
     }
 
+    public IReadOnlyList<ManualOrderSnapshot> ListNonTerminalManualLiveOrders()
+    {
+        lock (_gate)
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT id,execution_mode,trade_source,status,symbol,underlying,instrument_type,transaction_type,order_type,
+                       product,exchange,quantity,limit_price,filled_quantity,average_price,broker_order_id,trade_id,message,
+                       created_at,updated_at
+                FROM manual_orders
+                WHERE user_id=$user
+                  AND execution_mode='LIVE'
+                  AND status NOT IN ('COMPLETE','COMPLETED','FILLED','REJECTED','CANCELLED','CANCELED')
+                ORDER BY updated_at DESC;
+                """;
+            Add(command, "$user", ActiveUserId);
+            return ReadManualOrdersFromCommand(command);
+        }
+    }
+
     public ManualOrderSnapshot? GetManualOrder(string orderId)
     {
         lock (_gate)
         {
             using var connection = Open();
-            return ReadManualOrders(connection, includeTerminal: true)
-                .FirstOrDefault(o => o.Id.Equals(orderId, StringComparison.OrdinalIgnoreCase));
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT id,execution_mode,trade_source,status,symbol,underlying,instrument_type,transaction_type,order_type,
+                       product,exchange,quantity,limit_price,filled_quantity,average_price,broker_order_id,trade_id,message,
+                       created_at,updated_at
+                FROM manual_orders WHERE user_id=$user AND id=$id LIMIT 1;
+                """;
+            Add(command, "$user", ActiveUserId);
+            Add(command, "$id", orderId);
+            return ReadManualOrdersFromCommand(command).FirstOrDefault();
         }
     }
 
@@ -1175,6 +1228,11 @@ public sealed class TradeHistoryStore
         Add(command, "$user", ActiveUserId);
         Add(command, "$mode", executionMode ?? "");
         Add(command, "$terminal", includeTerminal ? 1 : 0);
+        return ReadManualOrdersFromCommand(command);
+    }
+
+    private static List<ManualOrderSnapshot> ReadManualOrdersFromCommand(SqliteCommand command)
+    {
         var list = new List<ManualOrderSnapshot>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -1552,6 +1610,11 @@ public sealed class TradeHistoryStore
             FROM live_orders WHERE trade_id=$trade ORDER BY rowid;
             """;
         Add(command, "$trade", tradeId);
+        return ReadLiveOrdersFromCommand(command);
+    }
+
+    private static IReadOnlyList<LiveOrderSnapshot> ReadLiveOrdersFromCommand(SqliteCommand command)
+    {
         using var reader = command.ExecuteReader();
         var orders = new List<LiveOrderSnapshot>();
         while (reader.Read())
@@ -1622,6 +1685,38 @@ public sealed class TradeHistoryStore
         var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
         var local = TimeZoneInfo.ConvertTime(now, ist);
         return new DateTimeOffset(local.Date, ist.GetUtcOffset(local.Date));
+    }
+
+    private static DateTimeOffset ResolveTodayRangeFrom(DateTimeOffset now, out string? rangeNote)
+    {
+        rangeNote = null;
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        var local = TimeZoneInfo.ConvertTime(now, ist);
+        var openMinutes = 9 * 60 + 15;
+        var minutes = local.Hour * 60 + local.Minute;
+        if (local.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday && minutes >= openMinutes)
+        {
+            return StartOfIstDay(now);
+        }
+
+        var sessionDay = PreviousIstTradingDay(local.Date);
+        rangeNote = $"Pre-market: showing prior IST session trades ({sessionDay:yyyy-MM-dd}).";
+        return StartOfIstCalendarDay(sessionDay.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+    }
+
+    private static DateOnly PreviousIstTradingDay(DateTime istLocalDate)
+    {
+        var cursor = istLocalDate.Date;
+        for (var i = 0; i < 10; i++)
+        {
+            cursor = cursor.AddDays(-1);
+            if (cursor.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday)
+            {
+                return DateOnly.FromDateTime(cursor);
+            }
+        }
+
+        return DateOnly.FromDateTime(istLocalDate.Date);
     }
 
     private static DateTimeOffset StartOfIstCalendarDay(string ymd)

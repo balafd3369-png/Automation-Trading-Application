@@ -44,11 +44,9 @@ export function syncLiveCandle(
   const lastBucket = istSessionBucketStart(lastBar.time, stepMinutes);
 
   if (currentBucket > lastBucket) {
-    const stepSec = chartStepSec(interval);
-    const gapSec = currentBucket - lastBar.time;
     const lastDate = istParts(lastBar.time).dateKey;
     const currentDate = istParts(currentBucket).dateKey;
-    if (lastDate !== currentDate || gapSec > stepSec) {
+    if (lastDate !== currentDate) {
       return null;
     }
     return {
@@ -60,7 +58,7 @@ export function syncLiveCandle(
   return {
     isNew: false,
     bar: {
-      time: lastBar.time,
+      time: lastBucket,
       open: lastBar.open,
       high: Math.max(lastBar.high, liveLast),
       low: Math.min(lastBar.low, liveLast),

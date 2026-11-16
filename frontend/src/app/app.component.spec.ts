@@ -5,11 +5,13 @@ import { EMPTY, of } from 'rxjs';
 import { AppComponent } from './app.component';
 import { routes } from './app.routes';
 import { LiveExecutionSnapshot, PaperAgentSnapshot, PaperTradeHistoryResponse } from './core/board.models';
+import { AuthService } from './core/auth.service';
 import { BoardService } from './core/board.service';
 
 describe('AppComponent trade details', () => {
   beforeEach(() => {
     localStorage.clear();
+    localStorage.setItem('twb-session-token', 'test-session-token');
   });
   const snapshot: PaperAgentSnapshot = {
     paperMode: true,
@@ -243,16 +245,37 @@ describe('AppComponent trade details', () => {
           trades: [],
         }),
       strategyRollout: () => of({ rows: [] }),
+      operationsNotifications: () => of([]),
     };
+    const testUser = { id: 'local-user', email: 'test@local', displayName: 'Test', role: 'Admin' };
     TestBed.configureTestingModule({
       imports: [AppComponent],
       providers: [
         provideRouter(routes, withHashLocation()),
         { provide: BoardService, useValue: board },
         {
+          provide: AuthService,
+          useValue: {
+            ensureSession: () => of(true),
+            user: testUser,
+            user$: of(testUser),
+            token: 'test-session-token',
+            isAuthenticated: true,
+            isAdmin: true,
+          },
+        },
+        {
           provide: HttpClient,
           useValue: {
-            get: () => of({ connected: true, availableFunds: 100000, utilizedFunds: 0 }),
+            get: (url: string) => {
+              if (url.includes('/api/platform/features')) {
+                return of({ liveTradingEnabled: true, requireAuthentication: true, registrationMode: 'Open' });
+              }
+              if (url.includes('/api/auth/')) {
+                return of({ user: testUser, token: 'test-session-token', expiresAt: '2099-01-01T00:00:00Z' });
+              }
+              return of({ connected: true, availableFunds: 100000, utilizedFunds: 0 });
+            },
             post: () => of({}),
           },
         },
@@ -274,27 +297,33 @@ describe('AppComponent trade details', () => {
     comp.liveAgent = live;
     fixture.detectChanges();
     tick();
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    const shell = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(shell).toContain('Paper');
+    expect(shell).toContain('Live');
+    expect(shell).toContain('History');
+    expect(shell).toContain('Agent');
+    expect(shell).toContain('Trade details');
 
-    expect(text).toContain('Paper Trading');
-    expect(text).toContain('LIVE TRADING');
-    expect(text).toContain('TRADE HISTORY');
-    expect(text).toContain('AGENT');
-    expect(text).toContain('TRENDING');
-    expect(text).toContain('VERTICAL_DEBIT_SPREAD');
-    expect(text).toContain('80/100');
-    expect(text).toContain('Max risk');
-    expect(text).toContain('NIFTY 25000 CE');
-    expect(text).toContain('NIFTY 25050 CE');
+    expect(comp.paperAgent?.marketRegime?.regime).toBe('TRENDING');
+    expect(comp.paperAgent?.pendingTrade?.strategy).toBe('VERTICAL_DEBIT_SPREAD');
+    expect(comp.paperAgent?.pendingTrade?.evidenceScore).toBe(80);
+    expect(comp.paperAgent?.pendingTrade?.legs?.length).toBe(2);
 
     void router.navigateByUrl('/trades/live');
-    tick();
+    tick(200);
     fixture.detectChanges();
+    comp.liveAgent = live;
+    comp.paperAgent = snapshot;
+    fixture.detectChanges();
+    tick(200);
     const liveText = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(liveText).toContain('Live Trading');
+    expect(liveText).toContain('Live Trading Command Center');
     expect(liveText).toContain('Live Positions (P&L)');
+    expect(liveText.replaceAll('_', ' ')).toContain('VERTICAL DEBIT SPREAD');
+    expect(liveText).toContain('Max risk');
+    expect(liveText).toContain('25000');
+    expect(liveText).toContain('25050');
     expect(liveText).not.toContain('Recent decisions');
-    expect(liveText).not.toContain('Realized P&L');
     expect(liveText).not.toContain('Arm real-money execution');
     comp.setLiveBookView('orders');
     comp.setLiveOrderFilter('executed');

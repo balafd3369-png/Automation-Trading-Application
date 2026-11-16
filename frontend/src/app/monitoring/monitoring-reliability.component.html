@@ -1,0 +1,47 @@
+<header class="monitor-head">
+  <div>
+    <h1>Reliability overview</h1>
+    <p>
+      Instance registry, worker coordination, and recovery metrics from Phase 6 admin APIs. Trading-critical workers
+      are never eligible for blind automatic recovery.
+    </p>
+  </div>
+  @if (lastRefresh) {
+    <p class="monitor-meta">Last refresh {{ lastRefresh | date: 'short' }}</p>
+  }
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+
+<div class="reliability-grid">
+  <div class="stat-card">
+    <span class="stat-label">Active instances</span>
+    <span class="stat-value">{{ activeInstances() }}</span>
+    <a routerLink="/admin/monitoring/instances">Manage instances</a>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Healthy workers</span>
+    <span class="stat-value">{{ healthyWorkers() }}</span>
+    <a routerLink="/admin/monitoring/coordination-workers">Worker registry</a>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Unresponsive / failed</span>
+    <span class="stat-value">{{ unresponsiveWorkers() }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Active locks</span>
+    <span class="stat-value">{{ activeLocks() }}</span>
+    <a routerLink="/admin/monitoring/locks">View locks</a>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Expired locks</span>
+    <span class="stat-value">{{ expiredLocks() }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Recovery success (recent)</span>
+    <span class="stat-value">{{ recoverySuccessRate() }}</span>
+    <a routerLink="/admin/monitoring/recovery">Recovery center</a>
+  </div>
+</div>

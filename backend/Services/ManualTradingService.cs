@@ -13,6 +13,8 @@ public sealed class ManualTradingService
     private readonly BrokerConnectionManager _brokers;
     private readonly TradingPlatformOptions _platform;
     private readonly LiveExecutionOptions _liveOptions;
+    private readonly LiveTradingExecutionSafetyService _safety;
+    private readonly BrokerLiveOrderSettlement _settlement;
     private readonly ILogger<ManualTradingService> _log;
 
     public ManualTradingService(
@@ -23,6 +25,8 @@ public sealed class ManualTradingService
         BrokerConnectionManager brokers,
         TradingPlatformOptions platform,
         LiveExecutionOptions liveOptions,
+        LiveTradingExecutionSafetyService safety,
+        BrokerLiveOrderSettlement settlement,
         ILogger<ManualTradingService> log)
     {
         _history = history;
@@ -32,6 +36,8 @@ public sealed class ManualTradingService
         _brokers = brokers;
         _platform = platform;
         _liveOptions = liveOptions;
+        _safety = safety;
+        _settlement = settlement;
         _log = log;
     }
 
@@ -301,8 +307,22 @@ public sealed class ManualTradingService
             return (false, "Connect m.Stock before placing live manual orders.", null);
         }
 
+        var orderId = string.IsNullOrWhiteSpace(request.IdempotencyKey)
+            ? Guid.NewGuid().ToString("N")
+            : request.IdempotencyKey.Trim();
+        if (_history.GetManualOrder(orderId) is { } existing && !IsTerminalManualStatus(existing.Status))
+        {
+            return (true, "Existing order returned without resubmitting to broker (idempotent).", existing);
+        }
+
+        var gate = _safety.AssertPolicy(LiveOrderSafetyPolicy.NewPlacement);
+        if (!gate.Allowed)
+        {
+            return (false, gate.Message, null);
+        }
+
         var proposal = new PaperTradeProposal(
-            Guid.NewGuid().ToString("N"),
+            orderId,
             instrument,
             symbol,
             side == "BUY" ? "LONG" : "SHORT",
@@ -349,8 +369,8 @@ public sealed class ManualTradingService
         }
 
         _history.SaveManualLiveTrade(proposal, request.Product);
-        var order = new ManualOrderSnapshot(
-            Guid.NewGuid().ToString("N"),
+        var submitted = new ManualOrderSnapshot(
+            orderId,
             "LIVE",
             TradeSourceWire.Manual,
             "SUBMITTED",
@@ -370,10 +390,33 @@ public sealed class ManualTradingService
             placed.Message,
             now,
             now);
+        _history.UpsertManualOrder(submitted);
+
+        var terminal = await _settlement.WaitForTerminalAsync(_brokers.Orders, placed.Data, request.Quantity, ct);
+        var finalStatus = BrokerLiveOrderSettlement.NormalizeStatus(terminal.Status);
+        if (terminal.Status is "UNKNOWN" or "TIMEOUT")
+        {
+            finalStatus = terminal.Status;
+        }
+
+        var order = submitted with
+        {
+            Status = finalStatus,
+            FilledQuantity = terminal.FilledQuantity,
+            AveragePrice = terminal.FilledQuantity > 0 ? referencePrice : 0,
+            Message = terminal.Message,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
         _history.UpsertManualOrder(order);
-        _log.LogInformation("Manual live order {OrderId} broker={BrokerId} {Side} {Qty} {Symbol}", order.Id, placed.Data, side, request.Quantity, symbol);
-        return (true, "Live order submitted to m.Stock.", order);
+        _log.LogInformation("Manual live order {OrderId} broker={BrokerId} status={Status}", order.Id, placed.Data, order.Status);
+        var successMessage = finalStatus is "UNKNOWN" or "TIMEOUT"
+            ? "Order submitted; broker status uncertain — investigate before resubmitting."
+            : $"Live order status: {finalStatus}.";
+        return (finalStatus is not ("UNKNOWN" or "TIMEOUT"), successMessage, order);
     }
+
+    private static bool IsTerminalManualStatus(string status) =>
+        status is "COMPLETE" or "COMPLETED" or "FILLED" or "REJECTED" or "CANCELLED" or "CANCELED";
 
     private BrokerOrderRequest BuildBrokerOrder(
         string tradeId,

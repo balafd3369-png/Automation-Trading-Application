@@ -1,0 +1,75 @@
+<header class="monitor-head">
+  <div>
+    <h1>Incidents</h1>
+    <p>Operational incidents from Phase 3. Actions call existing admin lifecycle endpoints only.</p>
+  </div>
+</header>
+
+@if (toast) {
+  <p class="toast ok">{{ toast }}</p>
+}
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+
+<div class="monitor-toolbar">
+  <select [(ngModel)]="status" (change)="reload()" aria-label="Status filter">
+    <option value="">All statuses</option>
+    <option value="Detected">Detected</option>
+    <option value="Acknowledged">Acknowledged</option>
+    <option value="Investigating">Investigating</option>
+    <option value="Resolved">Resolved</option>
+    <option value="Closed">Closed</option>
+  </select>
+  <select [(ngModel)]="minSeverity" (change)="reload()" aria-label="Severity filter">
+    <option value="">Any severity</option>
+    <option value="Low">Low+</option>
+    <option value="Medium">Medium+</option>
+    <option value="High">High+</option>
+    <option value="Critical">Critical</option>
+  </select>
+  <input [(ngModel)]="component" (change)="reload()" placeholder="Component filter" aria-label="Component" />
+  <button type="button" (click)="reload()" [disabled]="actionBusy">Refresh</button>
+</div>
+
+@if (!incidents.length && !error) {
+  <p class="monitor-loading">Loading incidents…</p>
+} @else if (!incidents.length) {
+  <p class="monitor-empty">No incidents match the filters.</p>
+} @else {
+  <div class="monitor-table-wrap">
+    <table class="monitor-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Severity</th>
+          <th>Status</th>
+          <th>Component</th>
+          <th>Detected</th>
+          <th>Last</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (i of incidents; track i.id) {
+          <tr>
+            <td><a [routerLink]="['/admin/monitoring/incidents', i.id]">{{ i.id.slice(0, 8) }}…</a></td>
+            <td>{{ i.title }}</td>
+            <td><span class="badge" [class]="sevClass(i.severity)">{{ i.severity }}</span></td>
+            <td>{{ i.status }}</td>
+            <td>{{ i.component }} / {{ i.componentIdentifier }}</td>
+            <td>{{ i.firstDetectedUtc | date: 'short' }}</td>
+            <td>{{ i.lastOccurrenceUtc | date: 'short' }}</td>
+            <td class="actions">
+              <button type="button" (click)="ack(i.id)" [disabled]="actionBusy">Ack</button>
+              <button type="button" (click)="investigate(i.id)" [disabled]="actionBusy">Investigate</button>
+              <button type="button" (click)="resolve(i.id)" [disabled]="actionBusy">Resolve</button>
+              <button type="button" (click)="close(i.id)" [disabled]="actionBusy">Close</button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

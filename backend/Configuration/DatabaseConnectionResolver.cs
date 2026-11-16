@@ -35,7 +35,7 @@ public static class DatabaseConnectionResolver
             "trade-history.db");
     }
 
-    public static string BuildSqliteConnectionString(string databasePath)
+    public static string BuildSqliteConnectionString(string databasePath, int busyTimeoutMs = 0)
     {
         var directory = Path.GetDirectoryName(databasePath);
         if (!string.IsNullOrWhiteSpace(directory))
@@ -43,11 +43,17 @@ public static class DatabaseConnectionResolver
             Directory.CreateDirectory(directory);
         }
 
-        return new SqliteConnectionStringBuilder
+        var builder = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
             Pooling = false,
-        }.ToString();
+        };
+        if (busyTimeoutMs > 0)
+        {
+            builder.DefaultTimeout = Math.Clamp(busyTimeoutMs / 1000, 1, 60);
+        }
+
+        return builder.ToString();
     }
 
     public static bool UsesSqliteProvider(DatabaseOptions database) =>

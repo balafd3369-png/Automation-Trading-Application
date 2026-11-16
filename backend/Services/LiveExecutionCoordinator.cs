@@ -15,6 +15,8 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
     private readonly TradeHistoryStore _history;
     private readonly LiveExecutionOptions _options;
     private readonly TradingPlatformOptions _platform;
+    private readonly WorkerHeartbeatRegistry _workerHeartbeats;
+    private readonly LiveTradingExecutionSafetyService _safety;
     private readonly ILogger<LiveExecutionCoordinator> _log;
     private Timer? _timer;
     private DateTimeOffset? _armedUntil;
@@ -35,6 +37,8 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
         TradeHistoryStore history,
         LiveExecutionOptions options,
         TradingPlatformOptions platform,
+        WorkerHeartbeatRegistry workerHeartbeats,
+        LiveTradingExecutionSafetyService safety,
         ILogger<LiveExecutionCoordinator> log)
     {
         _brokers = brokers;
@@ -42,22 +46,30 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
         _history = history;
         _options = options;
         _platform = platform;
+        _workerHeartbeats = workerHeartbeats;
+        _safety = safety;
         _log = log;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.LiveExecutionCoordinator, WorkerRunStatus.Starting);
         _timer = new Timer(
             _ => _ = ReconcileAsync(CancellationToken.None),
             null,
             TimeSpan.FromSeconds(2),
             TimeSpan.FromSeconds(Math.Max(2, _options.ReconcileSeconds)));
+        _workerHeartbeats.Pulse(
+            MonitoredWorkerNames.LiveExecutionCoordinator,
+            WorkerRunStatus.Running,
+            markSuccessfulExecution: true);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _timer?.Change(Timeout.Infinite, 0);
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.LiveExecutionCoordinator, WorkerRunStatus.Stopped);
         return Task.CompletedTask;
     }
 
@@ -229,6 +241,12 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
             lock (_gate) return WithStatusUnsafe(preflightReason);
         }
 
+        var placementPolicy = _safety.AssertPolicy(LiveOrderSafetyPolicy.NewPlacement);
+        if (!placementPolicy.Allowed)
+        {
+            lock (_gate) return WithStatusUnsafe(placementPolicy.Message);
+        }
+
         if (!InstrumentExecutionPolicy.LiveBrokerRoutingAllowed(proposal, _platform.FuturesEnabled))
         {
             lock (_gate) return WithStatusUnsafe(InstrumentExecutionPolicy.FuturesDisabledLiveMessage);
@@ -276,6 +294,11 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
                 product, "ENTRY", "SUBMITTED", leg.Quantity, 0, 0, placed.Message, request.Tag, DateTimeOffset.UtcNow);
             _history.UpsertLiveOrder(submitted);
             var settled = await WaitForTerminalAsync(submitted, ct);
+            if (settled.Status is "UNKNOWN" or "TIMEOUT")
+            {
+                return Fail(proposal.Id, $"Order state uncertain ({settled.Status}): {settled.BrokerMessage}. Do not resubmit automatically.");
+            }
+
             if (settled.Status != "COMPLETE" || settled.FilledQuantity != settled.Quantity)
             {
                 if (settled.PendingQuantity() > 0) await BrokerOrders.CancelOrderAsync(settled.BrokerOrderId, ct);
@@ -358,6 +381,8 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
     private async Task ReconcileAsync(CancellationToken ct)
     {
         if (Interlocked.Exchange(ref _busy, 1) == 1) return;
+        var cycleFailed = false;
+        string? cycleError = null;
         try
         {
             if (_brokers.HasSession)
@@ -400,12 +425,28 @@ public sealed class LiveExecutionCoordinator : IHostedService, IDisposable, IZon
         }
         catch (Exception ex)
         {
+            cycleFailed = true;
+            cycleError = ex.Message;
             _log.LogWarning(ex, "Live reconciliation failed.");
             lock (_gate) _reconciliation = $"FAILED: {ex.Message}";
         }
         finally
         {
             Interlocked.Exchange(ref _busy, 0);
+            if (cycleFailed)
+            {
+                _workerHeartbeats.Pulse(
+                    MonitoredWorkerNames.LiveExecutionCoordinator,
+                    WorkerRunStatus.Degraded,
+                    cycleError);
+            }
+            else
+            {
+                _workerHeartbeats.Pulse(
+                    MonitoredWorkerNames.LiveExecutionCoordinator,
+                    WorkerRunStatus.Running,
+                    markSuccessfulExecution: true);
+            }
         }
     }
 

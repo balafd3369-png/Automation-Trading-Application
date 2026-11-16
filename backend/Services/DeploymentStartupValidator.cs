@@ -15,6 +15,8 @@ public static class DeploymentStartupValidator
         MStockOptions broker,
         DatabaseOptions database,
         CorsOptions cors,
+        InfrastructureOptions infrastructure,
+        ProductionSafetyOptions productionSafety,
         ILogger logger)
     {
         LogCheck(logger, identity.RequireAuthentication, "RequireAuthentication", "Authentication required for APIs");
@@ -100,6 +102,13 @@ public static class DeploymentStartupValidator
                     + "Use Broker panel OTP login or set Broker__ApiKey / Broker__ClientCode.");
             }
         }
+
+        PersistentStorageValidator.ValidateForProduction(
+            environment,
+            infrastructure,
+            database,
+            productionSafety,
+            logger);
     }
 
     public static void LogReadinessSummary(DeploymentReadinessReport report, ILogger logger)

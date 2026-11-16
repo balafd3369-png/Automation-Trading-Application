@@ -59,7 +59,7 @@ public sealed class BrokerQuoteGateTests
         var decision = BrokerQuoteGate.EvaluateLastPrice(
             "SENSEX",
             incomingLast: 81911m,
-            storedLast: 0m,
+            storedLast: 81500m,
             todayOpen: 76620m,
             previousClose: 81500m);
         Assert.True(decision.Accept);

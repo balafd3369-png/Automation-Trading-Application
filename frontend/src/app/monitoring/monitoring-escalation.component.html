@@ -1,0 +1,44 @@
+<header class="monitor-head">
+  <div>
+    <h1>Escalation policies</h1>
+    <p>Configure reminder and secondary-recipient timelines per severity.</p>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+@if (toast) {
+  <p class="toast ok">{{ toast }}</p>
+}
+
+@if (!tiers.length && !error) {
+  <p class="monitor-loading">Loading…</p>
+} @else {
+  @for (tier of tiers; track tier.severity) {
+    <section class="tier">
+      <h2>{{ tier.severity }}</h2>
+      <p class="preview">{{ preview(tier) }}</p>
+      @for (step of tier.steps; track $index) {
+        <div class="step-row">
+          <select [(ngModel)]="step.kind" [name]="tier.severity + 'kind' + $index">
+            <option value="UnacknowledgedReminder">Unacknowledged reminder</option>
+            <option value="SecondaryRecipients">Secondary recipients</option>
+            <option value="UnresolvedReminder">Unresolved reminder</option>
+          </select>
+          <label>
+            Delay (min)
+            <input type="number" [(ngModel)]="step.delayMinutes" [name]="tier.severity + 'delay' + $index" min="1" />
+          </label>
+          <label>
+            <input type="checkbox" [(ngModel)]="step.useSecondaryRecipients" [name]="tier.severity + 'sec' + $index" />
+            Secondary recipients
+          </label>
+          <button type="button" (click)="removeStep(tier, $index)">Remove</button>
+        </div>
+      }
+      <button type="button" (click)="addStep(tier)">Add step</button>
+    </section>
+  }
+  <button type="button" (click)="save()" [disabled]="saving">Save policies</button>
+}

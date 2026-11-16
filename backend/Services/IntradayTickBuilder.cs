@@ -74,14 +74,14 @@ public static class IntradayTickBuilder
         return bars;
     }
 
-    public static void BootstrapFromOpen(List<Tick> ticks, decimal todayOpen, decimal liveLast)
+    public static void BootstrapFromOpen(List<Tick> ticks, decimal todayOpen, decimal liveLast, DateTimeOffset? nowUtc = null)
     {
         if (todayOpen <= 0 || liveLast <= 0 || ticks.Count >= 12)
         {
             return;
         }
 
-        var nowIst = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Ist);
+        var nowIst = TimeZoneInfo.ConvertTime(nowUtc ?? DateTimeOffset.UtcNow, Ist);
         var sessionStart = nowIst.Date.AddHours(9).AddMinutes(15);
         var sessionEnd = nowIst.Date.AddHours(15).AddMinutes(30);
         if (nowIst < sessionStart || nowIst >= sessionEnd)

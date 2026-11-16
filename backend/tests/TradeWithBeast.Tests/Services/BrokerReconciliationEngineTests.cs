@@ -1,8 +1,11 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using TradeWithBeast.Configuration;
 using TradeWithBeast.Broker;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
+
+using TradeWithBeast.Tests.TestSupport;
 
 namespace TradeWithBeast.Tests.Services;
 
@@ -137,16 +140,18 @@ public sealed class BrokerReconciliationEngineTests
             NullLogger<OperationsStore>.Instance);
         var auth = connected ? CreateAuth() : CreateAuthWithoutSession();
         var manager = new BrokerConnectionManager(auth, broker ?? new FakeReconciliationBroker());
-        return new BrokerReconciliationService(manager, history, ops, NullLogger<BrokerReconciliationService>.Instance);
+        return new BrokerReconciliationService(
+            manager,
+            history,
+            ops,
+            new WorkerHeartbeatRegistry(new SystemMonitoringOptions()),
+            NullLogger<BrokerReconciliationService>.Instance);
     }
 
     private static TradeHistoryStore CreateHistoryStore()
     {
         var historyPath = Path.Combine(Path.GetTempPath(), $"recon-{Guid.NewGuid():N}.db");
-        return new TradeHistoryStore(
-            new ConfigurationBuilder().AddInMemoryCollection(
-                new Dictionary<string, string?> { ["TradeHistory:DatabasePath"] = historyPath }).Build(),
-            NullLogger<TradeHistoryStore>.Instance);
+        return TradeHistoryStoreTestHelper.Create(historyPath);
     }
 
     private static MStockAuthClient CreateAuth()

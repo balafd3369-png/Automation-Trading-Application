@@ -1,0 +1,32 @@
+[Unit]
+Description=Trade With Beast API
+Documentation=https://github.com/
+After=network-online.target local-fs.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/tradewithbeast
+ConditionPathIsMountPoint=/var/lib/tradewithbeast
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tradewithbeast/api
+EnvironmentFile=/etc/tradewithbeast/environment
+ExecStart=/usr/bin/dotnet /opt/tradewithbeast/api/TradeWithBeast.dll
+Restart=always
+RestartSec=5
+User=twb
+Group=twb
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/tradewithbeast
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tradewithbeast-api
+
+[Install]
+WantedBy=multi-user.target

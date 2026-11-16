@@ -105,11 +105,11 @@ describe('chart UI utilities', () => {
 
   it('clamps absurd intraday wicks', () => {
     const time = Math.floor(Date.parse('2026-10-23T15:10:00+05:30') / 1000);
-    const clamped = clampIntradayBarWicks(
-      { time, open: 22480, high: 22904, low: 22476, close: 22517 },
-      '5minute',
-    );
-    expect(clamped.high).toBeLessThan(22650);
+    const bar = { time, open: 22480, high: 22904, low: 22476, close: 22517 };
+    const clamped = clampIntradayBarWicks(bar, '5minute');
+    const bodyHigh = Math.max(bar.open, bar.close);
+    expect(clamped.high).toBeLessThan(bar.high);
+    expect(clamped.high).toBeLessThanOrEqual(bodyHigh + bar.close * 0.007 + 1);
     expect(clamped.close).toBe(22517);
   });
 
@@ -168,7 +168,9 @@ describe('chart UI utilities', () => {
   });
 
   it('prefers chart close when board LTP diverges too far from chart', () => {
-    expect(boardDisplayLast(22786, 22517, true, true)).toBe(22517);
+  // Index threshold is 3.5%; ~1.2% drift keeps board LTP during session.
+    expect(boardDisplayLast(22786, 22517, true, true)).toBe(22786);
+    expect(boardDisplayLast(23400, 22517, true, true)).toBe(22517);
     expect(boardDisplayLast(22520, 22517, true, true)).toBe(22520);
     expect(boardDisplayLast(22786, 22517, true, false)).toBe(22517);
   });

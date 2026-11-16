@@ -10,7 +10,7 @@ public sealed class BrokerCircuitBreaker
     private static readonly TimeSpan HeartbeatStale = TimeSpan.FromMinutes(3);
 
     private readonly object _gate = new();
-    private readonly BrokerConnectionManager _brokers;
+    private readonly Lazy<BrokerConnectionManager> _brokers;
     private readonly OperationsStore _ops;
     private readonly ILogger<BrokerCircuitBreaker> _log;
 
@@ -23,7 +23,7 @@ public sealed class BrokerCircuitBreaker
     private DateTimeOffset? _lastHeartbeatAt;
 
     public BrokerCircuitBreaker(
-        BrokerConnectionManager brokers,
+        Lazy<BrokerConnectionManager> brokers,
         OperationsStore ops,
         ILogger<BrokerCircuitBreaker> log)
     {
@@ -49,7 +49,7 @@ public sealed class BrokerCircuitBreaker
                 return (false, $"LIVE ORDERS BLOCKED: {_tripReason ?? "circuit breaker tripped"}. Reset from Operations.");
             }
 
-            if (!_brokers.HasSession)
+            if (!_brokers.Value.HasSession)
             {
                 TripUnsafe("Broker session is not connected.");
                 return (false, "LIVE ORDERS BLOCKED: connect m.Stock before placing live orders.");
@@ -140,7 +140,7 @@ public sealed class BrokerCircuitBreaker
 
     private BrokerCircuitBreakerSnapshot BuildSnapshotUnsafe() =>
         new(
-            _tripped || (!_brokers.HasSession && NseCashSession.IsLiveIntradayWindowNow()),
+            _tripped || (!_brokers.Value.HasSession && NseCashSession.IsLiveIntradayWindowNow()),
             _tripped ? "Open" : "Closed",
             _consecutiveFailures,
             _lastSuccessAt,

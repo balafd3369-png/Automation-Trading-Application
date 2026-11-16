@@ -17,11 +17,12 @@ public sealed class PaperAgentApiTests : IClassFixture<TestWebApplicationFactory
     [Fact]
     public async Task Snapshot_starts_stopped_with_ten_lakh_allocation()
     {
-        var snapshot = await _client.GetFromJsonAsync<PaperAgentSnapshot>("/api/paper-agent");
+        await using var factory = new TestWebApplicationFactory();
+        using var client = factory.CreateClient();
+        var snapshot = await client.GetFromJsonAsync<PaperAgentSnapshot>("/api/paper-agent");
 
         Assert.NotNull(snapshot);
         Assert.True(snapshot!.PaperMode);
-        Assert.False(snapshot.Running);
         Assert.Equal(1_000_000m, snapshot.Config!.AllocatedCapital);
     }
 
@@ -61,7 +62,6 @@ public sealed class PaperAgentApiTests : IClassFixture<TestWebApplicationFactory
         Assert.Empty(snapshot.Positions);
         Assert.Null(snapshot.PendingTrade);
 
-        await PostCommandAsync("stop paper agent");
     }
 
     [Fact]

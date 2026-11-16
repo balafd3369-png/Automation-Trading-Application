@@ -1,8 +1,8 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
-using TradeWithBeast.Configuration;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
+using TradeWithBeast.Tests.TestSupport;
 
 namespace TradeWithBeast.Tests.Services;
 
@@ -75,17 +75,7 @@ public sealed class PaperTradesTodayRangeTests : IDisposable
         command.ExecuteNonQuery();
     }
 
-    private TradeHistoryStore CreateStore()
-    {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["TradeHistory:DatabasePath"] = _dbPath,
-                ["SystemIdentity:AllowAnonymousLocalUser"] = "true",
-            })
-            .Build();
-        return new TradeHistoryStore(config, NullLogger<TradeHistoryStore>.Instance);
-    }
+    private TradeHistoryStore CreateStore() => TradeHistoryStoreTestHelper.Create(_dbPath);
 
     public void Dispose()
     {

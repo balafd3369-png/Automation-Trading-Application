@@ -7,10 +7,18 @@ public sealed class MarketChartHub : Hub
 {
     public const string LiveEvent = "chartLive";
     private readonly ChartLiveStreamService _streams;
+    private readonly SignalRServerHealthTracker _health;
 
-    public MarketChartHub(ChartLiveStreamService streams)
+    public MarketChartHub(ChartLiveStreamService streams, SignalRServerHealthTracker health)
     {
         _streams = streams;
+        _health = health;
+    }
+
+    public override Task OnConnectedAsync()
+    {
+        _health.RecordConnected();
+        return base.OnConnectedAsync();
     }
 
     public static string GroupKey(string name, string interval) =>
@@ -33,6 +41,7 @@ public sealed class MarketChartHub : Hub
 
     public override Task OnDisconnectedAsync(Exception? exception)
     {
+        _health.RecordDisconnected(exception);
         ChartLiveStreamService.ClearConnection(Context.ConnectionId);
         return base.OnDisconnectedAsync(exception);
     }

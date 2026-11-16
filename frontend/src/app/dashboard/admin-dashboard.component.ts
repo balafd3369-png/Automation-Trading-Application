@@ -16,6 +16,7 @@ import { AdminPlatformDashboard } from '../core/user-dashboard.models';
         <p>Operations overview for friend testing hosts.</p>
         <div class="actions">
           <a routerLink="/market">Market</a>
+          <a routerLink="/admin/monitoring">System monitoring</a>
           <a routerLink="/operations/risk">Operations</a>
           <button type="button" (click)="logout()">Logout</button>
         </div>

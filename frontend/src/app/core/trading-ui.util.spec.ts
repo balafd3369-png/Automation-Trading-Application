@@ -70,6 +70,22 @@ describe('trading-ui.util', () => {
     expect(synced!.isNew).toBeFalse();
   });
 
+  it('opens a new 5m bucket when the prior candle is complete', () => {
+    const priorBucket = istSessionBucketStart(
+      Math.floor(Date.parse('2026-09-29T10:08:00+05:30') / 1000),
+      5,
+    );
+    const nowSec = Math.floor(Date.parse('2026-09-29T10:11:00+05:30') / 1000);
+    const candles = [
+      { time: priorBucket, open: 23500, high: 23520, low: 23480, close: 23510 },
+    ];
+    const synced = syncLiveCandle(candles, 23511.5, '5minute', nowSec);
+    expect(synced).not.toBeNull();
+    expect(synced!.isNew).toBeTrue();
+    expect(synced!.bar.time).toBe(istSessionBucketStart(nowSec, 5));
+    expect(synced!.bar.open).toBe(23511.5);
+  });
+
   it('does not synthesize a lone intraday bar after the previous session day', () => {
     const lastOct22 = Math.floor(Date.parse('2026-10-22T15:25:00+05:30') / 1000);
     const oct23Morning = Math.floor(Date.parse('2026-10-23T10:05:00+05:30') / 1000);

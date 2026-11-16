@@ -11,6 +11,7 @@ public sealed class BrokerReconciliationService : IHostedService, IDisposable
     private readonly BrokerConnectionManager _brokers;
     private readonly TradeHistoryStore _history;
     private readonly OperationsStore _ops;
+    private readonly WorkerHeartbeatRegistry _workerHeartbeats;
     private readonly ILogger<BrokerReconciliationService> _log;
     private Timer? _timer;
     private int _busy;
@@ -21,11 +22,13 @@ public sealed class BrokerReconciliationService : IHostedService, IDisposable
         BrokerConnectionManager brokers,
         TradeHistoryStore history,
         OperationsStore ops,
+        WorkerHeartbeatRegistry workerHeartbeats,
         ILogger<BrokerReconciliationService> log)
     {
         _brokers = brokers;
         _history = history;
         _ops = ops;
+        _workerHeartbeats = workerHeartbeats;
         _log = log;
     }
 
@@ -36,17 +39,23 @@ public sealed class BrokerReconciliationService : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.BrokerReconciliation, WorkerRunStatus.Starting);
         _timer = new Timer(
             _ => _ = RunSafeAsync(CancellationToken.None),
             null,
             TimeSpan.FromSeconds(5),
             TimeSpan.FromSeconds(DefaultIntervalSeconds));
+        _workerHeartbeats.Pulse(
+            MonitoredWorkerNames.BrokerReconciliation,
+            WorkerRunStatus.Running,
+            markSuccessfulExecution: true);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _timer?.Change(Timeout.Infinite, 0);
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.BrokerReconciliation, WorkerRunStatus.Stopped);
         return Task.CompletedTask;
     }
 
@@ -62,18 +71,36 @@ public sealed class BrokerReconciliationService : IHostedService, IDisposable
             return;
         }
 
+        var cycleFailed = false;
+        string? cycleError = null;
         try
         {
             await ReconcileAsync(ct);
         }
         catch (Exception ex)
         {
+            cycleFailed = true;
+            cycleError = ex.Message;
             _log.LogWarning(ex, "Broker reconciliation cycle failed.");
             SetSnapshot(CreateBrokerError(ex.Message));
         }
         finally
         {
             Interlocked.Exchange(ref _busy, 0);
+            if (cycleFailed)
+            {
+                _workerHeartbeats.Pulse(
+                    MonitoredWorkerNames.BrokerReconciliation,
+                    WorkerRunStatus.Degraded,
+                    cycleError);
+            }
+            else
+            {
+                _workerHeartbeats.Pulse(
+                    MonitoredWorkerNames.BrokerReconciliation,
+                    WorkerRunStatus.Running,
+                    markSuccessfulExecution: true);
+            }
         }
     }
 

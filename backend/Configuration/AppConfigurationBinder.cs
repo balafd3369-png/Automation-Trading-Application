@@ -18,6 +18,11 @@ public sealed class AppConfigurationBundle
     public required SecurityOptions Security { get; init; }
     public required CorsOptions Cors { get; init; }
     public required InfrastructureOptions Infrastructure { get; init; }
+    public required SystemMonitoringOptions SystemMonitoring { get; init; }
+    public required IncidentNotificationOptions IncidentNotification { get; init; }
+    public required SystemReliabilityOptions SystemReliability { get; init; }
+    public required ProductionSafetyOptions ProductionSafety { get; init; }
+    public required TradingExecutionSafetyOptions TradingExecutionSafety { get; init; }
 }
 
 public static class AppConfigurationBinder
@@ -47,7 +52,23 @@ public static class AppConfigurationBinder
             Cors = configuration.GetSection(CorsOptions.Section).Get<CorsOptions>() ?? new CorsOptions(),
             Infrastructure = configuration.GetSection(InfrastructureOptions.Section).Get<InfrastructureOptions>()
                 ?? new InfrastructureOptions(),
+            SystemMonitoring = configuration.GetSection(SystemMonitoringOptions.Section).Get<SystemMonitoringOptions>()
+                ?? new SystemMonitoringOptions(),
+            IncidentNotification = configuration.GetSection(IncidentNotificationOptions.Section).Get<IncidentNotificationOptions>()
+                ?? new IncidentNotificationOptions(),
+            SystemReliability = configuration.GetSection(SystemReliabilityOptions.Section).Get<SystemReliabilityOptions>()
+                ?? new SystemReliabilityOptions(),
+            ProductionSafety = configuration.GetSection(ProductionSafetyOptions.Section).Get<ProductionSafetyOptions>()
+                ?? new ProductionSafetyOptions(),
+            TradingExecutionSafety = configuration.GetSection(TradingExecutionSafetyOptions.Section).Get<TradingExecutionSafetyOptions>()
+                ?? new TradingExecutionSafetyOptions(),
         };
+
+        bundle.SystemMonitoring.ClampIntervals();
+        bundle.IncidentNotification.Clamp();
+        bundle.SystemReliability.Clamp();
+        bundle.ProductionSafety.Clamp();
+        bundle.TradingExecutionSafety.Clamp();
 
         RegisterSingletons(builder.Services, bundle, configuration);
         return bundle;
@@ -116,6 +137,11 @@ public static class AppConfigurationBinder
         services.AddSingleton(bundle.LiveTrading);
         services.AddSingleton(bundle.TradingPlatform);
         services.AddSingleton(bundle.SystemIdentity);
+        services.AddSingleton(bundle.SystemMonitoring);
+        services.AddSingleton(bundle.IncidentNotification);
+        services.AddSingleton(bundle.SystemReliability);
+        services.AddSingleton(bundle.ProductionSafety);
+        services.AddSingleton(bundle.TradingExecutionSafety);
         services.AddSingleton(configuration);
     }
 }

@@ -1,0 +1,17 @@
+@use './monitoring.styles.scss';
+
+.desc {
+  max-width: 56rem;
+  line-height: 1.45;
+}
+
+.notes {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.notes li {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #1e2836;
+}

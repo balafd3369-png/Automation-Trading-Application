@@ -98,8 +98,10 @@ import {
   IndicatorKind,
   drawingStorageKey,
   chartCandlesTailOnlyChange,
+  chartStepMinutes,
   firstChangedCandle,
   istDate,
+  istSessionBucketStart,
   boardDisplayLast,
   mergeChartCandlesStable,
   clampIntradayBarWicks,
@@ -648,7 +650,31 @@ export class AppComponent implements OnInit, AfterViewInit {
         this.rememberChartCache(requestKey, mergedPayload);
       });
 
-    merge(interval(5000), this.optionChainReload)
+    interval(300)
+      .pipe(
+        filter(
+          () =>
+            this.shouldPollChartHost() &&
+            this.brokerConnected &&
+            isIstCashSessionOpen(Math.floor(Date.now() / 1000)),
+        ),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe(() => {
+        if (this.syncActiveChartLiveTick()) {
+          this.bumpView();
+        }
+      });
+
+    interval(1000)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(() => {
+        if (this.centerView === 'market') {
+          this.bumpView();
+        }
+      });
+
+    merge(interval(2000), this.optionChainReload)
       .pipe(
         startWith(0),
         filter(() => this.shouldPollOptionChain()),
@@ -2654,6 +2680,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.prepareChartInstrumentSwitch();
     this.optionChainReload.next();
     this.persistNavigationHash();
+    this.ensureChartLiveWatch();
     this.scheduleChartLoad(true);
     this.bumpView();
   }
@@ -2718,6 +2745,10 @@ export class AppComponent implements OnInit, AfterViewInit {
       this.openedOption = null;
       this.optionChartError = '';
       this.loadedChartName = '';
+    }
+    if (this.centerView === 'market') {
+      this.ensureChartLiveWatch();
+      this.scheduleChartLoad(true);
     }
   }
 
@@ -2869,6 +2900,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.loadedChartName = '';
     this.optionChainReload.next();
     this.persistNavigationHash();
+    this.ensureChartLiveWatch();
     this.scheduleChartLoad();
     this.closePicker();
     this.bumpView();
@@ -3138,6 +3170,9 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.openedOption.changePoints = refreshed.changePoints;
     this.openedOption.changePercent = refreshed.changePercent;
     this.openedOption.previousClose = refreshed.previousClose;
+    if (this.optionsChartTradeEnabled()) {
+      this.syncOptionLiveChart();
+    }
   }
 
   optionSelected(contract: OptionContract): boolean {
@@ -3928,13 +3963,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.trendFrom = undefined;
     this.drawingStatus = '';
     this.prepareChartInstrumentSwitch();
-    const name = this.pendingChartName;
-    if (name) {
-      void this.chartLive.syncWatch(name, this.chartInterval).catch(() => {
-        this.chartStreamReceiving = false;
-        this.bumpView();
-      });
-    }
+    this.ensureChartLiveWatch();
     this.scheduleChartLoad(true);
     this.bumpView();
   }
@@ -4001,6 +4030,21 @@ export class AppComponent implements OnInit, AfterViewInit {
     return this.timeframes.find((t) => t.id === this.chartInterval)?.hint ?? '';
   }
 
+  /** IST window of the rightmost (forming) intraday candle, e.g. 14:35 – 14:40 */
+  formingCandleWindowLabel(): string {
+    const candles = this.lastChart?.candles;
+    if (!candles?.length || this.chartInterval === 'day') {
+      return '';
+    }
+    const stepMin = chartStepMinutes(this.chartInterval);
+    const tail = candles[candles.length - 1];
+    const nowSec = Math.floor(Date.now() / 1000);
+    const nowBucket = istSessionBucketStart(nowSec, stepMin);
+    const tailBucket = istSessionBucketStart(tail.time, stepMin);
+    const activeBucket = nowBucket >= tailBucket ? nowBucket : tailBucket;
+    return `${istDateTime(activeBucket, false)} – ${istDateTime(activeBucket + stepMin * 60, false)}`;
+  }
+
   chartHistoryStatusLabel(): string {
     const hasCandles = !!this.lastChart?.candles?.length;
     if (!hasCandles) {
@@ -4008,6 +4052,9 @@ export class AppComponent implements OnInit, AfterViewInit {
     }
     if (!isIstCashSessionOpen(Math.floor(Date.now() / 1000))) {
       return 'Market closed';
+    }
+    if (this.chartStreamReceiving) {
+      return 'Live · stream';
     }
     if (this.chartRefreshPending) {
       return this.chartPaintedFromCache ? 'Cached · refreshing…' : 'Refreshing…';
@@ -4215,10 +4262,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.pendingChartName = symbol.name;
     if (instrumentChanged) {
       this.prepareChartInstrumentSwitch();
-      void this.chartLive.syncWatch(symbol.name, this.chartInterval).catch(() => {
-        this.chartStreamReceiving = false;
-        this.bumpView();
-      });
+      this.ensureChartLiveWatch();
     }
     if (this.tradePanelTab === 'paper' && !this.isIndex(symbol.name)) {
       this.zoneBacktestReload.next();
@@ -4725,10 +4769,7 @@ export class AppComponent implements OnInit, AfterViewInit {
       this.chartPaintedFromCache = true;
     }
 
-    void this.chartLive.syncWatch(name, this.chartInterval).catch(() => {
-      this.chartStreamReceiving = false;
-      this.bumpView();
-    });
+    this.ensureChartLiveWatch();
 
     // ── Step 1: fast request (1-2 sessions) → first visible paint ─────────────
     // Options charts have no fast path; also skip fast for daily charts.
@@ -4852,19 +4893,67 @@ export class AppComponent implements OnInit, AfterViewInit {
     return;
   }
 
+  /** SignalR watch key: option label, options spot, or board symbol for the active chart. */
+  private chartLiveWatchName(): string {
+    if (this.optionsChartTradeEnabled() && this.openedOption) {
+      return this.openedOption.label;
+    }
+    if (this.marketKind === 'options' && this.optionsChartMode === 'underlying') {
+      return this.optionUnderlying || this.pendingChartName;
+    }
+    return this.pendingChartName || this.selectedName;
+  }
+
+  private ensureChartLiveWatch(): void {
+    const watch = this.chartLiveWatchName();
+    if (!watch || this.centerView !== 'market') {
+      return;
+    }
+    void this.chartLive.syncWatch(watch, this.chartInterval).catch(() => {
+      this.chartStreamReceiving = false;
+      this.bumpView();
+    });
+  }
+
+  /** ~1s client tick: options premium or board LTP into the forming candle (all market charts). */
+  private syncActiveChartLiveTick(): boolean {
+    if (!isIstCashSessionOpen(Math.floor(Date.now() / 1000))) {
+      return false;
+    }
+    if (this.optionsChartTradeEnabled()) {
+      return this.syncOptionLiveChart();
+    }
+    return this.syncLiveChartFromBoard();
+  }
+
+  private boardRowForActiveChart(): SymbolSnapshot | null {
+    const watch = this.chartLiveWatchName();
+    if (!watch) {
+      return this.selected;
+    }
+    const fromBoard = this.boardData?.symbols.find(
+      (s) => s.name.toUpperCase() === watch.toUpperCase(),
+    );
+    if (fromBoard) {
+      return fromBoard;
+    }
+    if (this.selected?.name.toUpperCase() === watch.toUpperCase()) {
+      return this.selected;
+    }
+    return null;
+  }
+
   private applyChartLiveUpdate(update: ChartLiveUpdate): void {
     if (!isIstCashSessionOpen(Math.floor(Date.now() / 1000))) {
       return;
     }
-    if (
-      this.optionsChartTradeEnabled()
-      || !this.candleSeries
-      || !this.lastChart?.candles.length
-    ) {
+    if (!this.candleSeries || !this.lastChart?.candles.length) {
       return;
     }
-    const name = this.pendingChartName;
-    if (!update.name || !name || update.name.toUpperCase() !== name.toUpperCase()) {
+    const chartName = this.optionsChartTradeEnabled()
+      ? (this.lastChart.name ?? this.openedOption?.label ?? '')
+      : this.chartLiveWatchName();
+    if (!update.name || !chartName || update.name.toUpperCase() !== chartName.toUpperCase()) {
       return;
     }
     if (update.interval !== this.chartInterval) {
@@ -4882,22 +4971,43 @@ export class AppComponent implements OnInit, AfterViewInit {
       this.chartInterval,
     );
     const candles = this.lastChart.candles;
+    const stepMin = chartStepMinutes(this.chartInterval);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const nowBucket = istSessionBucketStart(nowSec, stepMin);
+    const barBucket = istSessionBucketStart(bar.time, stepMin);
+    const alignedBar = { ...bar, time: barBucket };
+
+    this.rollFormingBarOnClock(update.last, candles);
+
     const tail = candles[candles.length - 1];
-    if (tail.time === bar.time) {
-      candles[candles.length - 1] = bar;
-      this.candleSeries.update(this.toTvCandles([bar])[0]);
-    } else if (bar.time > tail.time) {
-      candles.push(bar);
-      this.candleSeries.update(this.toTvCandles([bar])[0]);
+    const tailBucket = istSessionBucketStart(tail.time, stepMin);
+
+    if (barBucket < tailBucket) {
+      // Broker still broadcasting the previous bucket — do not repaint a closed candle.
+    } else if (barBucket > tailBucket) {
+      candles.push(alignedBar);
+      this.candleSeries.update(this.toTvCandles([alignedBar])[0]);
+    } else if (barBucket === tailBucket && tailBucket >= nowBucket) {
+      const merged = {
+        ...alignedBar,
+        open: tail.open > 0 ? tail.open : alignedBar.open,
+        high: Math.max(tail.high, alignedBar.high),
+        low: Math.min(tail.low, alignedBar.low),
+      };
+      candles[candles.length - 1] = merged;
+      this.candleSeries.update(this.toTvCandles([merged])[0]);
     }
 
-    if (this.selected?.name === update.name) {
+    if (!this.optionsChartTradeEnabled() && this.selected?.name === update.name) {
       this.selected.last = update.last;
       this.selected.b2 = update.b2;
       this.selected.b1 = update.b1;
       this.selected.s = update.s;
       this.selected.s1 = update.s1;
       this.selected.s2 = update.s2;
+    }
+    if (this.optionsChartTradeEnabled() && this.openedOption) {
+      this.openedOption.last = update.last;
     }
     this.lastChart = {
       ...this.lastChart,
@@ -5087,47 +5197,106 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.markChartApplied();
   }
 
+  /** Wall-clock roll at 09:20, 09:25, … without waiting for the next broker packet. */
+  private rollFormingBarOnClock(liveLast: number, candles = this.lastChart?.candles): boolean {
+    if (!this.candleSeries || !candles?.length || liveLast <= 0) {
+      return false;
+    }
+    const synced = syncLiveCandle(candles, liveLast, this.chartInterval);
+    if (!synced?.isNew) {
+      return false;
+    }
+    candles.push(synced.bar);
+    this.candleSeries.update(this.toTvCandles([synced.bar])[0]);
+    return true;
+  }
+
+  private paintSyncedLiveCandle(
+    synced: NonNullable<ReturnType<typeof syncLiveCandle>>,
+    candles: ChartBar[],
+  ): void {
+    this.candleSeries!.update(this.toTvCandles([synced.bar])[0]);
+    if (synced.isNew) {
+      candles.push(synced.bar);
+    } else {
+      candles[candles.length - 1] = synced.bar;
+    }
+  }
+
+  private syncOptionLiveChart(): boolean {
+    if (!this.optionsChartTradeEnabled() || !this.candleSeries || !this.lastChart?.candles.length) {
+      return false;
+    }
+    const live = this.openedOption?.last ?? this.lastChart.last ?? 0;
+    if (!live || live <= 0) {
+      return false;
+    }
+    const candles = this.lastChart.candles;
+    const rolled = this.rollFormingBarOnClock(live, candles);
+    const synced = syncLiveCandle(candles, live, this.chartInterval);
+    if (!synced) {
+      return rolled;
+    }
+    if (!synced.isNew) {
+      this.paintSyncedLiveCandle(synced, candles);
+    }
+    this.lastChart = { ...this.lastChart, last: live, candles: [...candles] };
+    return rolled || !synced.isNew;
+  }
+
   private syncLiveChart(): void {
     if (!isIstCashSessionOpen(Math.floor(Date.now() / 1000))) {
       return;
     }
+    if (this.optionsChartTradeEnabled()) {
+      this.syncOptionLiveChart();
+      return;
+    }
+    this.syncLiveChartFromBoard();
+  }
+
+  private syncLiveChartFromBoard(): boolean {
     if (
-      this.optionsChartTradeEnabled() ||
       !this.candleSeries ||
-      !this.selected ||
-      !symbolHasVerifiedQuote(this.selected) ||
       !this.lastChart?.candles.length
     ) {
-      return;
+      return false;
+    }
+    const row = this.boardRowForActiveChart();
+    if (!row || !symbolHasVerifiedQuote(row)) {
+      return false;
     }
 
-    const live = this.selected.last;
+    const live = row.last;
     if (!live || live <= 0) {
-      return;
+      return false;
     }
 
-    const synced = syncLiveCandle(this.lastChart.candles, live, this.chartInterval);
+    const candles = this.lastChart.candles;
+    const rolled = this.rollFormingBarOnClock(live, candles);
+    const synced = syncLiveCandle(candles, live, this.chartInterval);
     if (!synced) {
-      return;
+      return rolled;
     }
-
-    this.candleSeries.update(synced.bar);
-    if (synced.isNew) {
-      this.lastChart.candles.push(synced.bar);
-    } else {
-      this.lastChart.candles[this.lastChart.candles.length - 1] = synced.bar;
+    if (!synced.isNew) {
+      this.paintSyncedLiveCandle(synced, candles);
+    }
+    if (this.selected?.name === row.name) {
+      this.selected.last = live;
     }
     this.lastChart = {
       ...this.lastChart,
       last: live,
-      b2: this.selected.b2,
-      b1: this.selected.b1,
-      s: this.selected.s,
-      s1: this.selected.s1,
-      s2: this.selected.s2,
+      b2: row.b2,
+      b1: row.b1,
+      s: row.s,
+      s1: row.s1,
+      s2: row.s2,
+      candles: [...candles],
     };
-    this.updateZonePriceLines(this.lastChart);
+    this.updateZonePriceLines(this.chartZoneLevels(this.lastChart));
     this.updateIndicators();
+    return rolled || !synced.isNew;
   }
 
   /** Board row is the source of truth for B1/B2/S/S1/S2 (same formula as chips). */

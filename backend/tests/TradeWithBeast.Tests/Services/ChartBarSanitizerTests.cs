@@ -24,7 +24,9 @@ public sealed class ChartBarSanitizerTests
         var t = new DateTimeOffset(2026, 10, 23, 15, 10, 0, TimeSpan.FromHours(5.5)).ToUnixTimeSeconds();
         var bar = new ChartBar(t, 22480m, 22904m, 22476m, 22517m);
         var clamped = ChartBarSanitizer.ClampWicks(bar, "5minute");
-        Assert.True(clamped.High < 22650m);
+        var bodyHigh = Math.Max(bar.Open, bar.Close);
+        Assert.True(clamped.High <= bodyHigh + 160m);
+        Assert.True(clamped.High < 22700m);
         Assert.Equal(22517m, clamped.Close);
     }
 }

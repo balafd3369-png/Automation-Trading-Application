@@ -6,7 +6,9 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TradeWithBeast.Broker;
+using Microsoft.Extensions.Hosting;
 using TradeWithBeast.Models;
+using TradeWithBeast.Tests.TestSupport;
 
 namespace TradeWithBeast.Tests.Integration;
 
@@ -73,18 +75,25 @@ public sealed class AuthRequiredWebApplicationFactory : WebApplicationFactory<Pr
 
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
     {
-        builder.UseEnvironment("Production");
-        builder.UseSetting("TradeHistory:DatabasePath", _historyPath);
-        builder.UseSetting("LiveTrading:Enabled", "false");
+        builder.UseEnvironment("Testing");
+        IntegrationTestAppConfiguration.AddIdentityAndDatabase(
+            builder,
+            _historyPath,
+            requireAuthentication: true,
+            allowAnonymousLocalUser: false);
         builder.UseSetting("SystemIdentity:RequireAuthentication", "true");
         builder.UseSetting("SystemIdentity:AllowAnonymousLocalUser", "false");
-        builder.UseSetting("SystemIdentity:AdminEmail", "admin@test.local");
-        builder.UseSetting("SystemIdentity:AdminPassword", TestAuthHelper.DefaultAdminPassword);
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<MStockSessionStore>();
             var sessionPath = Path.Combine(Path.GetTempPath(), "trade-with-beast-auth-tests", "mstock-session.json");
             services.AddSingleton(_ => new MStockSessionStore(sessionPath));
         });
+    }
+
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        var host = base.CreateHost(builder);
+        return host.WarmUpIdentityStore();
     }
 }

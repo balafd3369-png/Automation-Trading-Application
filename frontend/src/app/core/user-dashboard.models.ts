@@ -299,6 +299,46 @@ export interface ReversalScanResponse {
   failedMorningOpens: ReversalScanRow[];
 }
 
+/** Live trap-fall stages (week → B1 test → S1 break). Stage enum matches backend. */
+export type TrapFallFormationStage =
+  | 'None'
+  | 'WeekWatch'
+  | 'ApproachB1'
+  | 'B1Tested'
+  | 'EnterShort'
+  | 'Completed';
+
+export interface TrapFallFormationRow {
+  name: string;
+  isIndex: boolean;
+  stage: TrapFallFormationStage;
+  urgency: string;
+  headline: string;
+  detail: string;
+  weekBias: string;
+  last: number;
+  b1: number;
+  s1: number;
+  s2: number;
+  s: number;
+  sessionMove: string;
+  touchedB1: boolean;
+  touchedS1: boolean;
+  sessionHigh: number | null;
+  distToB1Percent: number;
+  distToS1Percent: number;
+  patternId: string;
+}
+
+export interface TrapFallFormationResponse {
+  analyzedAt: string;
+  feed: string;
+  playbook: string;
+  armedCount: number;
+  enterNowCount: number;
+  rows: TrapFallFormationRow[];
+}
+
 export interface ZoneAnalyzerPatternDetailResponse {
   symbol: string;
   patternId: string;

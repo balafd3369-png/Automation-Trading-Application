@@ -394,7 +394,7 @@ public sealed class UserIdentityStore
             return;
         }
 
-        if (!_env.IsDevelopment())
+        if (!_env.IsDevelopment() && !_env.IsEnvironment("Testing"))
         {
             return;
         }

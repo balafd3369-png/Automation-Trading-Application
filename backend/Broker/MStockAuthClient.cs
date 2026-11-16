@@ -65,6 +65,34 @@ public sealed class MStockAuthClient : IBrokerMarketClient
         _log.LogWarning("m.Stock session cleared. Re-verify OTP for live quotes.");
     }
 
+    /// <summary>Type A market feed: <c>wss://…?API_KEY=&amp;ACCESS_TOKEN=</c></summary>
+    public bool TryBuildWebSocketUri(out Uri uri)
+    {
+        uri = null!;
+        var apiKey = _login.ResolveApiKey(_options);
+        string token;
+        lock (_gate)
+        {
+            if (string.IsNullOrWhiteSpace(_accessToken))
+            {
+                _accessToken = _sessions.ReadToken() ?? "";
+            }
+
+            token = _accessToken;
+        }
+
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(token))
+        {
+            return false;
+        }
+
+        var baseUrl = _options.WsUrl.TrimEnd('/');
+        var query =
+            $"API_KEY={Uri.EscapeDataString(apiKey)}&ACCESS_TOKEN={Uri.EscapeDataString(token)}";
+        uri = new Uri($"{baseUrl}?{query}");
+        return true;
+    }
+
     public bool IsApiKeyConfigured() => !string.IsNullOrWhiteSpace(_login.ResolveApiKey(_options));
 
     public Task<JsonElement> SendOtpAsync(CancellationToken ct) =>

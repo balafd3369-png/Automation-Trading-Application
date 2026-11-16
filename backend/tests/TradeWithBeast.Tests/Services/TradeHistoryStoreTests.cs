@@ -1,7 +1,7 @@
-using Microsoft.Extensions.Configuration;
 using TradeWithBeast.Broker;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
+using TradeWithBeast.Tests.TestSupport;
 
 namespace TradeWithBeast.Tests.Services;
 
@@ -120,11 +120,11 @@ public sealed class TradeHistoryStoreTests : IDisposable
 
         Assert.Empty(CreateStore().RecoverOpenTrades());
         Assert.Contains(CreateStore().RecentEvents(), x => x.TradeId == proposal.Id && x.Type == "CLOSED" && x.Pnl == 650m);
-        var history = CreateStore().QueryPaperTrades("1m", DateTimeOffset.UtcNow.AddSeconds(1), 100_000m);
+        var history = CreateStore().QueryPaperTrades("1m", DateTimeOffset.UtcNow.AddSeconds(1), 150m);
         var persisted = Assert.Single(history.Trades);
         Assert.Equal("INDEX_OPTION_LONG", persisted.Strategy);
-        Assert.Equal(650m, persisted.Pnl);
-        Assert.Equal(650m, Assert.Single(persisted.Legs).Pnl);
+        Assert.Equal(10m, persisted.Pnl);
+        Assert.Equal(10m, Assert.Single(persisted.Legs).Pnl);
         Assert.Equal(1, history.Summary.WinningTrades);
     }
 
@@ -154,16 +154,7 @@ public sealed class TradeHistoryStoreTests : IDisposable
             item.TradeId == proposal.Id && item.Message.Contains("Insufficient collateral margin"));
     }
 
-    private TradeHistoryStore CreateStore()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["TradeHistory:DatabasePath"] = _path,
-            })
-            .Build();
-        return new TradeHistoryStore(configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger<TradeHistoryStore>.Instance);
-    }
+    private TradeHistoryStore CreateStore() => TradeHistoryStoreTestHelper.Create(_path);
 
     public void Dispose()
     {

@@ -1,10 +1,14 @@
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
+using TradeWithBeast.Tests.TestSupport;
 
 namespace TradeWithBeast.Tests.Services;
 
 public sealed class PaperDecisionEngineTests
 {
+    private const string AltIndex = "MIDCPNIFTY";
+
+    static PaperDecisionEngineTests() => InstrumentLotTestSetup.EnsureDefaultIndexLots();
     [Fact]
     public void Feature_calculation_exposes_ema_momentum_volatility_zone_and_regime()
     {
@@ -37,36 +41,52 @@ public sealed class PaperDecisionEngineTests
     [Fact]
     public void Stock_strategy_requires_an_actual_long_zone_cross()
     {
-        var context = Context(
-            "INFY", "STOCK", 106m, "UP", "TRENDING",
-            ["todayOpen=100", "B1=105", "S=100", "S1=95", "B2=115", "S2=90"]);
+        var istDay = IstToday();
+        var expiry = new DateTimeOffset(2026, 9, 24, 0, 0, 0, TimeSpan.FromHours(5.5));
+        var index = Context(
+            "NIFTY", "INDEX", 25060m, "UP", "TRENDING",
+            ["todayOpen=24900", "B2=25200", "B1=25050", "S=24950", "S1=24900", "S2=24800"]);
+        var chain = new[]
+        {
+            Option("NIFTY 20260924 25000 CE", 180m, 25000m, expiry),
+            Option("NIFTY 20260924 25050 CE", 150m, 25050m, expiry),
+            Option("NIFTY 20260924 25100 CE", 120m, 25100m, expiry),
+        };
         var sessions = new ZoneBoardSessionTracker();
-        sessions.Update("INFY", 104m, 105m, 95m, 90m, new DateOnly(2026, 9, 15));
-        sessions.Update("INFY", 106m, 105m, 95m, 90m, new DateOnly(2026, 9, 15));
+        sessions.Update("NIFTY", 24990m, 25050m, 24900m, 24800m, istDay);
+        sessions.Update("NIFTY", 25060m, 25050m, 24900m, 24800m, istDay);
 
         var candidates = new ZoneBoardIntradayStrategy(sessions).Generate(
-            [context], new Dictionary<string, decimal> { ["INFY"] = 104m }).ToList();
+            [index, .. chain], new Dictionary<string, decimal> { ["NIFTY"] = 24990m }).ToList();
 
         var candidate = Assert.Single(candidates);
         Assert.Equal(ZoneBoardPattern.B1BreakLong, candidate.Strategy);
-        Assert.Equal("BUY", Assert.Single(candidate.Legs).Side);
+        Assert.All(candidate.Legs, leg => Assert.Equal("BUY", leg.Side));
         Assert.True(candidate.MaxRiskPerUnit > 0);
     }
 
     [Fact]
     public void Recorded_context_replay_produces_the_same_ranked_decision()
     {
+        var istDay = IstToday();
+        var expiry = new DateTimeOffset(2026, 9, 24, 0, 0, 0, TimeSpan.FromHours(5.5));
         var recordedTick = Context(
-            "INFY", "STOCK", 106m, "UP", "TRENDING",
-            ["todayOpen=100", "B1=105", "S=100", "S1=95", "B2=115", "S2=90"]);
-        var previous = new Dictionary<string, decimal> { ["INFY"] = 104m };
+            "NIFTY", "INDEX", 25060m, "UP", "TRENDING",
+            ["todayOpen=24900", "B2=25200", "B1=25050", "S=24950", "S1=24900", "S2=24800"]);
+        var chain = new[]
+        {
+            Option("NIFTY 20260924 25000 CE", 180m, 25000m, expiry),
+            Option("NIFTY 20260924 25050 CE", 150m, 25050m, expiry),
+            Option("NIFTY 20260924 25100 CE", 120m, 25100m, expiry),
+        };
+        var previous = new Dictionary<string, decimal> { ["NIFTY"] = 24990m };
         var sessions = new ZoneBoardSessionTracker();
-        sessions.Update("INFY", 104m, 105m, 95m, 90m, new DateOnly(2026, 9, 15));
-        sessions.Update("INFY", 106m, 105m, 95m, 90m, new DateOnly(2026, 9, 15));
+        sessions.Update("NIFTY", 24990m, 25050m, 24900m, 24800m, istDay);
+        sessions.Update("NIFTY", 25060m, 25050m, 24900m, 24800m, istDay);
         var engine = new PaperDecisionEngine([new ZoneBoardIntradayStrategy(sessions)]);
 
-        var first = Assert.Single(engine.Rank([recordedTick], previous));
-        var replay = Assert.Single(engine.Rank([recordedTick], previous));
+        var first = Assert.Single(engine.Rank([recordedTick, .. chain], previous));
+        var replay = Assert.Single(engine.Rank([recordedTick, .. chain], previous));
 
         Assert.Equal(first.Strategy, replay.Strategy);
         Assert.Equal(first.Underlying, replay.Underlying);
@@ -79,14 +99,14 @@ public sealed class PaperDecisionEngineTests
     [Fact]
     public void Option_strategy_generates_long_and_defined_risk_verticals()
     {
-        var index = Context("NIFTY", "INDEX", 25000m, "UP", "TRENDING", []);
+        var index = Context(AltIndex, "INDEX", 25000m, "UP", "TRENDING", []);
         var expiry = new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.FromHours(5.5));
         var options = new[]
         {
-            Option("NIFTY 20260917 25000 CE", 200m, 25000m, expiry),
-            Option("NIFTY 20260917 25050 CE", 170m, 25050m, expiry),
-            Option("NIFTY 20260917 25000 PE", 180m, 25000m, expiry),
-            Option("NIFTY 20260917 24950 PE", 150m, 24950m, expiry),
+            Option($"{AltIndex} 20260917 25000 CE", 200m, 25000m, expiry),
+            Option($"{AltIndex} 20260917 25050 CE", 170m, 25050m, expiry),
+            Option($"{AltIndex} 20260917 25000 PE", 180m, 25000m, expiry),
+            Option($"{AltIndex} 20260917 24950 PE", 150m, 24950m, expiry),
         };
 
         var candidates = new IndexOptionStrategy().Generate([index, .. options], new Dictionary<string, decimal>()).ToList();
@@ -102,14 +122,14 @@ public sealed class PaperDecisionEngineTests
     [Fact]
     public void Volatile_regime_prefers_a_hedged_credit_candidate()
     {
-        var index = Context("NIFTY", "INDEX", 25000m, "UP", "VOLATILE", []);
+        var index = Context(AltIndex, "INDEX", 25000m, "UP", "VOLATILE", []);
         var expiry = new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.FromHours(5.5));
         var options = new[]
         {
-            Option("NIFTY 20260922 25000 CE", 200m, 25000m, expiry),
-            Option("NIFTY 20260922 25050 CE", 170m, 25050m, expiry),
-            Option("NIFTY 20260922 25000 PE", 180m, 25000m, expiry),
-            Option("NIFTY 20260922 24950 PE", 150m, 24950m, expiry),
+            Option($"{AltIndex} 20260922 25000 CE", 200m, 25000m, expiry),
+            Option($"{AltIndex} 20260922 25050 CE", 170m, 25050m, expiry),
+            Option($"{AltIndex} 20260922 25000 PE", 180m, 25000m, expiry),
+            Option($"{AltIndex} 20260922 24950 PE", 150m, 24950m, expiry),
         };
 
         var candidates = new IndexOptionStrategy()
@@ -124,13 +144,13 @@ public sealed class PaperDecisionEngineTests
     [Fact]
     public void Range_regime_can_generate_a_risk_sized_naked_index_short()
     {
-        var index = Context("NIFTY", "INDEX", 25000m, "DOWN", "RANGE", []);
+        var index = Context(AltIndex, "INDEX", 25000m, "DOWN", "RANGE", []);
         var expiry = new DateTimeOffset(2026, 9, 22, 0, 0, 0, TimeSpan.FromHours(5.5));
         var options = new[]
         {
-            Option("NIFTY 20260922 25050 CE", 100m, 25050m, expiry),
-            Option("NIFTY 20260922 25100 CE", 80m, 25100m, expiry),
-            Option("NIFTY 20260922 24950 PE", 90m, 24950m, expiry),
+            Option($"{AltIndex} 20260922 25050 CE", 100m, 25050m, expiry),
+            Option($"{AltIndex} 20260922 25100 CE", 80m, 25100m, expiry),
+            Option($"{AltIndex} 20260922 24950 PE", 90m, 24950m, expiry),
         };
 
         var candidates = new IndexOptionStrategy()
@@ -141,7 +161,7 @@ public sealed class PaperDecisionEngineTests
             candidate => candidate.Strategy == "NAKED_INDEX_OPTION_SHORT");
 
         Assert.Equal("SELL", Assert.Single(naked.Legs).Side);
-        Assert.Equal("NIFTY", naked.Underlying);
+        Assert.Equal(AltIndex, naked.Underlying);
     }
 
     [Fact]
@@ -178,7 +198,7 @@ public sealed class PaperDecisionEngineTests
     }
 
     [Theory]
-    [InlineData("NIFTY", 65)]
+    [InlineData("NIFTY", 75)]
     [InlineData("BANKNIFTY", 30)]
     [InlineData("FINNIFTY", 60)]
     [InlineData("SENSEX", 20)]
@@ -218,7 +238,8 @@ public sealed class PaperDecisionEngineTests
 
         var result = new PortfolioRiskManager().Assess(
             candidate, new(100_000m, 2_000m, 10_000m, 3), 0, 0, 0, [],
-            IstTime(2026, 9, 16, 10, 0));
+            IstTime(2026, 9, 16, 10, 0),
+            paperTrading: true);
 
         Assert.True(result.Accepted);
     }
@@ -257,11 +278,12 @@ public sealed class PaperDecisionEngineTests
 
         var result = new PortfolioRiskManager().Assess(
             candidate, new(100_000m, 2_000m, 10_000m, 3), 0, 0, 0, [],
-            IstTime(2026, 9, 16, 10, 0));
+            IstTime(2026, 9, 16, 10, 0),
+            paperTrading: true);
 
         Assert.True(result.Accepted);
-        Assert.True(result.QuantityMultiplier >= 65);
-        Assert.Equal(0, result.QuantityMultiplier % 65);
+        Assert.True(result.QuantityMultiplier >= 75);
+        Assert.Equal(0, result.QuantityMultiplier % 75);
     }
 
     [Fact]
@@ -306,4 +328,10 @@ public sealed class PaperDecisionEngineTests
 
     private static DateTimeOffset IstTime(int year, int month, int day, int hour, int minute) =>
         new(year, month, day, hour, minute, 0, TimeSpan.FromHours(5.5));
+
+    private static DateOnly IstToday()
+    {
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ist).DateTime);
+    }
 }

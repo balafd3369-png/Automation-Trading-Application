@@ -1,0 +1,67 @@
+<header class="monitor-head">
+  <div>
+    <h1>Health analytics</h1>
+    <p>Historical statistics from persisted incident and health report APIs. No synthetic uptime is computed.</p>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+} @else if (!stats) {
+  <p class="monitor-loading">Loading analytics…</p>
+} @else {
+  <div class="monitor-grid">
+    <div class="monitor-card"><span>Mean time to acknowledge</span><strong>{{ stats.averageSecondsToAcknowledge != null ? (stats.averageSecondsToAcknowledge | number: '1.0-0') + ' s' : '—' }}</strong></div>
+    <div class="monitor-card"><span>Mean time to resolve</span><strong>{{ stats.averageSecondsToResolve != null ? (stats.averageSecondsToResolve | number: '1.0-0') + ' s' : '—' }}</strong></div>
+    <div class="monitor-card"><span>Repeated fingerprints</span><strong>{{ stats.repeatedIncidentFingerprints }}</strong></div>
+    <div class="monitor-card"><span>Notification success rate (sample)</span><strong>{{ notificationSuccessRate() != null ? (notificationSuccessRate()! | number: '1.0-1') + '%' : '—' }}</strong></div>
+  </div>
+
+  <h2>Incidents by severity</h2>
+  <div class="bar-chart">
+    @for (row of severityBars(); track row.label) {
+      <div class="bar-row">
+        <span>{{ row.label }}</span>
+        <div class="bar-track"><div class="bar-fill" [style.width.%]="row.pct"></div></div>
+        <span>{{ row.count }}</span>
+      </div>
+    }
+  </div>
+
+  <h2>Incidents by component</h2>
+  <div class="bar-chart">
+    @for (row of componentBars(); track row.label) {
+      <div class="bar-row">
+        <span>{{ row.label }}</span>
+        <div class="bar-track"><div class="bar-fill" [style.width.%]="row.pct"></div></div>
+        <span>{{ row.count }}</span>
+      </div>
+    }
+  </div>
+
+  <h2>Comprehensive health reports</h2>
+  @if (!reports.length) {
+    <p class="monitor-empty">No persisted comprehensive reports yet.</p>
+  } @else {
+    <div class="monitor-table-wrap">
+      <table class="monitor-table">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Status</th>
+            <th>Findings</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (r of reports; track r.id) {
+            <tr>
+              <td>{{ r.createdAt | date: 'short' }}</td>
+              <td>{{ r.overallStatus }}</td>
+              <td>{{ r.payload.findings.length }} item(s)</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+}

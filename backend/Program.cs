@@ -28,7 +28,10 @@ if (builder.Environment.IsDevelopment())
 
 
 
-builder.Configuration.AddUserSecrets(typeof(Program).Assembly, optional: true);
+if (builder.Environment.IsDevelopment())
+{
+    builder.Configuration.AddUserSecrets(typeof(Program).Assembly, optional: true);
+}
 
 
 
@@ -40,22 +43,12 @@ InstrumentLotMetadata.Configure(builder.Configuration);
 
 
 
+SystemHealthExceptionTracker? startupExceptionTracker = null;
 TaskScheduler.UnobservedTaskException += (_, e) =>
-
-
-
 {
-
-
-
     Console.Error.WriteLine($"Unobserved task error: {e.Exception.Message}");
-
-
-
+    startupExceptionTracker?.RecordUnobservedTaskException();
     e.SetObserved();
-
-
-
 };
 
 
@@ -105,6 +98,7 @@ builder.Services.AddOutputCache(options =>
 
 });
 
+builder.Services.AddSingleton<SignalRServerHealthTracker>();
 builder.Services.AddSingleton<ChartLiveStreamService>();
 
 
@@ -140,10 +134,19 @@ builder.Services.AddSingleton<IBrokerMarketClient>(sp => sp.GetRequiredService<M
 
 
 builder.Services.AddSingleton<MStockOrderClient>();
+builder.Services.AddSingleton<LiveTradingEmergencyGate>();
+builder.Services.AddSingleton(sp => new Lazy<BrokerConnectionManager>(() => sp.GetRequiredService<BrokerConnectionManager>()));
+builder.Services.AddSingleton<BrokerCircuitBreaker>();
+builder.Services.AddSingleton<TradingSafetyStore>();
+builder.Services.AddSingleton<LiveTradingExecutionSafetyService>();
+builder.Services.AddSingleton<BrokerLiveOrderSettlement>();
 
-
-
-builder.Services.AddSingleton<IBrokerOrderClient>(sp => sp.GetRequiredService<MStockOrderClient>());
+builder.Services.AddSingleton<IBrokerOrderClient>(sp =>
+{
+    var inner = sp.GetRequiredService<MStockOrderClient>();
+    var breaker = sp.GetRequiredService<BrokerCircuitBreaker>();
+    return new CircuitBreakerBrokerOrderClient(inner, breaker);
+});
 
 
 
@@ -158,10 +161,13 @@ builder.Services.AddSingleton<BrokerConnectionManager>();
 builder.Services.AddSingleton<EquitySymbolCatalog>();
 
 builder.Services.AddSingleton<MockMarketService>();
+builder.Services.AddSingleton<MStockMarketDataWebSocketHealth>();
 
 
 
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MockMarketService>());
+builder.Services.AddHostedService<MStockMarketDataWebSocketService>();
+builder.Services.AddHostedService<OptionChartLiveHostedService>();
 
 
 
@@ -180,6 +186,50 @@ builder.Services.AddSingleton<UserDashboardService>();
 builder.Services.AddSingleton<AdminPlatformService>();
 
 builder.Services.AddSingleton<DeploymentReadinessService>();
+
+builder.Services.AddSingleton<SystemHealthExceptionTracker>();
+builder.Services.AddSingleton<WorkerHeartbeatRegistry>();
+builder.Services.AddSingleton<SystemHealthStore>();
+builder.Services.AddSingleton<ISystemHealthBoardProbeSource>(sp => sp.GetRequiredService<MockMarketService>());
+builder.Services.AddSingleton<SystemHealthInfrastructureProbes>();
+builder.Services.AddSingleton<SystemHealthService>();
+builder.Services.AddHostedService<SystemHealthMonitoringHostedService>();
+builder.Services.AddSingleton<SystemIncidentDeduplicationService>();
+builder.Services.AddSingleton<SystemIncidentStore>();
+builder.Services.AddSingleton<SystemIncidentLifecycleService>();
+builder.Services.AddSingleton<SystemIncidentEvaluator>();
+builder.Services.AddSingleton<IIncidentAlertDispatcher, DatabaseIncidentAlertDispatcher>();
+builder.Services.AddSingleton<SystemIncidentAlertService>();
+builder.Services.AddSingleton<SystemIncidentService>();
+builder.Services.AddHostedService<SystemIncidentEvaluationHostedService>();
+builder.Services.AddSingleton<SystemIncidentNotificationStore>();
+builder.Services.AddSingleton<SystemIncidentNotificationSettingsService>();
+builder.Services.AddSingleton<SystemIncidentNotificationRouter>();
+builder.Services.AddSingleton<IncidentNotificationContentBuilder>();
+builder.Services.AddSingleton<SystemIncidentEscalationService>();
+builder.Services.AddSingleton<SystemIncidentNotificationService>();
+builder.Services.AddSingleton<SystemIncidentNotificationProcessor>();
+builder.Services.AddSingleton<IIncidentNotificationProvider, SmtpEmailNotificationProvider>();
+builder.Services.AddSingleton<IIncidentNotificationProvider, TelegramBotNotificationProvider>();
+builder.Services.AddHttpClient(nameof(TelegramBotNotificationProvider));
+builder.Services.AddHostedService<SystemIncidentNotificationHostedService>();
+builder.Services.AddSingleton<TradeWithBeast.Services.Coordination.SystemCoordinationStore>();
+builder.Services.AddSingleton<TradeWithBeast.Services.Coordination.SystemInstanceRegistryService>();
+builder.Services.AddSingleton<TradeWithBeast.Services.Coordination.SystemLeaderElectionService>();
+builder.Services.AddSingleton<TradeWithBeast.Services.Coordination.SystemRecoveryPolicyService>();
+builder.Services.AddSingleton<TradeWithBeast.Services.Coordination.SystemRecoveryService>();
+builder.Services.AddSingleton<TradeWithBeast.Services.Coordination.SystemWorkerRegistryPublisher>();
+builder.Services.AddSingleton<TradeWithBeast.Services.Coordination.IDistributedLockService, TradeWithBeast.Services.Coordination.SqliteDistributedLockService>();
+builder.Services.AddHostedService<TradeWithBeast.Services.Coordination.SystemReliabilityCoordinatorHostedService>();
+builder.Services.AddSingleton<ProductionSafetyStore>();
+builder.Services.AddSingleton<SqliteDatabaseBackupService>();
+builder.Services.AddSingleton<OrderStartupSafetyScanner>();
+builder.Services.AddSingleton<TradingSafetyIncidentEvaluator>();
+builder.Services.AddSingleton<ProductionSafetyIncidentEvaluator>();
+builder.Services.AddSingleton<IProductionSafetyIncidentEvaluator, CompositeProductionSafetyIncidentEvaluator>();
+builder.Services.AddHostedService<OrderStatusPollingHostedService>();
+builder.Services.AddSingleton<ProductionSafetyStatusService>();
+builder.Services.AddHostedService<ProductionSafetyHostedService>();
 
 
 
@@ -212,6 +262,7 @@ builder.Services.AddSingleton<ZoneAnalyzerDetailService>();
 builder.Services.AddSingleton<ZoneStockAnalyzerService>();
 builder.Services.AddSingleton<GapAnalyzerBenchmarkCache>();
 builder.Services.AddSingleton<GapAnalyzerService>();
+builder.Services.AddSingleton<TrapFallFormationService>();
 
 builder.Services.AddSingleton<StrategyRecommendationEngine>();
 
@@ -347,6 +398,8 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+startupExceptionTracker = app.Services.GetRequiredService<SystemHealthExceptionTracker>();
+
 
 
 var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Deployment");
@@ -364,6 +417,10 @@ DeploymentStartupValidator.ValidateForStartup(
     appConfig.Database,
 
     appConfig.Cors,
+
+    appConfig.Infrastructure,
+
+    appConfig.ProductionSafety,
 
     startupLogger);
 
@@ -393,7 +450,34 @@ app.MapGet("/", () => Results.Redirect("/api/board"));
 
 
 
-app.MapGet("/api/health", () => Results.Ok(new { status = "ok", port = listenPort }));
+app.MapGet("/api/health", (
+    SystemHealthService health,
+    SystemMonitoringOptions monitoring,
+    SystemHealthStore store) =>
+{
+    var payload = new Dictionary<string, object?>
+    {
+        ["status"] = "ok",
+        ["port"] = listenPort,
+        ["instanceId"] = health.GetLiveSnapshot().InstanceId,
+    };
+
+    if (monitoring.Enabled && monitoring.PublicHealthIncludeDatabaseProbe)
+    {
+        var db = store.ProbeDatabase();
+        payload["database"] = new
+        {
+            healthy = db.CanConnect && db.CanRead && db.CanWrite,
+            latencyMs = db.LatencyMs,
+        };
+        if (!db.CanConnect)
+        {
+            payload["status"] = "degraded";
+        }
+    }
+
+    return Results.Ok(payload);
+});
 
 
 

@@ -22,6 +22,8 @@ import {
   GapAnalyzerTradeRow,
   ReversalScanResponse,
   ReversalScanRow,
+  TrapFallFormationResponse,
+  TrapFallFormationRow,
   ZoneStockAnalyzerResponse,
   ZoneStockAnalyzerRow,
 } from '../core/user-dashboard.models';
@@ -73,6 +75,7 @@ export class SelectStockPageComponent implements OnInit, OnDestroy {
   data: OpenVsZonesBoardResponse | null = null;
   analyzer: ZoneStockAnalyzerResponse | null = null;
   reversal: ReversalScanResponse | null = null;
+  trapFall: TrapFallFormationResponse | null = null;
   gapAnalyzer: GapAnalyzerResponse | null = null;
   error = '';
   kind: KindTab = 'all';
@@ -109,6 +112,7 @@ export class SelectStockPageComponent implements OnInit, OnDestroy {
                 analyzer: this.board.zoneAnalyzer(),
                 reversal: this.board.reversalScan(),
                 gapAnalyzer: this.board.gapAnalyzer(),
+                trapFall: this.board.trapFallForming(),
               })
             : this.board.openVsZones(),
         ),
@@ -120,10 +124,13 @@ export class SelectStockPageComponent implements OnInit, OnDestroy {
               analyzer: ZoneStockAnalyzerResponse;
               reversal: ReversalScanResponse;
               gapAnalyzer: GapAnalyzerResponse;
+              trapFall: TrapFallFormationResponse;
             };
             this.processAnalyzerAlerts(bundle.analyzer);
+            this.processTrapFallAlerts(bundle.trapFall);
             this.analyzer = bundle.analyzer;
             this.reversal = bundle.reversal;
+            this.trapFall = bundle.trapFall;
             this.gapAnalyzer = {
               ...bundle.gapAnalyzer,
               playbooks: bundle.gapAnalyzer.playbooks ?? [],
@@ -134,6 +141,7 @@ export class SelectStockPageComponent implements OnInit, OnDestroy {
             this.data = payload as OpenVsZonesBoardResponse;
             this.analyzer = null;
             this.reversal = null;
+            this.trapFall = null;
             this.gapAnalyzer = null;
           }
           this.error = '';
@@ -147,6 +155,57 @@ export class SelectStockPageComponent implements OnInit, OnDestroy {
           this.cdr.markForCheck();
         },
       });
+  }
+
+  trapFallActionable(): TrapFallFormationRow[] {
+    if (!this.trapFall) {
+      return [];
+    }
+    return this.trapFall.rows.filter(
+      (r) => r.stage === 'B1Tested' || r.stage === 'EnterShort' || r.stage === 'ApproachB1',
+    );
+  }
+
+  trapFallStageClass(stage: string): string {
+    switch (stage) {
+      case 'EnterShort':
+        return 'trap-enter';
+      case 'B1Tested':
+        return 'trap-armed';
+      case 'ApproachB1':
+        return 'trap-approach';
+      default:
+        return 'trap-watch';
+    }
+  }
+
+  openChartFromTrap(row: TrapFallFormationRow): void {
+    stashMarketSymbolPick(row.name);
+    void this.router.navigate(['/'], { fragment: `/market?symbol=${encodeURIComponent(row.name)}` });
+  }
+
+  private processTrapFallAlerts(payload: TrapFallFormationResponse): void {
+    if (!this.alertSettings.enabled) {
+      return;
+    }
+
+    const hot = payload.rows.filter((r) => r.stage === 'B1Tested' || r.stage === 'EnterShort');
+    let changed = false;
+    for (const row of hot) {
+      const key = `${payload.analyzedAt}|trap|${row.name}|${row.stage}`;
+      if (this.seenAlertKeys.has(key)) {
+        continue;
+      }
+      this.seenAlertKeys.add(key);
+      changed = true;
+      fireAnalyzerNotification(
+        `Trap forming · ${row.name}`,
+        `${row.headline} — ${row.detail}`,
+      );
+    }
+    if (changed) {
+      persistSeenAlertKeys(this.seenAlertKeys);
+    }
   }
 
   private processAnalyzerAlerts(payload: ZoneStockAnalyzerResponse): void {

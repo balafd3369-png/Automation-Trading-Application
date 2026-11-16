@@ -11,11 +11,16 @@ public sealed class ChartLiveStreamService
     private static readonly ConcurrentDictionary<string, HashSet<string>> ConnectionWatches = new();
 
     private readonly IHubContext<MarketChartHub> _hub;
+    private readonly SignalRServerHealthTracker _health;
     private readonly ILogger<ChartLiveStreamService> _log;
 
-    public ChartLiveStreamService(IHubContext<MarketChartHub> hub, ILogger<ChartLiveStreamService> log)
+    public ChartLiveStreamService(
+        IHubContext<MarketChartHub> hub,
+        SignalRServerHealthTracker health,
+        ILogger<ChartLiveStreamService> log)
     {
         _hub = hub;
+        _health = health;
         _log = log;
     }
 
@@ -90,6 +95,37 @@ public sealed class ChartLiveStreamService
         return list;
     }
 
+    public static IReadOnlyList<(string Name, string Interval)> WatchedCharts()
+    {
+        const string prefix = "chart:";
+        var list = new List<(string Name, string Interval)>();
+        foreach (var key in WatchRefCounts.Keys)
+        {
+            if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                || !WatchRefCounts.TryGetValue(key, out var count)
+                || count <= 0)
+            {
+                continue;
+            }
+
+            var rest = key[prefix.Length..];
+            var split = rest.LastIndexOf(':');
+            if (split <= 0 || split >= rest.Length - 1)
+            {
+                continue;
+            }
+
+            var name = rest[..split];
+            var interval = rest[(split + 1)..];
+            if (name.Length > 0 && interval.Length > 0)
+            {
+                list.Add((name, interval));
+            }
+        }
+
+        return list;
+    }
+
     public async Task PublishAsync(ChartLiveUpdate update, CancellationToken ct = default)
     {
         var group = MarketChartHub.GroupKey(update.Name, update.Interval);
@@ -101,6 +137,7 @@ public sealed class ChartLiveStreamService
         try
         {
             await _hub.Clients.Group(group).SendAsync(MarketChartHub.LiveEvent, update, ct);
+            _health.RecordHubBroadcast();
         }
         catch (Exception ex)
         {

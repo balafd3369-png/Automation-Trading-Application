@@ -1,0 +1,15 @@
+<section class="monitor-page">
+  <div class="monitor-layout">
+    <aside class="monitor-nav" aria-label="System monitoring">
+      <h2>System Monitoring</h2>
+      @for (item of nav; track item.path) {
+        <a [routerLink]="item.path" routerLinkActive="active">{{ item.label }}</a>
+      }
+      <a routerLink="/admin">Admin home</a>
+      <a routerLink="/market">Market</a>
+    </aside>
+    <main>
+      <router-outlet />
+    </main>
+  </div>
+</section>

@@ -38,6 +38,11 @@ public sealed class ZoneBoardSessionTracker
                 state.TouchedB1 = true;
             }
 
+            if (state.SessionLow <= s1 * (1m + ZoneBoardPattern.TouchTolerance))
+            {
+                state.TouchedS1 = true;
+            }
+
             if (state.SessionLow <= s2 * (1m + ZoneBoardPattern.TouchTolerance))
             {
                 state.TouchedS2 = true;
@@ -106,6 +111,24 @@ public sealed class ZoneBoardSessionTracker
         }
     }
 
+    public ZoneBoardSessionSnapshot? TryGetSession(string symbol, DateOnly istDay)
+    {
+        lock (_gate)
+        {
+            if (!_states.TryGetValue(symbol, out var state) || state.Day != istDay)
+            {
+                return null;
+            }
+
+            return new ZoneBoardSessionSnapshot(
+                state.SessionHigh,
+                state.SessionLow,
+                state.TouchedB1,
+                state.TouchedS1,
+                state.TouchedS2);
+        }
+    }
+
     private bool TryConsume(string symbol, DateOnly istDay, string setupId)
     {
         lock (_gate)
@@ -133,6 +156,7 @@ public sealed class ZoneBoardSessionTracker
         public decimal SessionHigh { get; set; }
         public decimal SessionLow { get; set; }
         public bool TouchedB1 { get; set; }
+        public bool TouchedS1 { get; set; }
         public bool TouchedS2 { get; set; }
         public Dictionary<string, int> Attempts { get; } = new(StringComparer.Ordinal);
     }

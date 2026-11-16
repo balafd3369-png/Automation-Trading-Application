@@ -13,17 +13,20 @@ public sealed class BoardController : ControllerBase
     private readonly ZoneStockAnalyzerService _zoneAnalyzer;
     private readonly ZoneAnalyzerDetailService _zoneDetail;
     private readonly GapAnalyzerService _gapAnalyzer;
+    private readonly TrapFallFormationService _trapFall;
 
     public BoardController(
         MockMarketService market,
         ZoneStockAnalyzerService zoneAnalyzer,
         ZoneAnalyzerDetailService zoneDetail,
-        GapAnalyzerService gapAnalyzer)
+        GapAnalyzerService gapAnalyzer,
+        TrapFallFormationService trapFall)
     {
         _market = market;
         _zoneAnalyzer = zoneAnalyzer;
         _zoneDetail = zoneDetail;
         _gapAnalyzer = gapAnalyzer;
+        _trapFall = trapFall;
     }
 
     [HttpGet("board")]
@@ -43,6 +46,10 @@ public sealed class BoardController : ControllerBase
     [HttpGet("board/reversal-scan")]
     public IActionResult GetReversalScan() =>
         Ok(StockReversalPatternScanner.Scan(_market.Snapshot()));
+
+    /// <summary>Live trap-fall formation (week bias → B1 test → S1 break) for board + indices.</summary>
+    [HttpGet("board/trap-fall-forming")]
+    public IActionResult GetTrapFallForming() => Ok(_trapFall.Scan());
 
     /// <summary>Gap up/down analyzer — verified clues + live trade cards.</summary>
     [HttpGet("board/gap-analyzer")]

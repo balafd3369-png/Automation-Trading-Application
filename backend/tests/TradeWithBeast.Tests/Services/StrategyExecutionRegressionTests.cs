@@ -15,6 +15,10 @@ public sealed class StrategyExecutionRegressionTests
         StrategyCatalog.ZoneS1BreakId,
         StrategyCatalog.ZoneS2BounceId,
         StrategyCatalog.StockB1RejectionId,
+        StrategyCatalog.GapFailedRallyGapDownId,
+        StrategyCatalog.GapDistributionGapDownId,
+        StrategyCatalog.GapWeakCloseGapDownId,
+        StrategyCatalog.GapStrongCloseGapUpId,
         StrategyCatalog.TenAmHighFadeId,
         StrategyCatalog.TenAmLowBreakToDayOpenId,
     ];
@@ -23,7 +27,7 @@ public sealed class StrategyExecutionRegressionTests
     public void Strategy_catalog_count_and_ids_unchanged()
     {
         var all = StrategyCatalog.All();
-        Assert.Equal(6, all.Count);
+        Assert.Equal(10, all.Count);
         Assert.Equal(LockedCatalogIds.OrderBy(x => x), all.Select(x => x.Id).OrderBy(x => x));
     }
 

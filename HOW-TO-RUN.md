@@ -24,7 +24,7 @@ Health check: `http://127.0.0.1:45211/api/health`
 
 ## Prerequisites
 
-- **.NET 8 SDK** — [Download](https://dotnet.microsoft.com/download/dotnet/8.0)
+- **.NET 10 SDK** — [Download](https://dotnet.microsoft.com/download/dotnet/10.0)
 - **Node.js 20+** and **npm**
 - **Windows:** If `dotnet run` fails with an Application Control / `.exe` block, this project already sets `<UseAppHost>false</UseAppHost>` — use `dotnet run` as shown below (no `.exe` host).
 

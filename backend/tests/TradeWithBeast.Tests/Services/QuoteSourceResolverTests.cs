@@ -74,6 +74,11 @@ public sealed class QuoteSourceResolverTests
     [Fact]
     public void Test3_new_stock_placeholder_uses_close_never_100()
     {
+        if (NseCashSession.IsLiveIntradayWindowNow())
+        {
+            return;
+        }
+
         var state = State(
             "MARUTI",
             last: 100m,

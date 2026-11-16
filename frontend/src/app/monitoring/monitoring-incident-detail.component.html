@@ -1,0 +1,102 @@
+<header class="monitor-head">
+  <div>
+    <h1>Incident detail</h1>
+    <p><a routerLink="/admin/monitoring/incidents">← Back to incidents</a></p>
+  </div>
+  @if (incident) {
+    <div class="monitor-actions">
+      <button type="button" (click)="acknowledge()" [disabled]="busy">Acknowledge</button>
+      <button type="button" (click)="investigate()" [disabled]="busy">Investigate</button>
+      <button type="button" (click)="resolve()" [disabled]="busy">Resolve</button>
+      <button type="button" (click)="close()" [disabled]="busy">Close</button>
+    </div>
+  }
+</header>
+
+@if (toast) {
+  <p class="toast ok">{{ toast }}</p>
+}
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+} @else if (!incident) {
+  <p class="monitor-loading">Loading…</p>
+} @else {
+  <div class="monitor-grid">
+    <div class="monitor-card"><span>Severity</span><strong><span class="badge" [class]="sevClass(incident.severity)">{{ incident.severity }}</span></strong></div>
+    <div class="monitor-card"><span>Status</span><strong>{{ incident.status }}</strong></div>
+    <div class="monitor-card"><span>Category</span><strong>{{ incident.category }}</strong></div>
+    <div class="monitor-card"><span>Occurrences</span><strong>{{ incident.occurrenceCount }}</strong></div>
+    <div class="monitor-card"><span>Component</span><strong>{{ incident.component }} / {{ incident.componentIdentifier }}</strong></div>
+    <div class="monitor-card"><span>Detected</span><strong>{{ incident.firstDetectedUtc | date: 'medium' }}</strong></div>
+    <div class="monitor-card"><span>Last occurrence</span><strong>{{ incident.lastOccurrenceUtc | date: 'medium' }}</strong></div>
+    <div class="monitor-card"><span>Acknowledged</span><strong>{{ incident.acknowledgedUtc ? (incident.acknowledgedUtc | date: 'short') : '—' }}</strong></div>
+    <div class="monitor-card"><span>Resolved</span><strong>{{ incident.resolvedUtc ? (incident.resolvedUtc | date: 'short') : '—' }}</strong></div>
+  </div>
+
+  <h2>{{ incident.title }}</h2>
+  <p class="desc">{{ incident.description }}</p>
+  @if (incident.lastError) {
+    <p class="monitor-error">Last error: {{ incident.lastError }}</p>
+  }
+
+  <h3>Timeline</h3>
+  <div class="timeline">
+    @for (e of events; track e.id) {
+      <div class="timeline-item">
+        <time>{{ e.timestampUtc | date: 'medium' }}</time>
+        <strong>{{ e.eventType }}</strong>
+        <span> — {{ e.message }}</span>
+        @if (e.actor) {
+          <span> ({{ e.actor }})</span>
+        }
+      </div>
+    }
+  </div>
+
+  <h3>Notes</h3>
+  <div class="monitor-toolbar">
+    <input [(ngModel)]="noteDraft" placeholder="Investigation note" aria-label="Note" />
+    <button type="button" (click)="addNote()">Add note</button>
+  </div>
+  @if (!notes.length) {
+    <p class="monitor-empty">No notes yet.</p>
+  } @else {
+    <ul class="notes">
+      @for (n of notes; track n.id) {
+        <li><time>{{ n.createdUtc | date: 'short' }}</time> {{ n.note }} — {{ n.createdBy }}</li>
+      }
+    </ul>
+  }
+
+  <h3>Related notifications</h3>
+  @if (!notifications.length) {
+    <p class="monitor-empty">No notifications for this incident.</p>
+  } @else {
+    <div class="monitor-table-wrap">
+      <table class="monitor-table">
+        <thead>
+          <tr>
+            <th>Channel</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Recipient</th>
+            <th>Created</th>
+            <th>Sent</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (n of notifications; track n.id) {
+            <tr>
+              <td>{{ n.channel }}</td>
+              <td>{{ n.notificationType }}</td>
+              <td>{{ n.deliveryStatus }}</td>
+              <td>{{ n.recipient }}</td>
+              <td>{{ n.createdUtc | date: 'short' }}</td>
+              <td>{{ n.sentUtc ? (n.sentUtc | date: 'short') : '—' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+}

@@ -1,0 +1,87 @@
+<header class="monitor-head">
+  <div>
+    <h1>System health overview</h1>
+    <p>Live operational status from Phase 1–4 monitoring APIs. Refreshes every 20s while this tab is visible.</p>
+  </div>
+  <div class="monitor-actions">
+    <a routerLink="/admin/monitoring/incidents">View incidents</a>
+  </div>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+
+@if (!live && !error) {
+  <p class="monitor-loading">Loading health snapshot…</p>
+} @else if (live) {
+  <div class="monitor-grid">
+    <div class="monitor-card">
+      <span>Overall status</span>
+      <strong><span class="badge" [class]="overallClass()">{{ live!.overallStatus }}</span></strong>
+    </div>
+    <div class="monitor-card">
+      <span>API status</span>
+      <strong>{{ live!.apiStatus }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Database</span>
+      <strong>{{ live!.database.canConnect && live!.database.canRead ? 'OK' : 'Issue' }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>DB latency</span>
+      <strong>{{ live!.database.latencyMs }} ms</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Active incidents</span>
+      <strong>{{ stats?.activeIncidents ?? '—' }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Critical</span>
+      <strong>{{ stats?.criticalIncidents ?? '—' }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>High</span>
+      <strong>{{ stats?.highIncidents ?? '—' }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Medium (severity counts)</span>
+      <strong>{{ stats?.countsBySeverity?.['Medium'] ?? 0 }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Low</span>
+      <strong>{{ stats?.countsBySeverity?.['Low'] ?? 0 }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Healthy components</span>
+      <strong>{{ componentCounts.HEALTHY }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Degraded</span>
+      <strong>{{ componentCounts.DEGRADED }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Unhealthy</span>
+      <strong>{{ componentCounts.UNHEALTHY }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Notifications sent (recent)</span>
+      <strong>{{ notificationSentCount() }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Notifications failed</span>
+      <strong>{{ notificationFailedCount() }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Notifications pending</span>
+      <strong>{{ notificationPendingCount() }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Last comprehensive report</span>
+      <strong>{{ live!.lastComprehensiveReportAt ? (live!.lastComprehensiveReportAt | date: 'short') : '—' }}</strong>
+    </div>
+  </div>
+  @if (lastRefresh) {
+    <p class="monitor-empty">Last refresh {{ lastRefresh | date: 'medium' }} · Instance {{ live!.instanceId }}</p>
+  }
+}

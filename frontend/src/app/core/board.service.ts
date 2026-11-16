@@ -47,6 +47,7 @@ import {
   GapStudyUniverseResponse,
   OpenVsZonesBoardResponse,
   ReversalScanResponse,
+  TrapFallFormationResponse,
   UserAnalyticsSummary,
   UserDashboardSummary,
   ZoneAnalyzerPatternDetailResponse,
@@ -323,6 +324,10 @@ export class BoardService {
 
   reversalScan(): Observable<ReversalScanResponse> {
     return this.http.get<ReversalScanResponse>('/api/board/reversal-scan').pipe(timeout(15_000));
+  }
+
+  trapFallForming(): Observable<TrapFallFormationResponse> {
+    return this.http.get<TrapFallFormationResponse>('/api/board/trap-fall-forming').pipe(timeout(15_000));
   }
 
   gapAnalyzer(): Observable<GapAnalyzerResponse> {

@@ -1,0 +1,40 @@
+<header class="monitor-head">
+  <div>
+    <h1>Production safety</h1>
+    <p>Database backups, startup order audit summary, and broker reconciliation issue counts. No automatic order resubmission.</p>
+  </div>
+  <button type="button" class="monitor-btn" (click)="triggerBackup()">Backup now</button>
+</header>
+
+@if (error) {
+  <p class="monitor-error">{{ error }}</p>
+}
+@if (message) {
+  <p class="monitor-info">{{ message }}</p>
+}
+
+@if (!status && !error) {
+  <p class="monitor-loading">Loading production safety status…</p>
+} @else if (status) {
+  <div class="monitor-grid">
+    <div class="monitor-card">
+      <span>Last backup</span>
+      <strong>{{ status.lastBackupUtc ? (status.lastBackupUtc | date: 'short') : '—' }}</strong>
+      <small>{{ status.lastBackupStatus ?? 'none' }}</small>
+    </div>
+    <div class="monitor-card">
+      <span>Backup count</span>
+      <strong>{{ status.backupCount }}</strong>
+    </div>
+    <div class="monitor-card">
+      <span>Startup audit</span>
+      <strong>{{ status.lastStartupAuditUtc ? (status.lastStartupAuditUtc | date: 'short') : '—' }}</strong>
+      <small>{{ status.unresolvedOrderFindings }} uncertain finding(s)</small>
+    </div>
+    <div class="monitor-card">
+      <span>Reconciliation</span>
+      <strong>{{ status.reconciliationHealth ?? '—' }}</strong>
+      <small>{{ status.reconciliationIssueCount }} issue(s)</small>
+    </div>
+  </div>
+}

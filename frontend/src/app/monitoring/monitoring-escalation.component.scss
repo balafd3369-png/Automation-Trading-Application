@@ -1,0 +1,22 @@
+@use './monitoring.styles.scss';
+
+.tier {
+  background: #121820;
+  border: 1px solid #2a3344;
+  border-radius: 8px;
+  padding: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.preview {
+  color: #9aa8bc;
+  font-size: 0.85rem;
+}
+
+.step-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}

@@ -15,6 +15,7 @@ public sealed class OperationsSuiteService
     private readonly BrokerConnectionManager _brokers;
     private readonly OperationsStore _ops;
     private readonly BrokerReconciliationService _reconciliation;
+    private readonly LiveTradingExecutionSafetyService _tradingSafety;
     private readonly ICurrentUserAccessor _currentUser;
     private readonly ILogger<OperationsSuiteService> _log;
 
@@ -27,6 +28,7 @@ public sealed class OperationsSuiteService
         BrokerConnectionManager brokers,
         OperationsStore ops,
         BrokerReconciliationService reconciliation,
+        LiveTradingExecutionSafetyService tradingSafety,
         ICurrentUserAccessor currentUser,
         ILogger<OperationsSuiteService> log)
     {
@@ -38,6 +40,7 @@ public sealed class OperationsSuiteService
         _brokers = brokers;
         _ops = ops;
         _reconciliation = reconciliation;
+        _tradingSafety = tradingSafety;
         _currentUser = currentUser;
         _log = log;
     }
@@ -456,6 +459,12 @@ public sealed class OperationsSuiteService
                     _live.Disarm();
                     Notify("info", "LiveDisarmed", "Live trading disarmed.");
                     return Audit("RISK", "Emergency", "Live trading disarmed.");
+                case "HALT_LIVE_ORDERS":
+                    _tradingSafety.Halt(
+                        "Operations emergency HALT_LIVE_ORDERS",
+                        _currentUser.UserId ?? "operations");
+                    Notify("warning", "LiveOrderHalt", "Emergency gate: new live order placement blocked.");
+                    return Audit("RISK", "Emergency", "Emergency gate halted new live order placement.");
                 case "EXIT_ALL_PAPER":
                     _paperAgent.EmergencyFlattenOpenPositions("operations emergency flatten");
                     await CloseAllManualPaperAsync(ct);

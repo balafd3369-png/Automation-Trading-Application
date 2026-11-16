@@ -24,6 +24,10 @@ backend/_buildcheck/
 backend/_qty-test-out/
 backend/build-out/
 backend/render-publish-check/
+backend/publish/
+deploy/digitalocean/artifacts/
+*.sqlite
+*.sqlite-journal
 **/_test-out/
 sweep-result.json
 exports/

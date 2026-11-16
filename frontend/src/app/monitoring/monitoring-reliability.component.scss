@@ -1,0 +1,27 @@
+@use './monitoring.styles.scss';
+
+.reliability-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.stat-card {
+  border: 1px solid var(--monitor-border, #d8dde6);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.stat-label {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.stat-value {
+  font-size: 1.75rem;
+  font-weight: 600;
+}

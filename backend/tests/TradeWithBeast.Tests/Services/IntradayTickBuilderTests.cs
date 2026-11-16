@@ -28,8 +28,11 @@ public sealed class IntradayTickBuilderTests
     [Fact]
     public void BootstrapFromOpen_creates_session_path()
     {
+        var ist = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        var sessionLocal = new DateTime(2026, 10, 9, 11, 0, 0, DateTimeKind.Unspecified);
+        var nowUtc = new DateTimeOffset(sessionLocal, ist.GetUtcOffset(sessionLocal));
         var ticks = new List<IntradayTickBuilder.Tick>();
-        IntradayTickBuilder.BootstrapFromOpen(ticks, 23576m, 23320m);
+        IntradayTickBuilder.BootstrapFromOpen(ticks, 23576m, 23320m, nowUtc);
         Assert.True(ticks.Count > 10);
         Assert.Equal(23576m, ticks[0].Last);
         Assert.Equal(23320m, ticks[^1].Last);

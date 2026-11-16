@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace TradeWithBeast.Models;
 
 public sealed record BoardResponse(
@@ -278,6 +280,46 @@ public sealed record ReversalScanResponse(
     IReadOnlyList<ReversalScanRow> GapContinuations,
     IReadOnlyList<ReversalScanRow> EarlyWarnings,
     IReadOnlyList<ReversalScanRow> FailedMorningOpens);
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum TrapFallFormationStage
+{
+    None = 0,
+    WeekWatch = 1,
+    ApproachB1 = 2,
+    B1Tested = 3,
+    EnterShort = 4,
+    Completed = 5,
+}
+
+public sealed record TrapFallFormationRow(
+    string Name,
+    bool IsIndex,
+    TrapFallFormationStage Stage,
+    string Urgency,
+    string Headline,
+    string Detail,
+    string WeekBias,
+    decimal Last,
+    decimal B1,
+    decimal S1,
+    decimal S2,
+    decimal S,
+    string SessionMove,
+    bool TouchedB1,
+    bool TouchedS1,
+    decimal? SessionHigh,
+    decimal DistToB1Percent,
+    decimal DistToS1Percent,
+    string PatternId);
+
+public sealed record TrapFallFormationResponse(
+    DateTimeOffset AnalyzedAt,
+    string Feed,
+    string Playbook,
+    int ArmedCount,
+    int EnterNowCount,
+    IReadOnlyList<TrapFallFormationRow> Rows);
 
 public sealed record ZoneAnalyzerPatternDetailResponse(
     string Symbol,

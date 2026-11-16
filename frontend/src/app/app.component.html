@@ -1029,6 +1029,11 @@
                       aria-live="polite"
                     >{{ syncStatus }}</span>
                   }
+                  @if (formingCandleWindowLabel(); as forming) {
+                    <span class="chart-forming-window" title="Current candle time window (IST)">
+                      Bar {{ forming }} IST
+                    </span>
+                  }
                   @if (chartDataRangeLabel(); as range) {
                     <span class="chart-range-meta">{{ range }}</span>
                   } @else {
@@ -1043,6 +1048,11 @@
                 <span class="chart-timebar-focus">
                   @if (crosshairCandle; as candle) {
                     <strong>{{ candle.time }}</strong>
+                  } @else if (formingCandleWindowLabel()) {
+                    <strong>Forming · {{ formingCandleWindowLabel() }} IST</strong>
+                    @if (chartStreamReceiving) {
+                      <span class="chart-timebar-live-dot" aria-hidden="true"></span>
+                    }
                   } @else if (chartDataRangeLabel()) {
                     {{ chartDataRangeLabel() }}
                   } @else {
@@ -1057,7 +1067,7 @@
                     · Indicators &amp; trend tools in toolbar
                   }
                 </span>
-                <span class="chart-timebar-clock" aria-live="off">{{ chartIstClock() }} IST</span>
+                <span class="chart-timebar-clock" aria-live="polite">Now {{ chartIstClock() }} IST</span>
               </div>
             </div>
           </div>
@@ -2496,7 +2506,17 @@
       <strong>{{ boardData?.counts?.rangeBound ?? 0 }}</strong> RANGE
     </span>
     <span class="sb-spacer"></span>
-    <span class="sb-chunk sb-clock">Board {{ boardData?.updatedAt | date: 'HH:mm:ss' }}</span>
+    <div class="sb-clock-stack" aria-label="Session clocks (IST)">
+      <span class="sb-clock-now">
+        <span class="sb-clock-label">NOW</span>
+        <span class="sb-clock-digits">{{ chartIstClock() }}</span>
+        <span class="sb-clock-suffix">IST</span>
+      </span>
+      <span class="sb-clock-board">
+        <span class="sb-clock-label">BOARD</span>
+        <span class="sb-clock-digits">{{ boardData?.updatedAt | date: 'HH:mm:ss' }}</span>
+      </span>
+    </div>
   </footer>
 
   <app-trade-ticket-modal />

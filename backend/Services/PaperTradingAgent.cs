@@ -26,6 +26,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
     private readonly StrategyRecommendationEngine _strategyFeed;
     private readonly Lazy<IZoneLiveAutoGateway> _zoneLive;
     private readonly TradingOptions _tradingDefaults;
+    private readonly WorkerHeartbeatRegistry _workerHeartbeats;
     private readonly ILogger<PaperTradingAgent> _log;
     private string? _deferZoneLiveProposalId;
     private readonly Dictionary<string, decimal> _previous = new(StringComparer.OrdinalIgnoreCase);
@@ -69,6 +70,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         StrategyRecommendationEngine strategyFeed,
         Lazy<IZoneLiveAutoGateway> zoneLive,
         TradingOptions tradingDefaults,
+        WorkerHeartbeatRegistry workerHeartbeats,
         ILogger<PaperTradingAgent> log)
     {
         _marketContext = marketContext;
@@ -81,6 +83,7 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         _strategyFeed = strategyFeed;
         _zoneLive = zoneLive;
         _tradingDefaults = tradingDefaults;
+        _workerHeartbeats = workerHeartbeats;
         _log = log;
         _config = new PaperAgentConfig(
             tradingDefaults.DefaultAllocatedCapital,
@@ -108,13 +111,16 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         {
             _running = true;
         }
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.PaperTradingAgent, WorkerRunStatus.Starting);
         _timer = new Timer(_ => _ = TickAsync(), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5));
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.PaperTradingAgent, WorkerRunStatus.Running, markSuccessfulExecution: true);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _timer?.Change(Timeout.Infinite, 0);
+        _workerHeartbeats.Pulse(MonitoredWorkerNames.PaperTradingAgent, WorkerRunStatus.Stopped);
         return Task.CompletedTask;
     }
 
@@ -472,7 +478,17 @@ public sealed class PaperTradingAgent : IHostedService, IDisposable, IPaperPropo
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Paper trading agent tick failed.");
+            _workerHeartbeats.Pulse(
+                MonitoredWorkerNames.PaperTradingAgent,
+                WorkerRunStatus.Degraded,
+                ex.Message);
+            return;
         }
+
+        _workerHeartbeats.Pulse(
+            MonitoredWorkerNames.PaperTradingAgent,
+            WorkerRunStatus.Running,
+            markSuccessfulExecution: true);
 
         if (zoneLiveProposalId is not null)
         {
