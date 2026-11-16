@@ -57,7 +57,7 @@ No `NuGetAuditSuppress` or warning suppression was added.
 | Item | Value |
 |------|--------|
 | Manifest | `deploy/digitalocean/artifacts/build-manifest.json` |
-| API checksum (`TradeWithBeast.dll`) | `eb84771d3dc1127f7d32994a439c63ecdcc2c71b51d75347ed5a9d78b561c11e` |
+| API checksum (`TradeWithBeast.dll`) | `f1034e2fbe8464ed7d88b14fb8c0ad5ceb7fbcf7dde6fb43b739aadb1eb5dc21` |
 | Web checksum (`web/index.html`) | `9c0493eca9564f024c865eee60f146051061d014fe27816e4f247265af7e0792` |
 | TFM | `net10.0` |
 | `liveTradingEnabled` | `false` |

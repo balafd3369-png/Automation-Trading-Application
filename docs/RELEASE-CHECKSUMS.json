@@ -9,7 +9,7 @@
     "Microsoft_Data_Sqlite": "10.0.0"
   },
   "checksumsSha256": {
-    "TradeWithBeastDll": "eb84771d3dc1127f7d32994a439c63ecdcc2c71b51d75347ed5a9d78b561c11e",
+    "TradeWithBeastDll": "f1034e2fbe8464ed7d88b14fb8c0ad5ceb7fbcf7dde6fb43b739aadb1eb5dc21",
     "webIndexHtml": "9c0493eca9564f024c865eee60f146051061d014fe27816e4f247265af7e0792"
   },
   "verify": "Run deploy/digitalocean/deploy-release.ps1 at this tag and compare checksums; artifacts are gitignored."
