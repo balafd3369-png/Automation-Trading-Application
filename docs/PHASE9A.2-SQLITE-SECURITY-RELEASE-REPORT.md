@@ -72,7 +72,7 @@ Manifest includes `sqlitePackages` for traceability after rebuild.
 |------|--------|
 | Prior base commit | `9e6ed948962249c6065380db8dcb8fc69002e206` |
 | Release tag | `v1.0.0-restricted-prod-2026.11.16` (annotated, local only — not pushed) |
-| Release commit | `ac8f60011653c75ecf708089c1529d39859e7b69` |
+| Release commit | `2b1512e58b87f23f479a754470a911a2d655d5db` |
 | Excluded from git | `deploy/digitalocean/artifacts/`, `backend/publish/` (see `.gitignore`) |
 | Checksums in repo | `docs/RELEASE-CHECKSUMS.json` |
 

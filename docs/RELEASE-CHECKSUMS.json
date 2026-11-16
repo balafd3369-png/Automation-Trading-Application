@@ -1,6 +1,5 @@
 {
   "releaseTag": "v1.0.0-restricted-prod-2026.11.16",
-  "releaseGitCommit": "ac8f60011653c75ecf708089c1529d39859e7b69",
   "builtAtUtc": "2026-11-16T15:52:30.8201113Z",
   "backend": "net10.0 Release",
   "liveTradingEnabled": false,
