@@ -385,7 +385,29 @@ export function restoreAppNavigationState(): AppNavigationState {
   return readStoredNavigationState() ?? { ...DEFAULT_NAV };
 }
 
+/** Angular auth routes — must not be overwritten by trade/market hash sync. */
+export function isAuthShellRouterPath(pathOrUrl: string): boolean {
+  const stripped = pathOrUrl.trim().replace(/^#/, '');
+  const { path } = splitRouterPathAndQuery(stripped.startsWith('/') ? stripped : `/${stripped}`);
+  const first = path.split('/').filter(Boolean)[0];
+  return first === 'login' || first === 'admin' || first === 'dashboard';
+}
+
+export function isAuthShellLocationHash(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  const hash = window.location.hash || '';
+  if (hash.length <= 1) {
+    return false;
+  }
+  return isAuthShellRouterPath(hash);
+}
+
 export function persistAppNavigationState(state: AppNavigationState): void {
+  if (isAuthShellLocationHash()) {
+    return;
+  }
   const normalized = normalizeAppNavigationState(state);
   writeAppNavigationHash(normalized);
   if (typeof window === 'undefined') {
@@ -395,7 +417,7 @@ export function persistAppNavigationState(state: AppNavigationState): void {
 }
 
 export function writeAppNavigationHash(state: AppNavigationState): void {
-  if (typeof window === 'undefined') {
+  if (typeof window === 'undefined' || isAuthShellLocationHash()) {
     return;
   }
   const hash = buildAppNavigationHash(state);

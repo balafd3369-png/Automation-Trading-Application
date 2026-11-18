@@ -121,7 +121,14 @@ export class LoginPageComponent implements OnInit {
 
   submit(): void {
     this.message = '';
-    this.auth.login(this.email, this.password).subscribe({
+    const email = this.email.trim();
+    const password = this.password;
+    if (!email || !password) {
+      this.message = 'Enter your email and password, then click Login.';
+      this.cdr.markForCheck();
+      return;
+    }
+    this.auth.login(email, password).subscribe({
       next: (session) => void this.router.navigateByUrl(this.auth.homeRouteForUser(session.user)),
       error: (err) => {
         this.message = this.readAuthError(err, 'Login failed');
@@ -132,7 +139,20 @@ export class LoginPageComponent implements OnInit {
 
   register(): void {
     this.message = '';
-    this.auth.register(this.email, this.password, this.displayName || this.email).subscribe({
+    const email = this.email.trim();
+    const password = this.password;
+    if (!email || !password) {
+      this.message = 'Enter your email and password, then click Register.';
+      this.cdr.markForCheck();
+      return;
+    }
+    if (password.length < 8) {
+      this.message = 'Password must be at least 8 characters.';
+      this.cdr.markForCheck();
+      return;
+    }
+    const displayName = (this.displayName || email).trim();
+    this.auth.register(email, password, displayName).subscribe({
       next: (session) => void this.router.navigateByUrl(this.auth.homeRouteForUser(session.user)),
       error: (err) => {
         this.message = this.readAuthError(err, 'Registration failed');
@@ -144,7 +164,9 @@ export class LoginPageComponent implements OnInit {
   private readAuthError(err: unknown, fallback: string): string {
     const http = err as { status?: number; error?: { message?: string } | string };
     if (http.status === 0) {
-      return 'Cannot reach the API. Start the backend on port 45211, then try again.';
+      return environment.production
+        ? 'Cannot reach the server API. Check your connection and try again in a moment.'
+        : 'Cannot reach the API. Start the backend on port 45211, then try again.';
     }
     if (typeof http.error === 'string' && http.error.trim()) {
       return http.error;

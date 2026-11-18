@@ -1021,12 +1021,18 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   private syncNavigationHash(): void {
+    if (this.fullPageRoute) {
+      return;
+    }
     const state = this.navigationStateFromComponent();
     persistAppNavigationState(state);
     this.navigateApp(state);
   }
 
   private saveNavigationToStorage(): void {
+    if (this.fullPageRoute) {
+      return;
+    }
     persistAppNavigationState(this.navigationStateFromComponent());
   }
 

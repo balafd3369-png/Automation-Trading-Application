@@ -1,5 +1,6 @@
 import {
   buildAppNavigationHash,
+  isAuthShellRouterPath,
   parseAppNavigationHash,
   parseRouterUrl,
   persistAppNavigationState,
@@ -106,5 +107,30 @@ describe('app-navigation.util', () => {
     expect(state.centerView).toBe('strategies');
     expect(state.strategyDetailId).toBe('bala-10am-high-fade');
     expect(routerPathForState(state)).toBe('/strategies/bala-10am-high-fade');
+  });
+
+  it('detects auth shell routes', () => {
+    expect(isAuthShellRouterPath('/login')).toBeTrue();
+    expect(isAuthShellRouterPath('#/admin/monitoring')).toBeTrue();
+    expect(isAuthShellRouterPath('/market/index/NIFTY')).toBeFalse();
+  });
+
+  it('does not replace hash while on login', () => {
+    window.history.replaceState(null, '', `${window.location.pathname}#/login`);
+    persistAppNavigationState({
+      centerView: 'market',
+      tradePanelTab: 'paper',
+      marketKind: 'stocks',
+      marketNavTab: 'dashboard',
+      strategyDetailId: null,
+      operationsTab: 'risk',
+      selectedSymbol: 'NIFTY',
+      optionUnderlying: null,
+      optionExpiry: null,
+      optionStrike: null,
+      optionSide: null,
+      optionsChartMode: null,
+    });
+    expect(window.location.hash).toBe('#/login');
   });
 });

@@ -16,6 +16,10 @@ fi
 
 API_SRC="${1:-./artifacts/api}"
 WEB_SRC="${2:-./artifacts/web}"
+if [[ -d "${WEB_SRC}/browser" && ! -f "${WEB_SRC}/index.html" ]]; then
+  WEB_SRC="${WEB_SRC}/browser"
+  echo "Using Angular browser output: ${WEB_SRC}"
+fi
 DATA_ROOT="${TWB_DATA_ROOT:-/var/lib/tradewithbeast}"
 LIVE_API="/opt/tradewithbeast/api"
 LIVE_WEB="/var/www/tradewithbeast"
@@ -64,6 +68,9 @@ sudo rsync -a --delete \
   --exclude '*.sqlite' \
   "${API_SRC}/" "${LIVE_API}/"
 sudo rsync -a --delete "${WEB_SRC}/" "${LIVE_WEB}/"
+sudo chown -R www-data:www-data "${LIVE_WEB}"
+sudo find "${LIVE_WEB}" -type d -exec chmod 755 {} \;
+sudo find "${LIVE_WEB}" -type f -exec chmod 644 {} \;
 sudo chown -R twb:twb "${LIVE_API}"
 sudo systemctl start tradewithbeast-api.service
 sudo systemctl is-active --quiet tradewithbeast-api.service

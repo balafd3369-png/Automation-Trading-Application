@@ -14,6 +14,13 @@
     (function () {
       var NAV_KEY = 'twb-app-navigation';
       var h = window.location.hash || '';
+      if (
+        h.indexOf('/login') !== -1 ||
+        h.indexOf('/admin') !== -1 ||
+        h.indexOf('/dashboard') !== -1
+      ) {
+        return;
+      }
       var nav = { centerView: 'market', tradePanelTab: 'paper', marketKind: 'stocks' };
       if (h.indexOf('strategies') !== -1) {
         nav.centerView = 'strategies';

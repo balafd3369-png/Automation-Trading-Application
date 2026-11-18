@@ -20,8 +20,9 @@ export type BoardPollEvent =
   | { kind: 'data'; data: BoardResponse }
   | { kind: 'error'; message: string };
 
-const BOARD_ERROR_MESSAGE =
-  'Backend on port 45211 is not responding (board timed out). Run stop-app.ps1 then start-app.ps1, wait for the backend window, then refresh.';
+const BOARD_ERROR_MESSAGE = environment.production
+  ? 'Market board is slow or unavailable. Wait a moment and refresh, or sign out and back in if it continues.'
+  : 'Backend on port 45211 is not responding (board timed out). Run stop-app.ps1 then start-app.ps1, wait for the backend window, then refresh.';
 
 @Injectable({ providedIn: 'root' })
 export class BoardPollStore {
