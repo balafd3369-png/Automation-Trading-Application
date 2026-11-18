@@ -246,8 +246,29 @@
           <span class="broker-hub-caret" aria-hidden="true">▾</span>
         </summary>
         <div class="broker-hub-panel" role="dialog" aria-label="Broker connections">
-          <p class="broker-hub-title">Connect broker</p>
-          <p class="broker-hub-sub">Live quotes and orders use the account you connect. Only one broker at a time.</p>
+          @if (canManagePlatformBroker()) {
+            <p class="broker-hub-title">Connect broker</p>
+            <p class="broker-hub-sub">
+              One m.Stock session on this server feeds <strong>everyone’s</strong> charts and index prices. Connect once per trading day.
+            </p>
+          } @else {
+            <p class="broker-hub-title">Shared market feed</p>
+            <p class="broker-hub-sub">
+              Index, stock, and option charts use the platform admin’s m.Stock connection. Paper trading uses your own account — no broker login needed.
+            </p>
+            <p
+              class="broker-card-msg"
+              [class.ok]="brokerConnected"
+              [class.warn]="!brokerConnected"
+            >
+              @if (brokerConnected) {
+                Live quotes are active for all users.
+              } @else {
+                Waiting for the admin to connect m.Stock (Broker menu → OTP).
+              }
+            </p>
+          }
+          @if (canManagePlatformBroker()) {
           @for (choice of brokerChoices; track choice.id) {
             <article
               class="broker-card"
@@ -379,6 +400,7 @@
                 Disconnect {{ brokerDisplayName }}
               </button>
             </div>
+          }
           }
         </div>
       </details>

@@ -187,7 +187,10 @@ export class AuthService {
 
 
   homeRouteForUser(user: AuthUser): string {
-    return user.role === 'Admin' ? '/admin' : '/dashboard';
+    if (user.role === 'Admin') {
+      return '/admin';
+    }
+    return '/market/index/NIFTY';
   }
 
 

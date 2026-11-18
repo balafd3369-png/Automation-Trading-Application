@@ -20,7 +20,7 @@ describe('AuthService', () => {
     http.verify();
   });
 
-  it('sends traders to the user dashboard after login', () => {
+  it('sends traders to the market workbench after login', () => {
     expect(
       service.homeRouteForUser({
         id: '1',
@@ -28,7 +28,7 @@ describe('AuthService', () => {
         displayName: 'Trader',
         role: 'Trader',
       }),
-    ).toBe('/dashboard');
+    ).toBe('/market/index/NIFTY');
   });
 
   it('sends admins to the admin console after login', () => {

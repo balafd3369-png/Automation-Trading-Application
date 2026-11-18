@@ -2343,10 +2343,17 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   brokerHubTriggerLabel(): string {
+    if (!this.auth.isAdmin) {
+      return this.brokerConnected ? 'Live feed' : 'Market feed';
+    }
     if (this.brokerConnected) {
       return this.brokerShortName();
     }
     return 'Broker';
+  }
+
+  canManagePlatformBroker(): boolean {
+    return this.auth.isAdmin;
   }
 
   @HostListener('document:pointerdown', ['$event'])
@@ -2520,6 +2527,9 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   disconnectBroker(): void {
+    if (!this.canManagePlatformBroker()) {
+      return;
+    }
     if (this.brokerBusy) {
       return;
     }
@@ -3777,6 +3787,12 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   requestBrokerOtp(): void {
+    if (!this.canManagePlatformBroker()) {
+      this.brokerMessage =
+        'Only the platform admin connects m.Stock. Charts use that shared session for every logged-in user.';
+      this.bumpView();
+      return;
+    }
     if (this.brokerConnected) {
       return;
     }
@@ -3849,6 +3865,9 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   submitBrokerOtp(): void {
+    if (!this.canManagePlatformBroker()) {
+      return;
+    }
     if (!this.otpRequested) {
       this.brokerMessage = 'Click Request OTP first.';
       return;

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using TradeWithBeast.Authorization;
 using TradeWithBeast.Broker;
 using TradeWithBeast.Models;
 using TradeWithBeast.Services;
@@ -52,6 +53,7 @@ namespace TradeWithBeast.Controllers;
         }));
 
     [HttpPost("otp/send")]
+    [AdminAuthorize]
     public async Task<IActionResult> SendOtp([FromBody] OtpSendBody? body, CancellationToken ct)
     {
         _brokers.SetActiveProvider(BrokerIds.MStock);
@@ -113,6 +115,7 @@ namespace TradeWithBeast.Controllers;
     }
 
     [HttpPost("otp/verify")]
+    [AdminAuthorize]
     public async Task<IActionResult> VerifyOtp([FromBody] OtpBody body, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(body.Otp))
@@ -194,6 +197,7 @@ namespace TradeWithBeast.Controllers;
     }
 
     [HttpPost("session/clear")]
+    [AdminAuthorize]
     public IActionResult ClearSession()
     {
         _brokers.ClearActiveSession();
